@@ -9,7 +9,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 
 import { asArray, asObject, asString, type JsonObject } from "../src/json.ts";
-import { capBytes, cpuBudgetOf, cpusHere, endOf, floorOf, Gate, holdText, familyOf, memAvailable, whatKey, type Hold, type RunRecord, type Waiting } from "../src/gate.ts";
+import { capBytes, cpuBudgetOf, cpusHere, endOf, floorOf, Gate, holdText, familyOf, memAvailable, pressureNow, whatKey, type Hold, type RunRecord, type Waiting } from "../src/gate.ts";
 import { readJson, tmp } from "./support.ts";
 
 const GB = 1024 ** 3;
@@ -634,6 +634,33 @@ describe("MemAvailable and the floor", () => {
   });
 });
 
+describe("the machine's pressure", () => {
+  const procRoot = (files: Readonly<Record<string, string>>): ((name: string) => string | undefined) => {
+    const root = join(dir, "..", "proc");
+    mkdirSync(join(root, "pressure"), { recursive: true });
+
+    for (const [name, text] of Object.entries(files)) writeFileSync(join(root, "pressure", name), text);
+
+    return (name) => (name === "FLEET_PROC_ROOT" ? root : undefined);
+  };
+
+  test("the avg10 of each resource's some and full lines is read from /proc/pressure, or the pressure/ of the root $FLEET_PROC_ROOT names", () => {
+    const env = procRoot({
+      cpu: "some avg10=10.52 avg60=20.70 avg300=37.60 total=123\nfull avg10=0.00 avg60=0.00 avg300=0.00 total=0\n",
+      memory: "some avg10=1.25 avg60=0.50 avg300=0.10 total=9\nfull avg10=0.75 avg60=0.20 avg300=0.05 total=4\n",
+      io: "some avg10=3.00 avg60=2.00 avg300=1.00 total=7\nfull avg10=2.50 avg60=1.00 avg300=0.50 total=3\n",
+    });
+
+    expect(pressureNow(env)).toEqual({ cpu_some: 10.52, cpu_full: 0, memory_some: 1.25, memory_full: 0.75, io_some: 3, io_full: 2.5 });
+  });
+
+  test("a kernel whose cpu file has no full line, or a missing file, leaves those out; no /proc/pressure is none", () => {
+    const env = procRoot({ cpu: "some avg10=4.00 avg60=3.00 avg300=2.00 total=1\n", memory: "some avg10=0.10 avg60=0.00 avg300=0.00 total=1\nfull avg10=0.00 avg60=0.00 avg300=0.00 total=0\n" });
+    expect(pressureNow(env)).toEqual({ cpu_some: 4, memory_some: 0.1, memory_full: 0 });
+    expect(pressureNow((name) => (name === "FLEET_PROC_ROOT" ? join(dir, "no-proc") : undefined))).toBeUndefined();
+  });
+});
+
 describe("the queue", () => {
   test("waiters are admitted in the order they arrived", () => {
     const holder = ask("first", asker(), BUDGET).took;
@@ -970,6 +997,19 @@ describe("the runs' records", () => {
     expect(gate.history("/r/a", "just test-changed")).toMatchObject({ peak: 14 * GB, ran: 100, runs: 2 });
     gate.record(run(3, { repo: "/r/b", peak: GB, ran: 5, code: 1 }));
     expect(gate.history("/r/b", "just test-changed")).toMatchObject({ peak: GB, ran: 5, runs: 1 });
+  });
+
+  // A --mem stands against a peak that a killed run left: a run killed at the ceiling would claim the whole budget forever.
+  test("a history and a family's peak say how the run whose peak it is was killed: OOM, or a signal's exit; none for a peak another run left", () => {
+    gate.record(run(1, { repo: "/r/a", workspace: "/w/a", what: "bash /w/a/gate-x.sh", peak: 30 * GB, code: 1, killed: 2 }));
+    expect(gate.history("/r/a", "bash /w/a/gate-x.sh")?.killed).toBe("2 process(es) killed for memory");
+    expect(gate.familyPeak("/r/a", "bash /w/n/gate-x.sh", "/w/n", at(10 * 60))?.killed).toBe("2 process(es) killed for memory");
+    gate.record(run(2, { repo: "/r/b", peak: 30 * GB, code: 143 }));
+    expect(gate.history("/r/b", "just test-changed")?.killed).toBe("exit 143");
+    gate.record(run(3, { repo: "/r/c", peak: 30 * GB, code: 137 }));
+    gate.record(run(4, { repo: "/r/c", peak: 31 * GB, code: 1 }));
+    expect(gate.history("/r/c", "just test-changed")).toMatchObject({ peak: 31 * GB, runs: 2 });
+    expect(gate.history("/r/c", "just test-changed")?.killed).toBeUndefined();
   });
 
   // The largest of 3: a typecheck that failed in 5 s at 0.4G does not lower the whole suite's estimate.

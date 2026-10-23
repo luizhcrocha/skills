@@ -140,6 +140,30 @@ export function memAvailable(env: Env): number | undefined {
   return meminfo("MemAvailable", env);
 }
 
+/** The machine's pressure stall averages over the last 10 s, in percent of wall time: a resource's `some` (a task
+ * waited) and `full` (all non-idle tasks waited). Logged on a run's record, never gating. */
+export type Pressure = Partial<Record<`${"cpu" | "memory" | "io"}_${"some" | "full"}`, number>>;
+
+/** The avg10 of /proc/pressure's cpu, memory and io files (of `pressure/` under $FLEET_PROC_ROOT, a test's), a line
+ * or a file it cannot read left out (a kernel's cpu file may have no `full` line; the system-wide one reads 0); undefined
+ * when none reads (no PSI here, the Mac). */
+export function pressureNow(env: Env): Pressure | undefined {
+  const root = env("FLEET_PROC_ROOT") ?? "/proc";
+  const read: Pressure = {};
+
+  for (const resource of ["cpu", "memory", "io"] as const) {
+    const text = readText(join(root, "pressure", resource)) ?? "";
+
+    for (const kind of ["some", "full"] as const) {
+      const avg = new RegExp(`^${kind} avg10=([0-9.]+)`, "m").exec(text)?.[1];
+
+      if (avg !== undefined) read[`${resource}_${kind}`] = Number(avg);
+    }
+  }
+
+  return Object.keys(read).length === 0 ? undefined : read;
+}
+
 /** The directory of the systemd user manager's transient scopes: $FLEET_CGROUP_ROOT (a test's), else this user's app.slice. */
 function appSlice(env: Env): string {
   const uid = String(process.getuid?.() ?? "");
@@ -514,6 +538,11 @@ export interface RunRecord {
   /** The CPUs it estimated, and whether it was marked a landing gate. Older lines have neither. */
   readonly cpus?: number | undefined;
   readonly landing?: boolean | undefined;
+  /** The machine's pressure ({@link Pressure}) when the command started and when it ended, and the most each average
+   * reached in between, sampled while it ran. None where /proc/pressure cannot be read, and older lines have none. */
+  readonly psi_start?: Pressure | undefined;
+  readonly psi_end?: Pressure | undefined;
+  readonly psi_max?: Pressure | undefined;
 }
 
 /** What a command's last runs that ran in a scope did, whatever their end (a failed run's peak and a killed run's are
@@ -525,6 +554,19 @@ export interface Measured {
   readonly ran: number;
   readonly cores: number | undefined;
   readonly runs: number;
+  /** How the run whose peak it is was killed ({@link killMark}); absent when it was not. */
+  readonly killed?: string;
+}
+
+/** How a run's record says it was killed, as `{ killed }`: its scope's OOM kills, else an exit of 128 plus a signal's
+ * number (137 for SIGKILL, 143 for SIGTERM, as a shell and `gate run` write a signal's end); nothing for any other end. */
+function killMark(run: JsonObject): Pick<Measured, "killed"> {
+  const oom = asNumber(run["killed"]) ?? 0;
+  const code = asNumber(run["code"]);
+
+  if (oom > 0) return { killed: `${String(oom)} process(es) killed for memory` };
+
+  return code !== undefined && code > 128 ? { killed: `exit ${String(code)}` } : {};
 }
 
 /** A measured run's line: what {@link Measured} reads of it. */
@@ -548,7 +590,7 @@ function measuredOf(runs: readonly Ran[]): Measured | undefined {
     return cpuS === undefined || r.ran <= 0 ? [] : [cpuS / r.ran];
   });
 
-  return { peak: top.peak, at: top.at, ran: Math.max(...last.map((r) => r.ran)), cores: cores.length === 0 ? undefined : Math.max(...cores), runs: last.length };
+  return { peak: top.peak, at: top.at, ran: Math.max(...last.map((r) => r.ran)), cores: cores.length === 0 ? undefined : Math.max(...cores), runs: last.length, ...killMark(top.run) };
 }
 
 /** The largest peak of a family's runs in the last day in one repository, whatever their workspace: the run's end,
@@ -559,6 +601,8 @@ export interface FamilyPeak {
   readonly at: string;
   readonly repo: string;
   readonly workspace: string;
+  /** How the run whose peak it is was killed; absent when it was not. */
+  readonly killed?: string;
 }
 
 /** The last day's runs in numbers. */
@@ -1017,7 +1061,7 @@ export class Gate {
 
       if (familyOf(asString(r.run["what"]) ?? "", ran) !== command || (top !== undefined && r.peak <= top.peak)) return top;
 
-      return { command, peak: r.peak, at: r.at, repo, workspace: ran };
+      return { command, peak: r.peak, at: r.at, repo, workspace: ran, ...killMark(r.run) };
     }, undefined);
   }
 

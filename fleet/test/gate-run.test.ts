@@ -173,6 +173,57 @@ describe.each(SCOPE ? [["a systemd scope", "1"], ["a process group", "0"]] : [["
     expect(first()).toBe("free");
   });
 
+  // vitest 4.1.10 reads $VITEST_MAX_WORKERS over a project's fileParallelism: false (casos-contracts' postgres project),
+  // so the gate sets no tool's own variable: a config that wants the run's CPUs reads $FLEET_GATE_RUN_CPUS.
+  test("the command gets $FLEET_GATE_RUN_CPUS, its CPU quota (else the CPU budget) at most 8, always the run's own; $VITEST_MAX_WORKERS and $FLEET_GATE_CPUS are left alone", () => {
+    const sees = ["sh", "-c", "echo \"$FLEET_GATE_RUN_CPUS ${FLEET_GATE_CPUS-unset} ${VITEST_MAX_WORKERS-unset}\""];
+    const set = gate(["run", "--as", "w1", "--cpus", "2", "--", ...sees], { ...more, FLEET_GATE_CPU_BUDGET: "24" });
+    expect(set.code).toBe(0);
+    expect(set.stdout).toBe("8 unset unset\n");
+    expect(set.stderr).not.toContain("VITEST_MAX_WORKERS=");
+
+    if (set.stderr.includes(", CPUQuota=")) {
+      expect(set.stderr).toContain("; FLEET_GATE_RUN_CPUS=8 for a config to size its pool by (its CPU quota, 8 at most): ");
+    } else {
+      expect(set.stderr).toContain("; FLEET_GATE_RUN_CPUS=8 for a config to size its pool by (the CPU budget, 8 at most: no CPU quota): ");
+    }
+
+    if (scope === "0") expect(gate(["run", "--as", "w1", "--cpus", "2", "--", ...sees], { ...more, FLEET_GATE_CPU_BUDGET: "3" }).stdout).toBe("3 unset unset\n");
+
+    // A caller's $FLEET_GATE_CPUS is the quota it asks, as before: 16, and the pool's 8 still; a caller's own
+    // $FLEET_GATE_RUN_CPUS is the gate's to say.
+    const callers = gate(["run", "--as", "w1", "--cpus", "2", "--", ...sees], { ...more, FLEET_GATE_CPU_BUDGET: "24", FLEET_GATE_CPUS: "16", FLEET_GATE_RUN_CPUS: "5", VITEST_MAX_WORKERS: "3" });
+    expect(callers.stdout).toBe("8 16 3\n");
+    expect(callers.stderr).not.toContain("VITEST_MAX_WORKERS=");
+
+    if (callers.stderr.includes(", CPUQuota=")) expect(callers.stderr).toContain(", CPUQuota=1600% (16 of ");
+  });
+
+  // Logged only, to set thresholds by: 10-22's loadavg reached 75 under a 24-CPU budget.
+  test("the machine's pressure at the run's start and end, and the most it reached between, go on its record; with no /proc/pressure, none", () => {
+    const root = tmp("fleet-gate-proc-");
+    const pressure = join(root, "pressure");
+    mkdirSync(pressure);
+    const psi = (some: string, full: string): string => `some avg10=${some} avg60=0.00 avg300=0.00 total=1\nfull avg10=${full} avg60=0.00 avg300=0.00 total=1\n`;
+    writeFileSync(join(pressure, "cpu"), "some avg10=5.00 avg60=0.00 avg300=0.00 total=1\n");
+    writeFileSync(join(pressure, "memory"), psi("1.00", "0.50"));
+    writeFileSync(join(pressure, "io"), psi("2.00", "1.00"));
+    writeFileSync(join(root, "high"), psi("40.00", "20.00"));
+    writeFileSync(join(root, "low"), psi("3.00", "0.25"));
+    const memory = join(pressure, "memory");
+
+    const done = gate(["run", "--as", "w1", "--", "sh", "-c", `cp ${root}/high ${memory}; sleep 1; cp ${root}/low ${memory}`], { ...more, FLEET_PROC_ROOT: root, FLEET_GATE_PRESSURE_MS: "50" });
+    expect(done.code).toBe(0);
+    expect(records()[0]).toMatchObject({
+      psi_start: { cpu_some: 5, memory_some: 1, memory_full: 0.5, io_some: 2, io_full: 1 },
+      psi_end: { cpu_some: 5, memory_some: 3, memory_full: 0.25, io_some: 2, io_full: 1 },
+      psi_max: { cpu_some: 5, memory_some: 40, memory_full: 20, io_some: 2, io_full: 1 },
+    });
+
+    expect(gate(["run", "--as", "w1", "--", "true"], more).code).toBe(0);
+    expect(Object.keys(records()[1] ?? {}).filter((key) => key.startsWith("psi"))).toEqual([]);
+  });
+
   test("a command past its --timeout is stopped, its whole tree with it, exit 124, and the slot freed", async () => {
     const dir = tmp("fleet-gate-tree-");
     const done = gate(["run", "--as", "w1", "--timeout", "2", "--", ...tree(dir)], more);
@@ -932,6 +983,62 @@ describe.skipIf(!SCOPE)("gate run's record, and its estimate from the last runs"
     expect(gate(["run", "--as", "w1", "--", "true"], more, gitRepo()).stderr).toContain("(no earlier run)");
   });
 
+  // 10-22: agent-tools' land-gate was given --mem 4G against a measured 9.5G peak, and the reaper stopped it.
+  test("a --mem below the command's measured peak is raised to that peak, and the run says so", () => {
+    const GB = 1024 ** 3;
+    const repo = gitRepo();
+    const store = realpathSync(join(repo, ".git"));
+    const at = new Date(Date.now() - 3600_000).toISOString();
+    mkdirSync(join(home, "gate"), { recursive: true });
+    writeFileSync(join(home, "gate", "runs.jsonl"), `${JSON.stringify({ at, name: "w", kind: "session", what: "true", asked: "4G", cap: 32 * GB, waited: 0, ran: 600, code: 0, peak: 9.5 * GB, killed: 0, repo: store })}\n`);
+    const env = { ...more, FLEET_GATE_MEMORY_BUDGET: "32G", FLEET_GATE_MEMORY_FLOOR: "0" };
+
+    const below = gate(["run", "--as", "w1", "--mem", "4G", "--", "true"], env, repo);
+    expect(below.code).toBe(0);
+    expect(below.stderr).toContain("gate run: --mem 4G is below this command's measured peak 9.5G: claiming 9.5G\n");
+    expect(below.stderr).toContain(`, estimate 9.5G from --mem 4G raised to the peak of its last run (9.5G at ${at}) and `);
+    expect(records().at(-1)).toMatchObject({ asked: "4G raised to the peak", estimate: 9.5 * GB });
+
+    // A --mem at or above the peak is the run's own.
+    const above = gate(["run", "--as", "w1", "--mem", "12G", "--", "true"], env, repo);
+    expect(above.stderr).not.toContain("is below this command's measured peak");
+    expect(above.stderr).toContain(", estimate 12.0G from --mem and ");
+  });
+
+  // The review of 10-22 (A3): a leak killed at the ceiling leaves a peak of the whole budget, which no later run lowers.
+  test("a --mem below a peak that a killed run left (OOM-killed, or a signal's exit) is kept as given, and the run says why", () => {
+    const GB = 1024 ** 3;
+    const repo = gitRepo();
+    const store = realpathSync(join(repo, ".git"));
+    const at = new Date(Date.now() - 3600_000).toISOString();
+    const env = { ...more, FLEET_GATE_MEMORY_BUDGET: "32G", FLEET_GATE_MEMORY_FLOOR: "0" };
+    mkdirSync(join(home, "gate"), { recursive: true });
+
+    for (const [end, why] of [[{ code: 137, killed: 0 }, "exit 137"], [{ code: 1, killed: 4 }, "4 process(es) killed for memory"]] as const) {
+      writeFileSync(join(home, "gate", "runs.jsonl"), `${JSON.stringify({ at, name: "w", kind: "session", what: "true", asked: "8G", cap: 32 * GB, waited: 0, ran: 600, peak: 32 * GB, repo: store, ...end })}\n`);
+      const kept = gate(["run", "--as", "w1", "--mem", "8G", "--", "true"], env, repo);
+      expect(kept.code).toBe(0);
+      expect(kept.stderr).toContain(`gate run: --mem 8G is below this command's measured peak 32.0G, but that peak is a killed run's (${why}): claiming 8.0G as given\n`);
+      expect(kept.stderr).toContain(`, estimate 8.0G from --mem kept (the peak of its last run, 32.0G at ${at}, is a killed run's: ${why}) and `);
+      expect(records().at(-1)).toMatchObject({ asked: "8G", estimate: 8 * GB });
+    }
+  });
+
+  test("a raised --mem lowered to the budget says the claim it makes, not the peak", () => {
+    const GB = 1024 ** 3;
+    const repo = gitRepo();
+    const store = realpathSync(join(repo, ".git"));
+    const at = new Date(Date.now() - 3600_000).toISOString();
+    mkdirSync(join(home, "gate"), { recursive: true });
+    writeFileSync(join(home, "gate", "runs.jsonl"), `${JSON.stringify({ at, name: "w", kind: "session", what: "true", asked: "4G", cap: 32 * GB, waited: 0, ran: 600, code: 0, peak: 9.5 * GB, killed: 0, repo: store })}\n`);
+
+    const lowered = gate(["run", "--as", "w1", "--mem", "4G", "--", "true"], { ...more, FLEET_GATE_MEMORY_BUDGET: "8G", FLEET_GATE_MEMORY_FLOOR: "0" }, repo);
+    expect(lowered.code).toBe(0);
+    expect(lowered.stderr).toContain("gate run: --mem 4G is below this command's measured peak 9.5G: claiming 8.0G, the budget\n");
+    expect(lowered.stderr).toContain(", estimate 8.0G from --mem 4G raised to the peak of its last run (9.5G at ");
+    expect(records().at(-1)).toMatchObject({ asked: "4G raised to the peak", estimate: 8 * GB });
+  });
+
   // The Manager's 10-22 gate: 6 of 10 queued first runs asked 25% each while no run's peak passed 10.3G.
   test.skipIf(Bun.which("jj") === null)("a new workspace's first run is estimated from the largest peak of its family in the repository's workspaces in the last 24 h, plus 25%; never another repository's; $FLEET_GATE_MEMORY_MAX wins", () => {
     const GB = 1024 ** 3;
@@ -968,6 +1075,14 @@ describe.skipIf(!SCOPE)("gate run's record, and its estimate from the last runs"
     expect(gate(["run", "--as", "w1", "--", "bash", `${other}/gate-y.sh`], env, other).stderr).toMatch(/, estimate [\d.]+G from the default 25% \(no earlier run\) and /);
     expect(gate(["run", "--as", "w1", "--", "bash", `${strangerRoot}/gate-x.sh`], env, stranger).stderr).toMatch(/, estimate [\d.]+G from the default 25% \(no earlier run\) and /);
     expect(gate(["run", "--as", "w1", "--", "bash", `${third}/gate-x.sh`], { ...env, FLEET_GATE_MEMORY_MAX: "5G" }, third).stderr).toContain(", estimate 5.0G from $FLEET_GATE_MEMORY_MAX 5G (no earlier run) and ");
+
+    // With no run of its own, a --mem below its family's peak is raised to that peak.
+    writeFileSync(join(home, "gate", "runs.jsonl"), `${line(hour, 3 * GB)}\n`);
+    const fourth = ws("fourth");
+    writeFileSync(join(fourth, "gate-x.sh"), "true\n");
+    const given = gate(["run", "--as", "w1", "--mem", "1G", "--", "bash", `${fourth}/gate-x.sh`], env, fourth);
+    expect(given.stderr).toContain("gate run: --mem 1G is below this command's measured peak 3.0G: claiming 3.0G\n");
+    expect(given.stderr).toContain(`, estimate 3.0G from --mem 1G raised to the 24 h peak of 'bash <workspace>/gate-x.sh' in ${root} (repository ${store}), 3.0G at ${hour} and `);
   });
 
   // A run's peak past its estimate is not killed: only the ceiling, the whole budget, limits it, and the peak raises
