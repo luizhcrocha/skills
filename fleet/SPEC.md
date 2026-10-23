@@ -561,9 +561,16 @@ Checked in this order:
 **event** `[--agent A] [--kind spawned|reported|blocked|resolved|asked|decision|note|integrated|reviewed] [--important] [--findings N --changes C,...] TEXT`:
 logs one event (kind note by default). `--agent` must be a worker row (a manager's: any name). Kind
 **reviewed** (a review of a stack before it lands; `land-check` reads it) needs `--findings` (an int, 0 or
-more) and `--changes` (jj change ids, letters and digits, split on commas and whitespace), stored on the
-event as `findings` and `changes` after `text`; refused without them (`a reviewed event says what the
-review found and of which changes: ...`), with a negative count, or a change id with another character. On
+more) and `--changes` (`change@commit` each: a jj change id, letters and digits, `@`, and 8 or more hex
+digits of the commit the reviewer read; split on commas and whitespace), stored on the event as `findings`
+and `changes` after `text`; refused without them (`a reviewed event says what the review found and of
+which changes: ...`), with a negative count, a bare change id (`<id> names no commit: ...`: the change's
+commit at record time may already hold a fold squashed in after the review, so the commit comes from the
+reviewer's report), or an entry of another shape (`--changes names change@commit ...`). `land-check` counts
+a change reviewed only while `jj interdiff --from <commit> --to <the change's commit now>` is empty, and the
+commit is one `jj evolog` shows for the change; an event recorded before 1.9.81, with bare change ids, it
+reads at the latest commit `jj evolog` shows for the change before the second of the event's `at`
+(`inferred`). On
 any other kind, `--findings` or `--changes` is refused (`--findings and --changes go with --kind reviewed`).
 
 **approval** `ACTION [ID] [--rule R --by WHO --ref [FLEET/]DECISION[:Q<n>]] [--reason R]`: the standing approvals,

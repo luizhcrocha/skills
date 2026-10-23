@@ -1,4 +1,4 @@
-{"trace": 1, "name": "render-plan-and-grill", "about": "plan-and-grill.jsonl with every state command rendering the page: index.html is compared byte for byte (its sha256), so the page's payload (fleets.view) is pinned at every step"}
+{"trace": 1, "name": "render-plan-and-grill", "about": "plan-and-grill.jsonl with every state command rendering the page: index.html is compared byte for byte (its sha256), so the page's payload (fleets.view) is pinned at every step", "twin": {"why": "the `reviewed` event's usage line (TypeScript only, 1.9.81): `state`'s usage names `--changes CHANGE@COMMIT,...`, a review at the commits it read, where the twin names `--changes C,...`", "normalise": ["changes-usage"]}}
 {"cli": "state", "argv": ["$DIR", "init", "--project", "p", "--goal", "g"], "clock": "2026-01-05T09:00:00+00:00"}
 {"cli": "state", "argv": ["$DIR", "milestone", "m1", "--title", "Usage records"]}
 {"cli": "state", "argv": ["$DIR", "milestone", "m2", "--title", "Verify and ship"]}

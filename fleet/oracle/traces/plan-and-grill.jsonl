@@ -1,4 +1,4 @@
-{"trace": 1, "name": "plan-and-grill", "about": "Steps placed, renamed, removed and numbered; a grilling asked, followed up, answered, dropped and done; kept notes and links."}
+{"trace": 1, "name": "plan-and-grill", "about": "Steps placed, renamed, removed and numbered; a grilling asked, followed up, answered, dropped and done; kept notes and links.", "twin": {"why": "the `reviewed` event's usage line (TypeScript only, 1.9.81): `state`'s usage names `--changes CHANGE@COMMIT,...`, a review at the commits it read, where the twin names `--changes C,...`", "normalise": ["changes-usage"]}}
 {"cli": "state", "argv": ["$DIR", "init", "--project", "p", "--goal", "g", "--no-render"], "clock": "2026-01-05T09:00:00+00:00"}
 {"cli": "state", "argv": ["$DIR", "milestone", "m1", "--title", "Usage records", "--no-render"]}
 {"cli": "state", "argv": ["$DIR", "milestone", "m2", "--title", "Verify and ship", "--no-render"]}

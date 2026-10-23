@@ -88,8 +88,10 @@ export const NEEDS = ["user", "coordinator", "worker"] as const;
 /** The kinds of event. */
 export const EVENT_KINDS = ["spawned", "reported", "blocked", "resolved", "asked", "decision", "note", "integrated", "reviewed"] as const;
 
-/** A jj change id, as a `reviewed` event names one. */
-const CHANGE_ID = /^[A-Za-z0-9]+$/u;
+/** A change as a `reviewed` event names it: its jj change id and the commit the reviewer read, `change@commit`. A
+ * bare change id is refused: filled in at record time it would be the change's commit then, which a fold squashed in
+ * after the review has already replaced (perf, 10-23), and land-check binds the review to that commit. */
+const REVIEWED_CHANGE = /^[A-Za-z0-9]+@[0-9a-f]{8,}$/u;
 
 /** The choices asked of the user in a day after which a fleet with no advisor starts one. */
 const ADVISOR_AFTER = 3;
@@ -3090,14 +3092,25 @@ export function event(ledger: Ledger, run: Run): Effect.Effect<Ledger, Refusal> 
     if (findings === undefined || changes.length === 0) {
       return refuse(
         'a reviewed event says what the review found and of which changes: --findings N (0 when it found nothing) ' +
-          'and --changes "<change id>,..." (jj\'s change ids of the stack it read; land-check looks them up)',
+          'and --changes "<change>@<commit>,..." (each change of the stack it read, with the commit it read, from its ' +
+          "report; land-check binds the review to that commit)",
       );
     }
 
     if (findings < 0) return refuse("--findings counts what the review found: 0 or more");
-    const bad = changes.filter((c) => !CHANGE_ID.test(c));
+    const bare = changes.filter((c) => /^[A-Za-z0-9]+$/u.test(c));
 
-    if (bad.length > 0) return refuse(`--changes names jj change ids (letters and digits), not ${bad.join(", ")}`);
+    if (bare.length > 0) {
+      return refuse(
+        `${bare.map((c) => `${c} names no commit`).join(", ")}: --changes names each change with the commit the reviewer read, ` +
+          "change@commit, as the review's report gives it (its `jj log -r '<fixed>..@' -T 'change_id.short() ++ \"@\" ++ " +
+          "commit_id.short() ++ \"\\n\"'` when it began); not the change's commit now, which a fold since the review has replaced",
+      );
+    }
+
+    const bad = changes.filter((c) => !REVIEWED_CHANGE.test(c));
+
+    if (bad.length > 0) return refuse(`--changes names change@commit (a jj change id, then 8 or more hex digits of its commit id), not ${bad.join(", ")}`);
   } else if (findings !== undefined || changesText !== undefined) {
     return refuse("--findings and --changes go with --kind reviewed");
   }

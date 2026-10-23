@@ -2,6 +2,7 @@
 """Land's verdict on one push: may it go without asking?
 
     land-check --bookmark B [--head REV] [--remote origin] [--apply-skip-ci | --pre-gate]
+    land-check --interdiff CHANGE@COMMIT [--to CHANGE]
 
 Prints JSON. Run it after `jj git fetch` and the rebase, from inside the
 workspace. Exit 0 when the verdict is "push", 1 for "ask" or "stop", 2 on error.
@@ -39,10 +40,24 @@ workspace. Exit 0 when the verdict is "push", 1 for "ask" or "stop", 2 on error.
                        lines (a schema or migration, auth or permissions, a
                        deletion of data, billing), `needed`, `bug_hunt` (over
                        2,000 lines), the fleet `ledger` read, and the stack's
-                       changes it records as `reviewed` and `unreviewed`. Never
-                       changes the verdict: a stack that needs a review and has
-                       no `reviewed` event gets a "warning:" reason, and one with
-                       no ledger to read a "reminder:" reason
+                       changes: `reviewed` (a `reviewed` event read the change's
+                       current content), `unreviewed` (no event names it),
+                       `changed_after_review` (the latest review read other
+                       content), and `inferred` (the event names no commit). A
+                       review covers the commit it read, `change@commit` in the
+                       event: `jj interdiff --from <that commit> --to <the
+                       change's commit now>` must be empty, so a pure rebase
+                       passes and a fold squashed in after the review does not.
+                       The commit must be 8 or more hex digits and one jj
+                       evolog shows for the change, else the review counts for
+                       nothing. An event with a bare change id (recorded before
+                       reviews named commits) is taken at the latest commit `jj
+                       evolog` shows for the change before the event's second
+                       (one in that second counts as after it), and fails when
+                       evolog has none from before it. Never changes the
+                       verdict: a stack that needs a review and has no review of
+                       a change's current content gets a "warning:" reason, and
+                       one with no ledger to read a "reminder:" reason
 
 --ledger DIR names the fleet's dashboard directory; else $FLEET_DIR, else the
 fleet whose registry entry's pid is among this process's parents.
@@ -53,9 +68,17 @@ holds (idempotent, head only), then reports on the rewritten head.
 --pre-gate runs before the full gate takes the slot (Land's step 5,
 `land-check --pre-gate -b B && fleet fleets gate run ...`): the same JSON, no
 landing turn asked and nothing rewritten, and the exit code says whether the
-gate may start: 1 when the stack needs a review the ledger does not record
-(the "warning:" reason) or there is no single head with work to push (its
+gate may start: 1 when the stack needs a review the ledger does not record,
+or a change changed after its review (the "warning:" reasons), or there is no
+single head with work to push (its
 reason on stderr), 0 otherwise, 2 on error.
+
+--interdiff CHANGE@COMMIT prints `jj interdiff --git --from COMMIT --to CHANGE`
+(--to names the change a reshape made of CHANGE, when its id changed) and says
+on stderr whether it is empty: exit 0 when it is (a pure rebase or reshape: the
+review may be re-recorded at the new change@commit), 1 when not (review it
+again), 2 when COMMIT is not one of CHANGE's commits or jj cannot compare them.
+No bookmark, ledger or verdict.
 """
 
 import argparse
@@ -66,6 +89,7 @@ import shutil
 import signal
 import subprocess
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
 LANDING_REMOTE = "origin"  # the remote a landing goes to, unless --remote says another
@@ -687,7 +711,9 @@ def find_ledger(explicit=None):
 
 
 def reviewed_changes(ledger):
-    """The change ids the ledger's `reviewed` events name (four characters or more: a shorter one could be anything)."""
+    """The reviews the ledger's `reviewed` events record, oldest first: {change, commit, at} each, the commit the
+    reviewer read from a `change@commit` entry, None from a bare change id (an event from before commits were
+    recorded). A change id shorter than four characters could be anything, and is left out."""
     try:
         state = json.loads(ledger.read_text())
     except (OSError, ValueError):
@@ -695,8 +721,142 @@ def reviewed_changes(ledger):
     out = []
     for e in state.get("events", []) if isinstance(state, dict) else []:
         if isinstance(e, dict) and e.get("kind") == "reviewed" and isinstance(e.get("changes"), list):
-            out += [c for c in e["changes"] if isinstance(c, str) and len(c) >= 4]
+            for c in e["changes"]:
+                if not isinstance(c, str):
+                    continue
+                change, _, commit = c.partition("@")
+                if len(change) >= 4:
+                    out.append({"change": change, "commit": commit or None, "at": str(e.get("at") or "")})
     return out
+
+
+def clock(at):
+    """HH:MM of a ledger time, as the reasons name it."""
+    return at[11:16] if len(at) >= 16 else at or "an unknown time"
+
+
+def utc_seconds(at):
+    """A ledger time (RFC 3339) as UTC, to the second, comparable as text with jj's; None when it does not parse."""
+    try:
+        when = datetime.fromisoformat(at.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if when.tzinfo is None:
+        return None
+    return when.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
+
+
+COMMIT = re.compile(r"[0-9a-f]{8,}")  # what a review names after the `@`: a commit id's hex, never a revset
+
+
+def evolog(repo, change):
+    """The commits change has been, newest first: (commit id, committer time in UTC to the second) each, its own
+    entries only (a squash's sources are left out). None when jj cannot read it (a divergent change)."""
+    template = ('commit.change_id() ++ " " ++ commit.commit_id() ++ " " ++ '
+                'commit.committer().timestamp().utc().format("%Y-%m-%dT%H:%M:%S") ++ "\\n"')
+    r = repo.jj("evolog", "--no-graph", "-r", change, "-T", template, check=False)
+    if r.returncode != 0:
+        return None
+    return [(parts[1], parts[2]) for parts in (line.split() for line in r.stdout.splitlines())
+            if len(parts) == 3 and parts[0].startswith(change)]
+
+
+def commit_then(repo, change, at):
+    """The commit change was at when a review recorded at `at` read it: the latest entry of `jj evolog` for that
+    change written before then, to the second (one in the same second counts as after the review). None when it
+    has none."""
+    when = utc_seconds(at)
+    entries = evolog(repo, change) if when is not None else None
+    return next((commit for commit, written in entries or [] if written < when), None)
+
+
+def not_its_commit(repo, change, commit):
+    """Why `commit` cannot be taken as one change has been: not a commit id, or one jj evolog does not show for that
+    change. None when it is one of the change's. A change jj cannot read the evolog of (abandoned by a reshape, or
+    divergent) owns the commit when the commit's own change id is its."""
+    if not COMMIT.fullmatch(commit):
+        return f"names `{commit}`, not a commit id (8 or more hex digits)"
+    entries = evolog(repo, change)
+    if entries is None:
+        r = repo.jj("log", "--no-graph", "-r", commit, "-T", "change_id", check=False)
+        mine = r.returncode == 0 and r.stdout.strip().startswith(change)
+    else:
+        mine = any(c.startswith(commit) for c, _ in entries)
+    return None if mine else f"names commit {commit}, which jj evolog does not show for this change"
+
+
+def interdiff(repo, frm, to):
+    """What changed between two commits of one change, as their patches: (files, added, removed). None when jj
+    cannot compare them (a commit this repo does not have)."""
+    r = repo.jj("interdiff", "--git", "--from", frm, "--to", to, check=False)
+    return diff_summary(r.stdout) if r.returncode == 0 else None
+
+
+def diff_summary(text):
+    """A git-format diff as (files, added, removed)."""
+    counts = diff_counts(text)
+    added = sum(len(a) for _, a in counts.values())
+    return len(counts), added, sum(n for n, _ in counts.values()) - added
+
+
+def files_and_lines(files, added, removed):
+    return f"{files} file{'' if files == 1 else 's'}, +{added}/-{removed}"
+
+
+def show_interdiff(repo, reviewed, to=None):
+    """--interdiff: print `jj interdiff` from the commit a review read to the change now (or to `to`, the change a
+    reshape made of it), and say on stderr whether it is empty. 0 when it is, 1 when not, 2 when `reviewed` is not
+    a change@commit of that change, or jj cannot compare them."""
+    change, _, commit = reviewed.partition("@")
+    why = (f"names `{reviewed}`, not change@commit" if len(change) < 4 or not commit
+           else not_its_commit(repo, change, commit))
+    if why is not None:
+        print(f"land-check: --interdiff: {change} {why}", file=sys.stderr)
+        return 2
+    to = to or change
+    r = repo.jj("interdiff", "--git", "--from", commit, "--to", to, check=False)
+    if r.returncode != 0:
+        print(f"land-check: --interdiff: jj cannot compare {reviewed} with {to}: {r.stderr.strip()}", file=sys.stderr)
+        return 2
+    sys.stdout.write(r.stdout)
+    files, added, removed = diff_summary(r.stdout)
+    if files == 0:
+        print(f"land-check: --interdiff: {to} has not changed since {reviewed}", file=sys.stderr)
+        return 0
+    print(f"land-check: --interdiff: {to} changed since {reviewed} ({files_and_lines(files, added, removed)}): "
+          "review it again", file=sys.stderr)
+    return 1
+
+
+def review_of(repo, rev, reviews):
+    """How the recorded reviews of one change in the stack stand against its current commit: (state, detail).
+    State "none": no review names the change; "reviewed": some review read the change's current content (its
+    commit, or one whose interdiff to it is empty: a pure rebase); "changed": the latest review read other
+    content, detail {at, commit, files, added, removed, inferred}; "unknown": the latest review names no commit
+    and jj evolog has none from before it, names something other than one of the change's commits (`why`), or
+    one this repo cannot compare. A review with no commit is taken at the commit the change was at then
+    (inferred)."""
+    mine = [r for r in reviews if rev["change"].startswith(r["change"]) or r["change"].startswith(rev["change"])]
+    if not mine:
+        return "none", None
+    last = None
+    for r in reversed(mine):
+        inferred = r["commit"] is None
+        why = None if inferred else not_its_commit(repo, rev["change"], r["commit"])
+        commit = commit_then(repo, rev["change"], r["at"]) if inferred else None if why else r["commit"]
+        if commit is not None and rev["commit"].startswith(commit):
+            return "reviewed", {"inferred": inferred}
+        diff = interdiff(repo, commit, rev["commit"]) if commit is not None else None
+        if diff is not None and diff[0] == 0:
+            return "reviewed", {"inferred": inferred}
+        if last is None:
+            last = {"at": r["at"], "commit": commit or r["commit"], "inferred": inferred, "diff": diff, "why": why}
+    if last["diff"] is None:
+        unknown = {"at": last["at"], "commit": last["commit"], "inferred": last["inferred"]}
+        return "unknown", {**unknown, "why": last["why"]} if last["why"] else unknown
+    files, added, removed = last["diff"]
+    return "changed", {"at": last["at"], "commit": last["commit"], "inferred": last["inferred"],
+                       "files": files, "added": added, "removed": removed}
 
 
 def review_status(repo, base, head, stack, ledger_dir=None):
@@ -714,12 +874,37 @@ def review_status(repo, base, head, stack, ledger_dir=None):
             sensitive.append(f"a deletion of data: {p}")
     needed = lines > REVIEW_LINES or bool(sensitive)
     ledger = find_ledger(ledger_dir)
-    names = reviewed_changes(ledger) if ledger else []
-    changes = [r["change"] for r in stack if not r["empty"]]
-    done = [c for c in changes if any(c.startswith(n) or n.startswith(c) for n in names)]
+    reviews = reviewed_changes(ledger) if ledger else []
+    done, unreviewed, changed, inferred = [], [], [], []
+    for rev in (r for r in stack if not r["empty"]):
+        state, detail = review_of(repo, rev, reviews)
+        if state == "none":
+            unreviewed.append(rev["change"])
+            continue
+        if detail["inferred"]:
+            inferred.append(rev["change"])
+        if state == "reviewed":
+            done.append(rev["change"])
+        else:
+            changed.append({"change": rev["change"], **detail})
     return {"lines": lines, "threshold": REVIEW_LINES, "sensitive": sensitive[:12], "needed": needed,
             "bug_hunt": lines > BUG_HUNT_LINES, "ledger": str(ledger) if ledger else None,
-            "reviewed": done, "unreviewed": [c for c in changes if c not in done]}
+            "reviewed": done, "unreviewed": unreviewed, "changed_after_review": changed, "inferred": inferred}
+
+
+def changed_line(c):
+    """Why one reviewed change needs its review again."""
+    if "files" not in c:
+        if "why" in c:
+            return f"{c['change']}: its review at {clock(c['at'])} {c['why']}: review it again"
+        if c["inferred"]:
+            return (f"{c['change']}: its review at {clock(c['at'])} names no commit, and jj evolog has none from "
+                    "before it: review it again, or record the commit it read")
+        return (f"{c['change']}: its review at {clock(c['at'])} names commit {c['commit']}, which this repo cannot "
+                "compare: review it again")
+    files = files_and_lines(c["files"], c["added"], c["removed"])
+    how = "; the reviewed commit inferred from jj evolog, as the event names none" if c["inferred"] else ""
+    return f"{c['change']} changed after its review at {clock(c['at'])} ({files}{how}): review it again"
 
 
 def review_reasons(review):
@@ -733,11 +918,19 @@ def review_reasons(review):
     if review["ledger"] is None:
         return [f"reminder: {what}: a stack like this gets tstack:review (tstack:interrogate when contested){hunt} "
                 "before it lands (coordinator SKILL.md, Integrate); no fleet ledger found to check"]
+    record = "`fleet state <dir> event --kind reviewed --findings N --changes \"<change>@<commit>,...\" \"...\"`"
+    out = []
     if review["unreviewed"]:
-        return [f"warning: {what}, and the ledger has no `reviewed` event for {', '.join(review['unreviewed'])}: "
-                f"run tstack:review (tstack:interrogate when contested){hunt} before landing, then "
-                "`fleet state <dir> event --kind reviewed --findings N --changes \"<change id>,...\" \"...\"`"]
-    return [f"reviewed: {what}; the ledger records a review of every change in the stack"]
+        out.append(f"warning: {what}, and the ledger has no `reviewed` event for {', '.join(review['unreviewed'])}: "
+                   f"run tstack:review (tstack:interrogate when contested){hunt} before landing, then {record}")
+    out += [f"warning: {changed_line(c)}, then {record} with the commit it read" for c in review["changed_after_review"]]
+    if out:
+        return out
+    said = [f"reviewed: {what}; the ledger records a review of every change in the stack, at its current content"]
+    if review["inferred"]:
+        said.append(f"note: the reviews of {', '.join(review['inferred'])} name no commit: the commit each read is "
+                    "inferred from jj evolog (the latest before the event's second)")
+    return said
 
 
 LANDING_DOCS = ["CLAUDE.md", "AGENTS.md", "README.md", "justfile", "Justfile", ".justfile"]
@@ -835,7 +1028,7 @@ def main(argv=None):
                                      formatter_class=argparse.RawDescriptionHelpFormatter,
                                      epilog=__doc__.split("\n\n", 1)[1])
     parser.add_argument("-R", "--repo", default=".")
-    parser.add_argument("--bookmark", "-b", required=True)
+    parser.add_argument("--bookmark", "-b")
     parser.add_argument("--head", help="the revision to land (default: the single head of the work under @)")
     parser.add_argument("--remote", default=LANDING_REMOTE)
     when = parser.add_mutually_exclusive_group()
@@ -843,8 +1036,17 @@ def main(argv=None):
                       help="append [skip ci] to head's subject when suggest_skip_ci holds")
     when.add_argument("--pre-gate", action="store_true",
                       help="before the full gate: exit 1 when the stack needs a review the ledger does not record")
+    when.add_argument("--interdiff", metavar="CHANGE@COMMIT",
+                      help="print what changed in CHANGE since a review read COMMIT, and nothing else")
     parser.add_argument("--ledger", metavar="DIR", help="the fleet's dashboard directory, whose reviewed events are read")
+    parser.add_argument("--to", metavar="CHANGE", help="with --interdiff: the change a reshape made of CHANGE")
     args = parser.parse_args(argv)
+    if args.interdiff:
+        return show_interdiff(Repo(str(Path(args.repo).resolve())), args.interdiff, args.to)
+    if args.to:
+        parser.error("--to goes with --interdiff")
+    if not args.bookmark:
+        parser.error("the following arguments are required: --bookmark/-b")
     try:
         result = land_check(Repo(str(Path(args.repo).resolve())), args.bookmark, args.head, args.remote,
                             args.apply_skip_ci, args.ledger)

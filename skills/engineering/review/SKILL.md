@@ -23,7 +23,7 @@ Capture the diff command once:
 - `jj diff --from <fixed> --to @` when the fixed point is an ancestor of `@` (`jj log -r '<fixed> & ::@'` prints it).
 - `jj diff -r '<fixed>..@'` otherwise (the stack is behind the fetched bookmark): it diffs from the fork point, so upstream's newer commits stay out.
 
-Note the commits with `jj log -r '<fixed>..@'`; `jj log -p -r '<fixed>..@'` shows them one revision at a time.
+Note the commits now, before anyone reads the diff: `jj log -r '<fixed>..@' -T 'change_id.short() ++ "@" ++ commit_id.short() ++ "\n"'` prints each change with the commit this review reads, and the report carries that list as its `Read:` line. Taken at the end instead, it names a fix squashed in during the review as reviewed. `jj log -p -r '<fixed>..@'` shows the commits one revision at a time.
 
 Before going further, confirm the fixed point resolves (`jj log -r '<fixed>' -n 1`) and the diff is non-empty. A bad revision or empty diff should fail here, not inside two parallel sub-agents.
 
@@ -92,7 +92,9 @@ A finding that matches a memo gotcha, or that an earlier review of this repo alr
 
 End with a one-line summary: total findings per axis, and the worst issue _within each axis_ (if any). Don't pick a single winner across axes: that's the reranking the separation exists to prevent.
 
-In a fleet, record the review in the ledger before the stack lands, so `land-check` finds it: `fleet state <dashboard-dir> event --kind reviewed --findings <N> --changes "<change id>,..." "<what was reviewed, and with what>"`, the change ids from `jj log -r '<fixed>..@' -T 'change_id.short() ++ "\n"'` and N the findings of both axes (0 when there were none).
+The report's last line is `Read: <change>@<commit>, ...`, the list step 1 noted, unchanged.
+
+In a fleet, record the review in the ledger before the stack lands, so `land-check` finds it: `fleet state <dashboard-dir> event --kind reviewed --findings <N> --changes "<change>@<commit>,..." "<what was reviewed, and with what>"`, the `--changes` being the report's `Read:` line (step 1), and N the findings of both axes (0 when there were none). A bare change id is refused. `land-check` passes a change only while `jj interdiff` from that commit to its current one is empty: a fix squashed in after the review needs a re-check of that interdiff, recorded at the commit the re-check read.
 
 ### 6. Bug hunt: the option for a diff over about 2,000 lines
 

@@ -104,6 +104,19 @@ class CorpusTest(unittest.TestCase):
         self.assertNotEqual(hide({"stderr": ts}), hide({"stderr": ts.replace("[--for MINUTES]", "")}))
         self.assertEqual(hide({"results": 4}), {"results": 4})
 
+    def test_hiding_the_changes_usage_keeps_every_other_line(self):
+        hide = run.TWIN_NORMALISERS["changes-usage"]
+        ts = "        --kind reviewed --findings N --changes CHANGE@COMMIT,...   a review of those jj changes, at the commits it read, before landing\n"
+        twin = "        --kind reviewed --findings N --changes C,...   a review of those jj changes, before landing\n"
+        self.assertEqual(hide({"stdout": ts, "stderr": ts}), {"stdout": twin, "stderr": twin})
+        self.assertNotEqual(hide({"stdout": ts}), hide({"stdout": ts.replace("--findings N", "")}))
+        self.assertEqual(hide({"results": 4}), {"results": 4})
+
+    def test_every_trace_that_prints_the_reviewed_usage_hides_it_on_the_twin(self):
+        for trace in TRACES:
+            if run.CHANGES_USAGE[0] in run.expected_of(trace).read_text(encoding="utf-8"):
+                self.assertIn("changes-usage", twin_of(trace).get("normalise", []), trace.name)
+
     def test_every_trace_that_records_a_worker_hides_the_spawn_hint_on_the_twin(self):
         for trace in TRACES:
             said = run.expected_of(trace).read_text(encoding="utf-8")

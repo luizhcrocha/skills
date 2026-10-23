@@ -32,7 +32,7 @@ commands (fleet state DIR <command>; an unknown ID creates the row, a known ID c
   decision ID --kind notice --under APPROVAL --title T --question "what was done" --undo "how to undo it"   closed at once
   approval add ID --rule R --by WHO --ref [FLEET/]DECISION[:Q<n>] | approval list | approval revoke ID --reason R   standing approvals
   event [--kind ${EVENT_KINDS.join("|")}] [--agent A] [--important] TEXT   (a note is \`event --kind note TEXT\`)
-        --kind reviewed --findings N --changes C,...   a review of those jj changes, before landing
+        --kind reviewed --findings N --changes CHANGE@COMMIT,...   a review of those jj changes, at the commits it read, before landing
   park [--agent A]... REASON     stop every live worker row (or those named) in one command
   keep ID [TEXT | --drop REASON] what must outlive a compaction: a queued ask, a hunk, a workspace
   link ID --url U --title T --kind preview|prototype|doc|tool|service [--for WHAT] [--decision D] [--note N]

@@ -64,8 +64,10 @@ jobs:
 """
 
 
-def jj(repo, *args):
-    r = subprocess.run(["jj", "--no-pager", "--color=never", *args], cwd=repo, env=ENV, capture_output=True,
+def jj(repo, *args, at=None):
+    """jj in repo; `at` (an RFC 3339 time) stamps the commits it writes, as JJ_TIMESTAMP does."""
+    env = {**ENV, "JJ_TIMESTAMP": at} if at else ENV
+    r = subprocess.run(["jj", "--no-pager", "--color=never", *args], cwd=repo, env=env, capture_output=True,
                        text=True)
     if r.returncode != 0:
         raise AssertionError(f"jj {' '.join(args)}: {r.stderr}")
@@ -136,19 +138,19 @@ class RepoCase(unittest.TestCase):
         jj(self.repo, "git", "init", "--colocate")
         jj(self.repo, "git", "remote", "add", "origin", str(self.tmp / "remote.git"))
 
-    def trunk(self, *commits):
+    def trunk(self, *commits, at=None):
         """Commits on master, pushed: (subject, {path: text}) each."""
         for subject, files in commits:
             for path, text in files.items():
                 write(self.repo, path, text)
-            jj(self.repo, "commit", "-m", subject)
-        jj(self.repo, "bookmark", "set", "master", "-r", "@-")
-        jj(self.repo, "git", "push", "--bookmark", "master")
+            jj(self.repo, "commit", "-m", subject, at=at)
+        jj(self.repo, "bookmark", "set", "master", "-r", "@-", at=at)
+        jj(self.repo, "git", "push", "--bookmark", "master", at=at)
 
-    def change(self, subject, files):
+    def change(self, subject, files, at=None):
         for path, text in files.items():
             write(self.repo, path, text)
-        jj(self.repo, "commit", "-m", subject)
+        jj(self.repo, "commit", "-m", subject, at=at)
 
     def check(self, *args):
         r = subprocess.run([sys.executable, str(CHECK), "-R", str(self.repo), "-b", "master", *args],
@@ -343,6 +345,11 @@ class ReviewTest(RepoCase):
     def changes(self):
         return jj(self.repo, "log", "--no-graph", "--reversed", "-r", "master@origin..@-", "-T", 'change_id.short(12) ++ "\\n"').split()
 
+    def read(self):
+        """The stack as a reviewer reads it and its report names it: change@commit, bottom first."""
+        return jj(self.repo, "log", "--no-graph", "--reversed", "-r", "master@origin..@-", "-T",
+                  'change_id.short(12) ++ "@" ++ commit_id.short(12) ++ "\\n"').split()
+
     def lines(self, n):
         return "".join(f"line {i}\n" for i in range(n))
 
@@ -386,12 +393,12 @@ class ReviewTest(RepoCase):
         self.trunk(("feat: a", {"a.ts": "a\n"}))
         self.change("feat: billing", {"src/billing/rates.ts": "x\n"})
         self.change("feat: more billing", {"src/billing/tax.ts": "y\n"})
-        first, second = self.changes()
-        half = self.ledger({"at": "2026-01-05T10:00:00+00:00", "kind": "reviewed", "text": "r", "findings": 1, "changes": [first[:8]]})
+        first, second = self.read()
+        half = self.ledger({"at": "2026-01-05T10:00:00+00:00", "kind": "reviewed", "text": "r", "findings": 1, "changes": [first[:8] + first[12:]]})
         result = self.check("--ledger", half)
-        self.assertEqual(result["review"]["unreviewed"], [second])
-        self.said(result, f"no `reviewed` event for {second}")
-        both = self.ledger({"at": "2026-01-05T10:00:00+00:00", "kind": "reviewed", "text": "r", "findings": 1, "changes": [first[:8], second]})
+        self.assertEqual(result["review"]["unreviewed"], [second[:12]])
+        self.said(result, f"no `reviewed` event for {second[:12]}")
+        both = self.ledger({"at": "2026-01-05T10:00:00+00:00", "kind": "reviewed", "text": "r", "findings": 1, "changes": [first, second]})
         result = self.check("--ledger", both)
         self.assertEqual(result["review"]["unreviewed"], [])
         self.said(result, "reviewed: billing: src/billing/rates.ts")
@@ -408,7 +415,7 @@ class PreGateTest(RepoCase):
     """`land-check --pre-gate` runs before the full gate takes the slot: it fails on a stack whose review the
     ledger does not record, so a 4 to 13 minute gate never runs ahead of a review that sends the stack back."""
 
-    ledger, changes, lines = ReviewTest.ledger, ReviewTest.changes, ReviewTest.lines
+    ledger, changes, read, lines = ReviewTest.ledger, ReviewTest.changes, ReviewTest.read, ReviewTest.lines
 
     def pre_gate(self, *args):
         return subprocess.run([sys.executable, str(CHECK), "-R", str(self.repo), "-b", "master", "--pre-gate", *args],
@@ -425,9 +432,8 @@ class PreGateTest(RepoCase):
     def test_a_reviewed_stack_goes_to_the_gate(self):
         self.trunk(("feat: a", {"a.ts": "a\n"}))
         self.change("feat: b", {"b.ts": self.lines(301)})
-        (change,) = self.changes()
         ledger = self.ledger({"at": "2026-01-05T10:00:00+00:00", "kind": "reviewed", "text": "r", "findings": 0,
-                              "changes": [change]})
+                              "changes": self.read()})
         r = self.pre_gate("--ledger", ledger)
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertEqual(r.stderr, "")
@@ -461,6 +467,205 @@ class PreGateTest(RepoCase):
         r = self.pre_gate("--apply-skip-ci")
         self.assertEqual(r.returncode, 2)
         self.assertIn("not allowed with argument", r.stderr)
+
+
+class ReviewedCommitTest(RepoCase):
+    """A review covers the commit it read, not the change id: a fold squashed in after it is caught by
+    `--pre-gate` (`jj interdiff` from the reviewed commit to the change's current one), and a pure rebase,
+    whose interdiff is empty, still passes. Perf's stack, 10-23: nit fixes squashed in after a review at
+    17:28 landed unreviewed."""
+
+    ledger, read, lines, pre_gate = ReviewTest.ledger, ReviewTest.read, ReviewTest.lines, PreGateTest.pre_gate
+
+    def reviewed(self, at, changes):
+        return {"at": at, "kind": "reviewed", "text": "r", "findings": 1, "changes": changes}
+
+    def stack(self):
+        """master, then one change over the review threshold, written at 09:00; its change id."""
+        self.trunk(("feat: a", {"a.ts": "a\n"}), at="2026-01-05T09:00:00+00:00")
+        self.change("feat: b", {"b.ts": self.lines(301)}, at="2026-01-05T09:00:00+00:00")
+        return jj(self.repo, "log", "--no-graph", "-r", "@-", "-T", "change_id.short(12)").strip()
+
+    def fold(self, change, at):
+        """A nit fix squashed into change: one line of b.ts rewritten."""
+        write(self.repo, "b.ts", self.lines(301).replace("line 7\n", "line seven\n"))
+        jj(self.repo, "squash", "--into", change, at=at)
+
+    def rebase(self, change, at):
+        """master moves on (another file), and change is rebased onto it, content untouched."""
+        jj(self.repo, "new", "master", at=at)
+        write(self.repo, "c.ts", "c\n")
+        jj(self.repo, "commit", "-m", "feat: c", at=at)
+        jj(self.repo, "bookmark", "set", "master", "-r", "@-", at=at)
+        jj(self.repo, "git", "push", "--bookmark", "master", at=at)
+        jj(self.repo, "rebase", "-s", change, "-d", "master", at=at)
+        jj(self.repo, "new", change, at=at)
+
+    def test_a_fold_after_the_review_fails_before_the_gate(self):
+        change = self.stack()
+        ledger = self.ledger(self.reviewed("2026-01-05T17:28:00+00:00", self.read()))
+        self.fold(change, "2026-01-05T17:31:00+00:00")
+        r = self.pre_gate("--ledger", ledger)
+        self.assertEqual(r.returncode, 1, r.stderr)
+        self.assertIn(f"{change} changed after its review at 17:28 (1 file, +1/-1): review it again", r.stderr)
+        self.assertEqual(json.loads(r.stdout)["review"]["reviewed"], [])
+
+    def test_a_pure_rebase_after_the_review_goes_to_the_gate(self):
+        change = self.stack()
+        ledger = self.ledger(self.reviewed("2026-01-05T17:28:00+00:00", self.read()))
+        self.rebase(change, "2026-01-05T17:40:00+00:00")
+        self.assertNotIn(self.read()[0], json.loads(Path(ledger, "state.json").read_text())["events"][0]["changes"])
+        r = self.pre_gate("--ledger", ledger)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(json.loads(r.stdout)["review"]["reviewed"], [change])
+
+    def test_a_fold_reviewed_again_at_its_new_commit_goes_to_the_gate(self):
+        change = self.stack()
+        first = self.reviewed("2026-01-05T17:28:00+00:00", self.read())
+        self.fold(change, "2026-01-05T17:31:00+00:00")
+        again = self.reviewed("2026-01-05T17:45:00+00:00", self.read())
+        r = self.pre_gate("--ledger", self.ledger(first, again))
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(json.loads(r.stdout)["review"]["reviewed"], [change])
+
+    def test_an_old_event_with_no_commit_then_a_fold_fails_before_the_gate(self):
+        change = self.stack()
+        self.fold(change, "2026-01-05T17:31:00+00:00")
+        r = self.pre_gate("--ledger", self.ledger(self.reviewed("2026-01-05T17:28:00+00:00", [change])))
+        self.assertEqual(r.returncode, 1, r.stderr)
+        self.assertIn(f"{change} changed after its review at 17:28 (1 file, +1/-1; the reviewed commit inferred from "
+                      "jj evolog, as the event names none): review it again", r.stderr)
+        self.assertEqual(json.loads(r.stdout)["review"]["inferred"], [change])
+
+    def test_an_old_event_with_no_commit_then_only_rebases_goes_to_the_gate(self):
+        change = self.stack()
+        self.rebase(change, "2026-01-05T17:40:00+00:00")
+        self.rebase(change, "2026-01-05T17:50:00+00:00")
+        r = self.pre_gate("--ledger", self.ledger(self.reviewed("2026-01-05T17:28:00+00:00", [change])))
+        self.assertEqual(r.returncode, 0, r.stderr)
+        review = json.loads(r.stdout)["review"]
+        self.assertEqual([review["reviewed"], review["inferred"]], [[change], [change]])
+
+    def test_an_old_event_from_before_the_change_existed_fails_before_the_gate(self):
+        change = self.stack()
+        r = self.pre_gate("--ledger", self.ledger(self.reviewed("2026-01-05T08:00:00+00:00", [change])))
+        self.assertEqual(r.returncode, 1, r.stderr)
+        self.assertIn(f"{change}: its review at 08:00 names no commit, and jj evolog has none from before it: "
+                      "review it again, or record the commit it read", r.stderr)
+
+    def test_an_old_event_in_the_same_second_as_a_fold_counts_the_fold_as_unreviewed(self):
+        change = self.stack()
+        self.fold(change, "2026-01-05T17:31:00+00:00")
+        r = self.pre_gate("--ledger", self.ledger(self.reviewed("2026-01-05T17:31:00+00:00", [change])))
+        self.assertEqual(r.returncode, 1, r.stderr)
+        self.assertIn(f"{change} changed after its review at 17:31 (1 file, +1/-1; the reviewed commit inferred", r.stderr)
+
+    def test_an_old_event_at_a_local_offset_is_read_in_utc(self):
+        change = self.stack()
+        self.fold(change, "2026-01-05T17:31:00+00:00")
+        r = self.pre_gate("--ledger", self.ledger(self.reviewed("2026-01-05T14:35:00-03:00", [change])))
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(json.loads(r.stdout)["review"]["reviewed"], [change])
+        r = self.pre_gate("--ledger", self.ledger(self.reviewed("2026-01-05T14:30:00-03:00", [change])))
+        self.assertEqual(r.returncode, 1, r.stderr)
+        self.assertIn(f"{change} changed after its review at 14:30 (1 file, +1/-1", r.stderr)
+
+    def test_a_review_naming_the_change_id_as_its_commit_fails_before_the_gate(self):
+        change = self.stack()
+        r = self.pre_gate("--ledger", self.ledger(self.reviewed("2026-01-05T17:28:00+00:00", [f"{change}@{change}"])))
+        self.assertEqual(r.returncode, 1, r.stderr)
+        self.assertIn(f"{change}: its review at 17:28 names `{change}`, not a commit id (8 or more hex digits): "
+                      "review it again", r.stderr)
+        self.assertEqual(json.loads(r.stdout)["review"]["reviewed"], [])
+
+    def test_a_review_naming_a_commit_this_repo_lacks_fails_before_the_gate(self):
+        change = self.stack()
+        r = self.pre_gate("--ledger", self.ledger(self.reviewed("2026-01-05T17:28:00+00:00", [f"{change}@0123456789ab"])))
+        self.assertEqual(r.returncode, 1, r.stderr)
+        self.assertIn(f"{change}: its review at 17:28 names commit 0123456789ab, which jj evolog does not show for "
+                      "this change: review it again", r.stderr)
+
+    def test_a_review_naming_another_changes_commit_fails_before_the_gate(self):
+        change = self.stack()
+        self.change("feat: d", {"d.ts": "d\n"}, at="2026-01-05T09:00:00+00:00")
+        _, upper = self.read()
+        other = upper.split("@")[1]
+        r = self.pre_gate("--ledger", self.ledger(self.reviewed("2026-01-05T17:28:00+00:00", [f"{change}@{other}", upper])))
+        self.assertEqual(r.returncode, 1, r.stderr)
+        self.assertIn(f"{change}: its review at 17:28 names commit {other}, which jj evolog does not show for "
+                      "this change: review it again", r.stderr)
+        self.assertEqual(json.loads(r.stdout)["review"]["reviewed"], [upper.split("@")[0]])
+
+    def test_a_fold_into_the_lower_of_two_changes_fails_it_and_passes_the_rebased_upper(self):
+        lower = self.stack()
+        self.change("feat: d", {"d.ts": "d\n"}, at="2026-01-05T09:00:00+00:00")
+        read = self.read()
+        upper = read[1].split("@")[0]
+        ledger = self.ledger(self.reviewed("2026-01-05T17:28:00+00:00", read))
+        self.fold(lower, "2026-01-05T17:31:00+00:00")
+        self.assertNotIn(self.read()[1], read)
+        r = self.pre_gate("--ledger", ledger)
+        self.assertEqual(r.returncode, 1, r.stderr)
+        review = json.loads(r.stdout)["review"]
+        self.assertEqual(review["reviewed"], [upper])
+        self.assertEqual([c["change"] for c in review["changed_after_review"]], [lower])
+        self.assertIn(f"{lower} changed after its review at 17:28 (1 file, +1/-1): review it again", r.stderr)
+
+
+class InterdiffTest(RepoCase):
+    """`land-check --interdiff <change>@<commit> [--to <change>]`: what changed since a review read a change, so a
+    coordinator re-records a review after a reshape only when nothing did. Exit 0 when the interdiff is empty, 1
+    when it is not, 2 when the commit is not one of the change's."""
+
+    stack, fold, rebase = ReviewedCommitTest.stack, ReviewedCommitTest.fold, ReviewedCommitTest.rebase
+    read, lines = ReviewTest.read, ReviewTest.lines
+
+    def interdiff(self, *args):
+        return subprocess.run([sys.executable, str(CHECK), "-R", str(self.repo), "--interdiff", *args],
+                              capture_output=True, text=True, env=ENV)
+
+    def test_a_pure_rebase_shows_an_empty_interdiff(self):
+        change = self.stack()
+        (reviewed,) = self.read()
+        self.rebase(change, "2026-01-05T17:40:00+00:00")
+        r = self.interdiff(reviewed)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(r.stdout, "")
+        self.assertIn(f"land-check: --interdiff: {change} has not changed since {reviewed}", r.stderr)
+
+    def test_a_fold_shows_its_lines(self):
+        change = self.stack()
+        (reviewed,) = self.read()
+        self.fold(change, "2026-01-05T17:31:00+00:00")
+        r = self.interdiff(reviewed)
+        self.assertEqual(r.returncode, 1, r.stderr)
+        self.assertIn("-line 7\n+line seven\n", r.stdout)
+        self.assertIn(f"land-check: --interdiff: {change} changed since {reviewed} (1 file, +1/-1): review it again",
+                      r.stderr)
+
+    def test_a_reshape_to_a_new_change_with_the_same_content_shows_an_empty_interdiff(self):
+        change = self.stack()
+        (reviewed,) = self.read()
+        jj(self.repo, "duplicate", change, "-d", "master")
+        jj(self.repo, "abandon", change)
+        new = jj(self.repo, "log", "--no-graph", "-r", "master@origin.. ~ empty()", "-T", 'change_id.short(12)').strip()
+        self.assertNotEqual(new, change)
+        r = self.interdiff(reviewed, "--to", new)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn(f"land-check: --interdiff: {new} has not changed since {reviewed}", r.stderr)
+        trunk = jj(self.repo, "log", "--no-graph", "-r", "master", "-T", "commit_id.short(12)").strip()
+        r = self.interdiff(f"{change}@{trunk}", "--to", new)
+        self.assertEqual(r.returncode, 2, r.stderr)
+        self.assertIn(f"names commit {trunk}, which jj evolog does not show for this change", r.stderr)
+
+    def test_a_commit_that_is_not_the_changes_is_refused(self):
+        change = self.stack()
+        r = self.interdiff(f"{change}@{change}")
+        self.assertEqual(r.returncode, 2, r.stderr)
+        self.assertIn(f"names `{change}`, not a commit id (8 or more hex digits)", r.stderr)
+        r = self.interdiff(f"{change}@0123456789ab")
+        self.assertEqual(r.returncode, 2, r.stderr)
+        self.assertIn("which jj evolog does not show for this change", r.stderr)
 
 
 class LandingBookmarkTest(RepoCase):

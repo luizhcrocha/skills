@@ -219,12 +219,20 @@ describe("the advisor's view", () => {
 });
 
 describe("reviewed events", () => {
-  test("a reviewed event carries its findings and changes", () => {
-    ok("event", "--kind", "reviewed", "--findings", "2", "--changes", "kxyzabcd, lmnopqrs", "reviewed with tstack:review");
+  test("a reviewed event carries its findings and the commit of each change it read", () => {
+    ok("event", "--kind", "reviewed", "--findings", "2", "--changes", "kxyzabcd@0f3a9c2e81b4, lmnopqrs@77d1e0b3", "reviewed with tstack:review");
     const e = rows("events").at(-1) ?? {};
-    expect([e["kind"], e["findings"], e["changes"]]).toEqual(["reviewed", 2, ["kxyzabcd", "lmnopqrs"]]);
+    expect([e["kind"], e["findings"], e["changes"]]).toEqual(["reviewed", 2, ["kxyzabcd@0f3a9c2e81b4", "lmnopqrs@77d1e0b3"]]);
     expect(refused("event", "--kind", "reviewed", "r")).toContain("--findings N");
     expect(refused("event", "--findings", "1", "a note")).toContain("go with --kind reviewed");
+  });
+
+  test("a reviewed event that names a change without the commit the reviewer read is refused", () => {
+    const said = refused("event", "--kind", "reviewed", "--findings", "0", "--changes", "kxyzabcd@0f3a9c2e81b4,lmnopqrs", "re-checked");
+    expect(said).toContain("lmnopqrs names no commit");
+    expect(said).toContain("change@commit");
+    expect(refused("event", "--kind", "reviewed", "--findings", "0", "--changes", "kxyzabcd@xyz", "r")).toContain("kxyzabcd@xyz");
+    expect(rows("events").filter((e) => e["kind"] === "reviewed")).toEqual([]);
   });
 });
 

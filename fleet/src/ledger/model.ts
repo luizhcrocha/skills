@@ -194,7 +194,7 @@ export interface LedgerEvent {
   decision?: string | null;
   /** A `reviewed` event's count of findings. */
   findings?: number;
-  /** A `reviewed` event's jj change ids. */
+  /** A `reviewed` event's changes, `change@commit` each: a jj change id and the commit the reviewer read (a bare change id before 1.9.81). */
   changes?: string[];
 }
 

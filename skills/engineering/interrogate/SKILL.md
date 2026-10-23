@@ -14,8 +14,10 @@ The deliverable is a synthesized verdict. Never apply changes: the user decides 
 ## Step 1, Determine scope
 
 - The user points at files, a diff or a revision → that.
-- Otherwise the stack since the landing bookmark's remote, `<bookmark>@origin`, the bookmark named by the repo's docs (`master` in most repos, `nix` in dotfiles; docs silent → `trunk()`). The diff is `jj diff --from <fixed> --to @` when the fixed point is an ancestor of `@`, else `jj diff -r '<fixed>..@'`; the commits `jj log -r '<fixed>..@'`.
+- Otherwise the stack since the landing bookmark's remote, `<bookmark>@origin`, the bookmark named by the repo's docs (`master` in most repos, `nix` in dotfiles; docs silent → `trunk()`). The diff is `jj diff --from <fixed> --to @` when the fixed point is an ancestor of `@`, else `jj diff -r '<fixed>..@'`; the commits `'<fixed>..@'`.
 - In a repo without jj: `git diff <fixed>...HEAD`, `origin/<default branch>` by default.
+
+Note the scope's commits now, before any reviewer reads: `jj log -r '<the commits>' -T 'change_id.short() ++ "@" ++ commit_id.short() ++ "\n"'` prints each change with the commit the reviewers read, and the verdict carries that list under **Read**. Taken at the end instead, it names a fix squashed in during the review as reviewed.
 
 An empty diff stops here. Note the context files a reviewer needs to understand the code (callers, types, the module the change sits in) as paths.
 
@@ -76,6 +78,9 @@ Write the verdict through `tstack:unslop`, in this structure:
 ### Intent
 > [The stated intent paragraph from Step 2]
 
+### Read
+`<change>@<commit>, ...`: the list Step 1 noted, unchanged.
+
 ### Reviewers
 - Reviewer A (correctness and security): [N findings]
 - Reviewer B (maintainability): [N findings]
@@ -100,4 +105,4 @@ The blast-radius safety fact, when you ran it, goes after the Agreement Map with
 
 An Act on or Consider finding that matches a memo gotcha, or recurs from an earlier review, is named last as a `tstack:lint-evolve` candidate.
 
-In a fleet, record it in the ledger before the stack lands, so `land-check` finds it: `fleet state <dashboard-dir> event --kind reviewed --findings <the Act on count> --changes "<change id>,..." "interrogated: <the verdict in one line>"`.
+In a fleet, record it in the ledger before the stack lands, so `land-check` finds it: `fleet state <dashboard-dir> event --kind reviewed --findings <the Act on count> --changes "<change>@<commit>,..." "interrogated: <the verdict in one line>"`, the `--changes` being the verdict's **Read** list. A bare change id is refused, and a fix squashed in afterwards is re-checked and recorded at its new commit.

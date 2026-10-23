@@ -390,10 +390,22 @@ def _gate_usage_hidden(result):
     return result
 
 
+# `state`'s usage of a `reviewed` event: TypeScript names change@commit (fleet/src/ledger/show.ts, 1.9.81), the twin a change id.
+CHANGES_USAGE = ("--changes CHANGE@COMMIT,...   a review of those jj changes, at the commits it read, before landing",
+                 "--changes C,...   a review of those jj changes, before landing")
+
+
+def _changes_usage_hidden(result):
+    """A step's result with the `reviewed` event's usage line as the frozen Python twin prints it, change ids alone."""
+    if not isinstance(result, dict):
+        return result
+    return {**result, **{k: result[k].replace(*CHANGES_USAGE) for k in ("stdout", "stderr") if isinstance(result.get(k), str)}}
+
+
 # What a trace's header `twin.normalise` may name: a difference the frozen Python twin keeps on purpose (ADR 0003),
 # hidden on both sides before a replay on the twin is compared.
 TWIN_NORMALISERS = {"numbers": _numbers_hidden, "spawn-hint": _spawn_hint_hidden, "card-address": _card_address_hidden,
-                    "gate-usage": _gate_usage_hidden}
+                    "gate-usage": _gate_usage_hidden, "changes-usage": _changes_usage_hidden}
 
 
 def twin_view(results: list[dict], normalise: list[str]) -> list[dict]:
