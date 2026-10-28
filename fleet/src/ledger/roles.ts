@@ -20,7 +20,7 @@ interface RoleTable {
 
 /** The role table (see the module comment). */
 export const ROLES: RoleTable = {
-  pairs: { opus: ["medium", "high"], sonnet: ["low", "medium", "high"], fable: ["high"], haiku: ["low", "high"] },
+  pairs: { opus: ["medium", "high", "xhigh"], sonnet: ["low", "medium", "high", "xhigh"], fable: ["high"], haiku: ["low", "high", "xhigh"] },
   kinds: { research: ["sonnet", "medium"], advisor: ["fable", "high"], "": ["opus", "high"] },
   alone: { opus: "high", sonnet: "medium", fable: "high", haiku: "high" },
 };

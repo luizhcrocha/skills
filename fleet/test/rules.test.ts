@@ -298,13 +298,17 @@ describe("thinking effort and the role table", () => {
   test("a pair outside the table is recorded, with a warning that it is the user's to approve", () => {
     const ran = ok("agent", "a1", "--task", "T", "--milestone", "m1", "--effort", "low");
     expect(ran.stderr).toContain(
-      "state: a1 is recorded on opus at low effort, outside the effort policy (opus medium, high; sonnet low, medium, high; fable high; haiku low, high): spawning it so needs the user's OK.",
+      "state: a1 is recorded on opus at low effort, outside the effort policy (opus medium, high, xhigh; sonnet low, medium, high, xhigh; fable high; haiku low, high, xhigh): spawning it so needs the user's OK.",
     );
     expect(rows("agents")[0]?.["effort"]).toBe("low");
     expect(ok("agent", "a1", "--model", "sonnet").stderr).not.toContain("policy");
     expect(ok("agent", "a1", "--effort", "max", "--model", "fable").stderr).toContain("at max effort");
-    expect(ok("agent", "a1", "--model", "opus", "--effort", "xhigh").stderr).toContain("at xhigh effort");
+    expect(ok("agent", "a1", "--model", "haiku", "--effort", "xhigh").stderr).not.toContain("policy");
+    expect(ok("agent", "a1", "--model", "sonnet", "--effort", "xhigh").stderr).not.toContain("policy");
+    expect(ok("agent", "a1", "--model", "opus", "--effort", "xhigh").stderr).not.toContain("policy");
     expect(ok("agent", "a1", "--model", "fable").stderr).toContain("on fable at xhigh effort");
+
+    for (const model of ["opus", "sonnet", "haiku", "fable"]) expect(ok("agent", "a1", "--model", model, "--effort", "max").stderr).toContain(`on ${model} at max effort`);
     expect(ok("agent", "a1", "--status", "done").stderr).not.toContain("policy");
   });
 

@@ -81,7 +81,7 @@ EFFORTS = ["low", "medium", "high", "xhigh", "max"]
 # `kinds`, a new worker's model and effort by its skill when --model or --effort is not given ("" is any
 # other skill; `advisor` is the TypeScript `fleet advisor`'s row, whose skill is none); `alone`, the effort a model given without --effort takes when its kind's is not among its pairs.
 ROLES = {
-    "pairs": {"opus": ["medium", "high"], "sonnet": ["low", "medium", "high"], "fable": ["high"], "haiku": ["low", "high"]},
+    "pairs": {"opus": ["medium", "high", "xhigh"], "sonnet": ["low", "medium", "high", "xhigh"], "fable": ["high"], "haiku": ["low", "high", "xhigh"]},
     "kinds": {"research": ["sonnet", "medium"], "advisor": ["fable", "high"], "": ["opus", "high"]},
     "alone": {"opus": "high", "sonnet": "medium", "fable": "high", "haiku": "high"},
 }

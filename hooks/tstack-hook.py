@@ -4476,7 +4476,7 @@ def fleet_spawn_effort(hook):
     notes = [overridden] if overridden else []
     if effort == "max":
         notes.append("tstack: this spawn runs at max effort, which no role of MODELS.md uses (never max: the first token "
-                     "takes minutes and the result is no better than xhigh). Take the role's pair unless Luiz asked for max.")
+                     "takes minutes and costs 1.3 to 6 times xhigh). Take the role's pair unless Luiz asked for max.")
     return Note("\n\n".join(notes)) if notes else None
 
 

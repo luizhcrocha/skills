@@ -939,7 +939,7 @@ After the handler succeeds, before validation, on stderr, in this order (not for
    Decided on the product of the two globs' automata (`lanes.py`, `fleet/src/ledger/lanes.ts`). In a
    fleet whose workers share one working copy the same meeting is refused instead (`agent`, above).
 7. **A pair outside the role table** (`state: a1 is recorded on opus at low effort, outside the effort
-   policy (opus medium, high; sonnet low, medium, high; fable high; haiku low, high): spawning it so needs
+   policy (opus medium, high, xhigh; sonnet low, medium, high, xhigh; fable high; haiku low, high, xhigh): spawning it so needs
    the user's OK.`), or, on a hand-written row, **a model outside it** (`state: a1 is recorded on gpt,
    outside the model policy (opus, sonnet, fable, haiku): spawning it on gpt needs the user's OK.`), on an `agent` command
    that gives `--model` or `--effort`, judged on the row as the command leaves it (L3). A row with no

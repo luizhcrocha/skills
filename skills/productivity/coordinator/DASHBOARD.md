@@ -38,13 +38,13 @@ agents[]     one row per worker, in spawn order (its position picks its chart co
   model      opus | sonnet | haiku | fable
   effort     low | medium | high | xhigh | max: the thinking effort it is spawned at (`fleet brief` prints it beside
              the model). Without --model or --effort a new row takes its skill's pair: research sonnet medium, any
-             other opus high. A pair outside the role table (haiku low or high, sonnet low-high, opus
-             medium-high, fable high; xhigh and max on none) is recorded with a warning, the user's to approve. Absent on a row
+             other opus high. The policy approves haiku low, high or xhigh; sonnet low to xhigh; opus
+             medium to xhigh; fable high; any other pair (max on no model) is recorded with a warning, the user's to approve. Absent on a row
              recorded before efforts were: unset, and the brief then names the effort its skill and model give
   status     queued | running | blocked | done | failed | stopped
   lane[]     files or globs the worker may edit
   milestone  milestone id
-  tokens     integer, from the task notification: the worker's total so far (0 until the first one)
+  tokens     integer, from the task notification: the context of the worker's last answer, read from its transcript (0 until the first one); not a lane's total
   rounds     integer: 1, plus one each time the worker is sent back after a report
   duration_ms integer, same source
   started, updated   ISO
@@ -132,7 +132,7 @@ A moved team (its folder holds `cloud.json`) skips this section and records thro
 | The default workspace is the user's own checkout (its @ holds their uncommitted work), so the merge conflicts with "the stack" | Name the stack you integrate into: `fleet preview <dir> set --stack devloop@` (a bookmark or `<workspace>@`, resolved at every look, so it follows as it moves; `start --stack <revset>` for one start; `set --no-stack` goes back to the default workspace's @). It must name exactly one commit, else `status` gives the updater's error and the last good merge stays. `status` names it: `stack: devloop@ (<commit>)`. A done worker whose changes are in that stack drops out of the merge |
 | The dev server needs secrets | Only through the environment: wrap `start` in any loader that runs a command with secrets in its environment, `secretspec run -- fleet preview <dir> start …` or `op run --env-file=<file of op:// references> -- fleet preview <dir> start …` (references only, never values), each start and each restart of a dead server; every dev server the preview starts inherits that environment. When secretspec's 1Password provider cannot reach the desktop app (`connecting to desktop app … timed out`), `op run --env-file` is the fallback. Never write or copy a secret file (`.dev.vars`) |
 | The preview is no longer needed | `fleet preview <dir> stop` stops the combined preview and its updater and leaves per-worker previews running; `--per-worker a1` stops that one; `--all` stops everything. Its workspace stays for the next start, and `fleet ws <dir> prune --apply` removes it once nothing runs there (never while it runs) |
-| Notification arrives | `agent a1 --status done --tokens N --duration-ms N --report "..." --step s1 --log "what it verified"` (the step follows the status; the log becomes a `reported` event; tokens are the worker's total so far) |
+| Notification arrives | `agent a1 --status done --tokens N --duration-ms N --report "..." --step s1 --log "what it verified"` (the step follows the status; the log becomes a `reported` event; tokens are the context of the worker's last answer) |
 | Worker sent back after its report | `agent a1 --status running --step s1 --log "sent back: ..."` (counts a new round) |
 | Worker blocked | `roadblock r1 --title T --detail D --severity serious --needs coordinator --agent a1` (marks the worker blocked, logs it) |
 | Worker blocked on the user | the decision first, then `roadblock r1 ... --needs user --decision d1`; closing the decision clears the roadblock |
