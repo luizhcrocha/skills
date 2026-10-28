@@ -34,15 +34,16 @@ SETUP = ('milestone("m1", "Login");\n'
          "return records.apply(ops);\n")
 
 
-def fold(test, programs):
-    """Each program's outcome from the real fold, the setup first; the test skips when there is no fold to run."""
+def fold(test, programs, work=()):
+    """Each program's outcome from the real fold, the setup first, with work.read answering the rows in work; the test
+    skips when there is no fold to run."""
     missing = [p for p in NEEDS if not (CHECKOUT / p).is_file()]
     if missing:
         test.skipTest(f"no fleet prelude and fold with the owner-answer gate at {CHECKOUT} ({missing[0]} is missing): "
                       "set TSTACK_FLEET_CHECKOUT to a fleet checkout with design B′ to run the programs through them")
     if not shutil.which("node"):
         test.skipTest("no node on PATH: the fleet's prelude and fold run on Node 24")
-    done = subprocess.run(["node", str(FOLD), str(CHECKOUT)], input=json.dumps({"gate": GATE, "programs": [
+    done = subprocess.run(["node", str(FOLD), str(CHECKOUT)], input=json.dumps({"gate": GATE, "work": list(work), "programs": [
         {"name": "setup", "body": SETUP}, *programs]}), capture_output=True, text=True, check=False, timeout=120)
     test.assertEqual(done.returncode, 0, done.stderr)
     setup, *rest = json.loads(done.stdout)
@@ -150,6 +151,84 @@ class WorkedCallsTest(unittest.TestCase):
         refused = [r for r in worded["applied"] if r["_tag"] == "refused"]
         self.assertTrue(refused, worded)
         self.assertIn('"answered on the page (#N)" is how the page words', refused[0]["issue"])
+
+
+COMMIT = "3209d730e5c1a8b4f6d2097c3e8a1b5d4f60c2e9"
+
+
+def work_row(change, answer, commit=COMMIT, team="skills", at="2026-10-14T11:00:00.000Z", **fields):
+    """A row of the list of unlanded work as work.read gives it: owned by team, on a full commit id as the scanner
+    reports it, with the owner's answer given at at (none for None)."""
+    key = f"tstack/{change}"
+    item = {"repo": "tstack", "change": change, "commit": commit, "title": f"change {change}", "author": "luiz",
+            "at": "2026-10-14T10:00:00.000Z", "workspace": change, "bookmarks": [], "owner": {"team": team},
+            "ownerFrom": "workspace", "landed": "no", "conflict": False}
+    given = None if answer is None else {"key": key, "answer": answer, "commit": commit, **fields,
+                                         "by": {"_tag": "owner", "email": "luiz@x"}, "at": at}
+    return {"key": key, "item": item, "host": "office", "answer": given,
+            "flags": {"oldAccept": False, "idle": False, "noOwner": False, "changedSince": False, "gone": False}}
+
+
+def act_on_each(read):
+    """A program that records each answer the read returns as acted on, with its tag."""
+    return (f"const rows = await (async () => {{\n{read}}})();\n"
+            'for (const r of rows) event("note", `${r.tag}: started`);\nreturn records.apply(ops);\n')
+
+
+class WorkAnswersTest(unittest.TestCase):
+    """PROGRAMS.md's read of the work page's answers returns each answer no event names, the rows this team gave
+    away included, and the worked event marks its answers read."""
+
+    def blocks(self):
+        bodies = re.findall(r"```ts\n(.*?)```", PROGRAMS.read_text(), re.S)
+        return next(b for b in bodies if "work.read(" in b), next(b for b in bodies if 'event("note", "work ' in b)
+
+    def test_an_answer_is_read_until_its_event_is_recorded(self):
+        read, acted = self.blocks()
+        rows = [work_row("zpxtlnro", "drop", note="superseded"),
+                work_row("oqlvqlln", "accept", commit="0123abcd4567ef890123abcd4567ef890123abcd"),
+                work_row("kmnpqrst", "hand", team="infra", to="skills"), work_row("wxyzklmn", "park", decision="D275"),
+                work_row("lmnopqrs", None), work_row("rstuvwxy", "hand", to="infra"),
+                work_row("abcdefgh", "accept", team="infra")]
+        card = ('decision.open("D275", { kind: "decision", title: "Which index?", question: "Which index?" });\n'
+                "return records.apply(ops);\n")
+        withdraw = 'decision.withdraw("D275", "settled elsewhere");\nreturn records.apply(ops);\n'
+        opened, before, recorded, rest, after, closed, back = fold(self, [
+            {"name": "open D275", "body": card}, {"name": "read", "body": read}, {"name": "acted", "body": acted},
+            {"name": "act on the rest", "body": act_on_each(read)}, {"name": "read again", "body": read},
+            {"name": "close D275", "body": withdraw}, {"name": "read after D275 closed", "body": read}], rows)
+        assert_applied(self, [opened, recorded, rest, closed])
+        drop, accept, hand, park, gave = (
+            f"work {a} tstack/{c}@{rows[i]['answer']['commit']} 2026-10-14T11:00:00.000Z" for i, (a, c) in
+            ((0, ("drop", "zpxtlnro")), (1, ("accept", "oqlvqlln")), (2, ("hand", "kmnpqrst")),
+             (3, ("park", "wxyzklmn")), (5, ("gave", "rstuvwxy"))))
+        for o in (before, after, back):
+            self.assertNotIn("thrown", o, o.get("thrown"))
+        self.assertEqual([r["tag"] for r in before["returned"]], [drop, accept, hand, park, gave],
+                         "this team's answers, the row given to it, and the row it gave away; not another team's")
+        self.assertEqual((before["returned"][0]["by"], before["returned"][3]["decision"]), ("owner", "D275"))
+        self.assertEqual(len(rest["applied"]), 2, "the worked events leave the hand and the gave")
+        self.assertEqual(after["returned"], [], "every answer has its event, the park's wait while D275 is open")
+        self.assertEqual([r["tag"] for r in back["returned"]], [park], "D275 closed, so the park comes back")
+
+    def test_an_answer_given_again_on_the_same_commit_comes_back(self):
+        read, _ = self.blocks()
+        act = act_on_each(read)
+        accept, park, again = (work_row("oqlvqlln", a, at=at) for a, at in (
+            ("accept", "2026-10-14T11:00:00.000Z"), ("park", "2026-10-14T11:30:00.000Z"),
+            ("accept", "2026-10-14T12:00:00.000Z")))
+        outcomes = fold(self, [{"name": "act on the accept", "body": act, "work": [accept]},
+                               {"name": "read the accept again", "body": read, "work": [accept]},
+                               {"name": "act on the park", "body": act, "work": [park]},
+                               {"name": "read the second accept", "body": read, "work": [again]},
+                               {"name": "read no answer", "body": read, "work": [work_row("oqlvqlln", None)]}])
+        assert_applied(self, [outcomes[0], outcomes[2]])
+        for o in outcomes:
+            self.assertNotIn("thrown", o, o.get("thrown"))
+        self.assertEqual([len(o["applied"]) for o in (outcomes[0], outcomes[2])], [1, 1])
+        self.assertEqual([[r["tag"] for r in o["returned"]] for o in (outcomes[1], outcomes[3], outcomes[4])],
+                         [[], [f"work accept tstack/oqlvqlln@{COMMIT} 2026-10-14T12:00:00.000Z"], []],
+                         "a new answer has a new time in its tag, so an accept after a park comes back")
 
 
 class BodiesLimitTest(unittest.TestCase):

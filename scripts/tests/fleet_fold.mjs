@@ -8,8 +8,12 @@
 // the cloud's rules (packages/cloud/src/bodies.ts:349-354: the ask's shape, a card id, 16 puts a program, the text's
 // 2 MB, never empty) and answers the revision of the text it was given. It checks the Markdown text only: the cloud
 // also holds the HTML that marked makes of it to 2 MB and never empty (bodies.ts:355-358), and its revision is of that
-// HTML, but marked is not installed for the harness. A program over the service's limit (wire.ts) throws.
-// node fleet_fold.mjs FLEET_CHECKOUT < {"programs": [{"name", "body", "fresh"?}], "gate"?: ISO time}
+// HTML, but marked is not installed for the harness. A program over the service's limit (wire.ts) throws. The work
+// prelude runs too, over a `work` connector that keeps no answer. Its read answers the input's `work` rows (a
+// program's own `work` in their place), filtered as the cloud's work.read filters them (packages/cloud/src/
+// program-object.ts: by repo, and by the row's team, work.ts's teamOf, `team` by default and none for team: null).
+// node fleet_fold.mjs FLEET_CHECKOUT < {"programs": [{"name", "body", "fresh"?, "work"?}], "gate"?: ISO time,
+//   "work"?: WorkRow[], "team"?: the fleet the programs run as}
 // prints [{"name", "returned", "applied": OpResult[]} | {"name", "thrown"}]; `fresh` starts that program on a mirror
 // holding only the first program's records (the setup), so one program's records do not meet another's. `gate` is the
 // owner-answer gate's time (the Worker's OWNER_ANSWERS_FROM, takeLog's ownerAnswersFrom): from it, the fold refuses
@@ -21,12 +25,20 @@ import { pathToFileURL } from "node:url";
 const checkout = process.argv[2];
 const at = "2026-10-14T12:00:00.000Z";
 const load = (path) => import(pathToFileURL(join(checkout, path)).href);
-const { preludeSource, bodiesPreludeSource } = await load("packages/ledger/src/prelude.ts");
+const { preludeSource, bodiesPreludeSource, workPreludeSource = "" } = await load("packages/ledger/src/prelude.ts");
 const { bodySentences, CARD_ID, EVIDENCE_LIMIT_BYTES, revisionOf } = await load("packages/ledger/src/bodies.ts");
 const { PROGRAM_LIMIT_BYTES } = await load("packages/ledger/src/wire.ts");
 const { applyOps, emptyMirror } = await load("packages/ledger/src/mirror.ts");
 const { takeLog } = await load("packages/cloud/src/take-log.ts");
-const { programs, gate } = JSON.parse(readFileSync(0, "utf8"));
+const { programs, gate, work: rows = [], team: ownTeam = "skills" } = JSON.parse(readFileSync(0, "utf8"));
+const worked = rows.length > 0 || programs.some((p) => p.work?.length);
+const { teamOf } = worked ? await load("packages/ledger/src/work.ts") : {};
+const workOf = (given) => ({
+  async read({ repo, team = ownTeam } = {}) {
+    return structuredClone(given.filter((row) =>
+      (repo === undefined || row.key.slice(0, row.key.lastIndexOf("/")) === repo) && (team === null || teamOf(row) === team)));
+  },
+});
 
 let n = 0;
 const log = new Map();
@@ -80,8 +92,8 @@ for (const [i, p] of programs.entries()) {
   try {
     const size = utf8.encode(p.body).byteLength;
     if (size > PROGRAM_LIMIT_BYTES) throw new Error(`a program takes at most ${PROGRAM_LIMIT_BYTES} bytes; this one has ${size}`);
-    const source = `${preludeSource}\n${bodiesPreludeSource}\n${p.body}`;
-    const returned = await new AsyncFunction("records", "bodies", source)(records(applied), bodiesOf());
+    const source = `${preludeSource}\n${workPreludeSource}\n${bodiesPreludeSource}\n${p.body}`;
+    const returned = await new AsyncFunction("records", "work", "bodies", source)(records(applied), workOf(p.work ?? rows), bodiesOf());
     out.push({ name: p.name, returned, applied });
   } catch (e) {
     out.push({ name: p.name, thrown: String(e?.stack ?? e) });
