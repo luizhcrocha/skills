@@ -1618,8 +1618,8 @@ def fleet_chat_nudge(hook):
     the decision's own state records it (decisions.py `recorded`), never a reply in the chat. An answer to a
     grilling that leaves every question answered is told once, as the grilling to record. On a moved team the
     user's answer on the page records itself (the fleet's owner-answer gate): the grilling is told as one to close
-    with grill.close, and a line its card is still open after as one to answer "Answer on the card, please", which a
-    reply ends. Each message is told once. No process;
+    with grill.close, which a reply does not end, and a line its card is still open after as one to answer "Answer on
+    the card, please", which a reply ends. Each message is told once. No process;
     the ledger is read only when something is due."""
     if fleet_worker(hook) or not hook.session_id:
         return None
@@ -1647,6 +1647,7 @@ def fleet_chat_nudge(hook):
             continue
         pending = {} if fresh or not isinstance(seen.get("pending"), dict) else seen["pending"]
         told = seen.get("told") if isinstance(seen.get("told"), list) else []
+        grills = None
         for m in messages:
             if m["from"] == "user":
                 if m["id"] not in told:
@@ -1656,8 +1657,16 @@ def fleet_chat_nudge(hook):
                 answer = pending.get(str(m["re"]))
                 # A reply to an answer to a decision does not record it: only the decision's own state does. On a
                 # moved team the user's write on the page records it, so a line the card is still open after is
-                # one no program can record, and the reply is all that is owed.
-                if not (isinstance(answer, dict) and answer.get("decision")) or moved(d):
+                # one no program can record, and the reply is all that is owed; a grilling with no question left
+                # open still owes its grill.close, which the reply does not send.
+                if isinstance(answer, dict) and answer.get("decision") and moved(d):
+                    if grills is None:
+                        listed = (read_ledger(d) or {}).get("decisions")
+                        listed = listed if isinstance(listed, list) else []
+                        grills = {x.get("id") for x in listed if isinstance(x, dict) and _answered_grill(x)}
+                    if answer["decision"] not in grills:
+                        pending.pop(str(m["re"]), None)
+                elif not (isinstance(answer, dict) and answer.get("decision")):
                     pending.pop(str(m["re"]), None)
         due = {k: p for k, p in pending.items() if not isinstance(p, dict)
                or (_instant(p.get("at")) is not None and now - _instant(p["at"]) >= wait_s)}

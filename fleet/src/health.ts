@@ -85,6 +85,15 @@ export function onCardProgram(dir: string, key: string, number: string, re: numb
   return onStdin(dir, program(movedPrograms.onCard, { reply, re, key }));
 }
 
+/** How a moved team settles its action `key` (the ledger row's id) the user ran and that failed: no program may decide
+ * it, so the fix is re-presented (decision.revise with the new manual) or the action is withdrawn, each one program. */
+export function failedProgram(dir: string, key: string): string {
+  const revise = program('decision.revise({key}, { manual: "..." }, "what changed"); return records.apply(ops);', { key });
+  const withdraw = program('decision.withdraw({key}, "why"); return records.apply(ops);', { key });
+
+  return `${onStdin(dir, revise)}, or \`${withdraw}\``;
+}
+
 /** How the page's answer to an action the user ran and that failed begins: `Failed: <what happened>`. */
 export const FAILED = "Failed:";
 
@@ -156,11 +165,19 @@ export function decisionRow(d: Pick<Decision, "id" | "status" | "opened" | "revi
   };
 }
 
-/** When the user's latest answer to decision `d` that it has not recorded ({@link answerRecorded}) was sent
- * (stamps compared as instants, open-13); undefined when there is none. Python's `decisions.answered_at`. */
-export function answeredAt(d: JsonObject, said: readonly Message[]): string | undefined {
+/** Whether the fleet still owes the user's line `m` on decision `d`, `said` being the chat: `d` has not recorded it
+ * ({@link answerRecorded}), and, on a `moved` team, nothing answers it (`re`). There no program can record the line, so
+ * the reply asking for the answer on the card is all the fleet owes; the hook pops its nudge on the same reply
+ * (`fleet_chat_nudge`). */
+export function owed(d: JsonObject, m: Message, said: readonly Message[], moved: boolean): boolean {
+  return !answerRecorded(d, m) && !(moved && said.some((x) => x.from !== "user" && x.re === m.id));
+}
+
+/** When the user's latest line on decision `d` the fleet still owes ({@link owed}) was sent (stamps compared as
+ * instants, open-13); undefined when there is none. Python's `decisions.answered_at`, for a team not `moved`. */
+export function answeredAt(d: JsonObject, said: readonly Message[], moved = false): string | undefined {
   const id = d["id"];
-  const last = said.filter((m) => m.decision !== undefined && pyRepr(m.decision) === pyRepr(id) && m.from === "user" && !answerRecorded(d, m)).at(-1);
+  const last = said.filter((m) => m.decision !== undefined && pyRepr(m.decision) === pyRepr(id) && m.from === "user" && owed(d, m, said, moved)).at(-1);
 
   return last === undefined ? undefined : str(last.at);
 }

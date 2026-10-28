@@ -12,7 +12,7 @@ import { ADVISOR } from "../advisor/advisor.ts";
 import { parseInstant } from "../clock.ts";
 import { ChatError } from "../errors.ts";
 import { isMoved, readText, remove, resolvePath, writeText } from "../files.ts";
-import { answeredAt, answeredGrill, answerRecorded, closeProgram, decisionRow, explainCommand, FAILED, onCardProgram, silentWorkers, unexplained } from "../health.ts";
+import { answeredAt, answeredGrill, answerRecorded, closeProgram, decisionRow, explainCommand, FAILED, failedProgram, onCardProgram, owed, silentWorkers, unexplained } from "../health.ts";
 import { Out } from "../io.ts";
 import { asArray, asNumber, asObject, asString, dumps, parseObject, pyRepr, type Json, type JsonObject } from "../json.ts";
 import { decodeLedger, type Decision, type Ledger } from "../ledger/model.ts";
@@ -242,7 +242,7 @@ function unrecorded(machine: Machine, entry: { readonly id: string; readonly dir
 
   for (const d of numberedDecisions(entry.dir)) {
     if (d["status"] !== "open") continue;
-    const at = answeredAt(d, said);
+    const at = answeredAt(d, said, isMoved(entry.dir));
     const mark = `answer:${pyText(d["id"])}:${at ?? "None"}`;
 
     if (at === undefined || (told.has(mark) && told.get(mark) !== false)) continue;
@@ -832,12 +832,42 @@ function closedLine(root: string, d: Decision): string {
   return line !== undefined ? answeredOnCard(label, d, line) : `${label} is already ${d.status}: ${answer !== "" ? answer : (d.resolution ?? "None")}\n`;
 }
 
+/** What `wait` says of the user's line `m` on a moved team's card `w`, read again as the line came: the card closed
+ * meanwhile ({@link closedLine}); a grilling with no question left open, to close with grill.close; an action that
+ * failed, to revise or withdraw; a line the card recorded (a grilling's question answered on the page, a hold), to act on
+ * and wait again; else a line that left the card open, to answer with the on-card reply. */
+function movedNews(root: string, w: { readonly key: string; readonly label: string; readonly kind: string }, m: Message): string {
+  const ledger = numberedLedger(root);
+  const card = ledger === undefined ? undefined : findDecision(ledger, w.key);
+
+  if (card !== undefined && card.status !== "open") return closedLine(root, card);
+
+  if (card !== undefined && answeredGrill(card)) {
+    return `-> the user answered every question of ${w.label} on the card: close it now with ${closeProgram(root, w.key, "grilling finished")}, then answer #${m.id} and act on it\n`;
+  }
+
+  if (w.kind === "action" && m.text.startsWith(FAILED)) {
+    return `-> the user's step ${w.label} failed, and it is not done: fix it and re-present it, or withdraw it, with ${failedProgram(root, w.key)}; never decide it\n`;
+  }
+
+  if (card !== undefined && answerRecorded(decisionRow(card), m)) {
+    return `-> the user's #${m.id} on ${w.label} is recorded on the card, which stays open: act on it, then re-arm wait ${w.label}\n`;
+  }
+
+  return (
+    `-> #${m.id} from the user left ${w.label} open: only the user's answer on the card records it. Answer #${m.id} with ` +
+    `${onCardProgram(root, w.key, w.label, m.id)}, or, for a None of these, revise or withdraw ${w.label}\n`
+  );
+}
+
 /** `wait`: the user's answer to one of these open decisions (ids or numbers), printed the moment it is
- * given; one given already and not recorded (a reply to it records nothing) prints at once. The ledger is read again at every poll, so
+ * given; one given already and not recorded (a reply to it records nothing, except on a moved team, where the reply is
+ * all that is owed: health's `owed`) prints at once. The ledger is read again at every poll, so
  * a decision closed meanwhile (withdrawn, or decided without an answer on the page) ends the wait as one
  * closed before does (open-21). On a moved team the user's answer on the page decides the card as it is sent: a card
  * decided with an `answer_line` is told as that answer, #answer_line, at the start or at any poll, with no need of its
- * chat line; a line that left the card open is told as one to answer with health's `onCardProgram`. */
+ * chat line; a grilling with no question left open, at the start or by a line, as one to close (`closeProgram`); any
+ * other line as {@link movedNews} says. */
 export function wait(machine: Machine, root: string, keys: readonly string[]): Effect.Effect<void, ChatError, Out> {
   return Effect.gen(function* () {
     const out = yield* Out;
@@ -857,6 +887,12 @@ export function wait(machine: Machine, root: string, keys: readonly string[]): E
         return;
       }
 
+      if (moved && answeredGrill(d)) {
+        out.out(`-> the user answered every question of ${label} on the card: close it now with ${closeProgram(root, d.id, "grilling finished")}\n`);
+
+        return;
+      }
+
       wanted.set(d.id, { key: d.id, label, kind: d.kind, row: decisionRow(d) });
     }
 
@@ -871,21 +907,13 @@ export function wait(machine: Machine, root: string, keys: readonly string[]): E
 
         if (d === undefined || m.from !== "user") continue;
 
-        // Given already, it is news until the decision records it (answerRecorded); a reply does not.
-        if (first && answerRecorded(d.row, m)) continue;
+        // Given already, it is news until the decision records it or, on a moved team, a reply answers it (owed).
+        if (first && !owed(d.row, m, messages, moved)) continue;
 
         for (const line of renderLines(machine, root, [m])) out.out(`${line}\n`);
 
-        if (moved && !(d.kind === "action" && m.text.startsWith(FAILED))) {
-          const current = numberedLedger(root);
-          const card = current === undefined ? undefined : findDecision(current, d.key);
-
-          out.out(
-            card !== undefined && card.status !== "open"
-              ? answeredOnCard(d.label, card, answerLine(root, d.key) ?? m.id)
-              : `-> #${m.id} from the user left ${d.label} open: only the user's answer on the card records it. Answer #${m.id} with ` +
-                  `${onCardProgram(root, d.key, d.label, m.id)}, or, for a None of these, revise or withdraw ${d.label}\n`,
-          );
+        if (moved) {
+          out.out(movedNews(root, d, m));
 
           return;
         }

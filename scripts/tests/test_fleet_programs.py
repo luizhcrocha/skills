@@ -79,6 +79,47 @@ class WorkedCallsTest(unittest.TestCase):
         assert_applied(self, outcomes)
         self.assertEqual(outcomes[-1]["returned"][0]["key"], "x7", "the read returns the open cards")
 
+    def test_the_inline_programs_land_applied(self):
+        """The programs PROGRAMS.md gives inline, in its prose, after its worked calls on the same team: the grilling's
+        close (its questions dropped first, as no program answers one), the on-card reply, and the Manager's card
+        withdrawn. The approval op is left out: only the owner's yes on the card backs one."""
+        text = PROGRAMS.read_text()
+        flat = " ".join(text.split())
+        bodies = [b for b in re.findall(r"```ts\n(.*?)```", text, re.S) if "declare " not in b]
+
+        def inline(pattern):
+            found = re.search(pattern, flat)
+            self.assertIsNotNone(found, f"PROGRAMS.md gives {pattern} inline")
+            return found.group(1)
+
+        close = inline(r'`(grill\.close\("g1", "[^"`]*"\))`')
+        reply = inline(r'`(say\("Answer on the card, please: D219\.", \{ re: 41, decision: "D219" \}\))`')
+        withdraw = inline(r'`(decision\.withdraw\(id, "answered by the Manager outside the chat: <gist>"\))`')
+        drops = 'await grill.drop("g1", "q1", "settled on the page"); await grill.drop("g1", "q2", "settled on the page"); '
+        programs = [{"name": f"worked call {i}", "body": b} for i, b in enumerate(bodies, 1)]
+        programs += [{"name": "the grilling's close", "body": f"{drops}{close}; return records.apply(ops);"},
+                     {"name": "the on-card reply", "body": f"{reply}; return records.apply(ops);"},
+                     {"name": "the Manager's card withdrawn", "body": f'{withdraw.replace("(id,", "(\"x7\",")}; return records.apply(ops);'}]
+        assert_applied(self, fold(self, programs)[len(bodies):])
+
+    def test_the_quoted_refusals_are_the_clouds(self):
+        """The refusals PROGRAMS.md quotes are the fleet's own words, in its owner-answer gate."""
+        source = CHECKOUT / "packages" / "cloud" / "src" / "owner-answers.ts"
+        if not source.is_file():
+            self.skipTest(f"no owner-answer gate at {source}: set TSTACK_FLEET_CHECKOUT to a fleet checkout with design B′")
+        code = source.read_text()
+        flat = " ".join(PROGRAMS.read_text().split())
+        self.assertIn('"the owner answers on the card\'s page; a program can\'t record it"', flat)
+        self.assertIn("the owner answers on the card's page; a program can't record it", code)
+        held = re.search(r'the cloud refuses with "(a program cannot set the [^"]*)"', flat)
+        self.assertIsNotNone(held, "PROGRAMS.md quotes the refusal on a card that holds the owner's answer")
+        template = re.search(r"`(a program cannot set the \$\{field\} of decision \$\{name\} while it holds[^`]*)`", code)
+        self.assertIsNotNone(template, "owner-answers.ts refuses a program's resolution on a card that holds the answer")
+        said = template.group(1).replace("${field}", "resolution").replace("${name}", "D219").replace("${String(line)}", "41")
+        self.assertTrue(said.startswith(held.group(1)), f"{held.group(1)!r} is not how {said!r} begins")
+        self.assertIn('the page\'s own "answered on the page (#N)"', flat)
+        self.assertIn('"answered on the page (#N)" is how the page words the owner\'s answer', code)
+
     def test_no_worked_permission_runs_a_script(self):
         """A program's permission card carries no `runs`, so the office host refuses the yes to a call that runs a
         script (design review F1): the worked permission names none, as the split every port shares finds them."""
@@ -90,11 +131,14 @@ class WorkedCallsTest(unittest.TestCase):
 
 
     def test_with_the_gate_on_a_program_records_no_answer(self):
-        decide, answer = fold(self, [
+        decide, answer, worded = fold(self, [
             {"name": "decide", "fresh": True, "body": 'decision.decide("x7", "done", "said in the terminal"); '
                                                       "return records.apply(ops);"},
             {"name": "grill.answer", "fresh": True, "body": 'await grill.answer("g6", "q1", "the D1 index"); '
                                                             "return records.apply(ops);"},
+            {"name": "grill.close in the page's words", "fresh": True,
+             "body": 'await grill.drop("g6", "q1", "settled on the page"); grill.close("g6", "answered on the page (#1)"); '
+                     "return records.apply(ops);"},
         ])
         for o in (decide, answer):
             with self.subTest(program=o["name"]):
@@ -102,6 +146,10 @@ class WorkedCallsTest(unittest.TestCase):
                 refusal = o["applied"][0]
                 self.assertEqual(refusal["_tag"], "refused", refusal)
                 self.assertIn("the owner answers on the card's page; a program can't record it", refusal["issue"])
+        self.assertNotIn("thrown", worded, worded.get("thrown"))
+        refused = [r for r in worded["applied"] if r["_tag"] == "refused"]
+        self.assertTrue(refused, worded)
+        self.assertIn('"answered on the page (#N)" is how the page words', refused[0]["issue"])
 
 
 class BodiesLimitTest(unittest.TestCase):

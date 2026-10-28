@@ -10,8 +10,8 @@ import { join } from "node:path";
 import type { Message } from "../chat/store.ts";
 import { atOrAfter, parseInstant } from "../clock.ts";
 import { Refusal } from "../errors.ts";
-import { answeredAt, answeredGrill, closeProgram, decisionRow, explainCommand, failedAnswer, failureWords, onCardProgram, unexplained } from "../health.ts";
-import { asArray, asNumber, asObject, asString, type JsonObject } from "../json.ts";
+import { answeredAt, answeredGrill, closeProgram, decisionRow, explainCommand, failedAnswer, failedProgram, failureWords, onCardProgram, unexplained } from "../health.ts";
+import { asArray, asNumber, asObject, asString, dumps, type JsonObject } from "../json.ts";
 import { readObject } from "../registry.ts";
 import { callsLine, refusalRev } from "./permission.ts";
 import { showHidden } from "./permission-words.ts";
@@ -112,7 +112,8 @@ export function closedNamed(machine: Machine, ledger: Ledger, text: string): str
  * answer (a reply to it, a recap, amendments). A permission not explained is asked for, unless the team has
  * `moved` to the cloud, where no program can explain it (health's `unexplained`). On a moved team no program records
  * an answer (the fleet's owner-answer gate): a grilling answered in full is told as one to close (health's
- * `closeProgram`), and a line from the user that left its card open as one to answer on the card (`onCardProgram`). */
+ * `closeProgram`), a failed action as one to revise or withdraw (`failedProgram`), and a line from the user that left
+ * its card open as one to answer on the card (`onCardProgram`) until a reply answers it (`owed`). */
 export function unrecorded(ledger: Ledger, said: readonly Message[], moved: boolean): string[] {
   const numbered = copyLedger(ledger);
   number(numbered);
@@ -141,15 +142,18 @@ export function unrecorded(ledger: Ledger, said: readonly Message[], moved: bool
       if (!heldSince) {
         lines.push(
           `state: the user ran ${ref} (${d.title ?? "None"}) and it failed, #${failed.id} at ${String(failed.at).slice(11, 16)}: ${failureWords(failed)}. ` +
-            `It is not done: fix what failed and re-present it (\`fleet state <dir> decision ${ref} --manual "..." --log "what changed"\`), ` +
-            `or \`--withdraw "why"\`; never --decide it. Answer #${failed.id} with --re.`,
+            (moved
+              ? `It is not done: fix what failed and re-present it, or withdraw it, with ${failedProgram("<dir>", d.id)}; never decide it. ` +
+                `Answer #${failed.id} in the same program: \`say("...", { re: ${failed.id}, decision: ${dumps(d.id)} })\`.`
+              : `It is not done: fix what failed and re-present it (\`fleet state <dir> decision ${ref} --manual "..." --log "what changed"\`), ` +
+                `or \`--withdraw "why"\`; never --decide it. Answer #${failed.id} with --re.`),
         );
       }
 
       continue;
     }
 
-    const at = answeredAt(decisionRow(d), said);
+    const at = answeredAt(decisionRow(d), said, moved);
 
     if (at === undefined) {
       if (unexplained(d, moved)) {

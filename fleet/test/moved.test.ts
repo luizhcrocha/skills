@@ -3,7 +3,7 @@
  * the old CLI's writers refuse it, so a call the hook did not catch (a variable, a relative DIR, a script) cannot
  * write a ledger the export overwrites. Its readers stay.
  */
-import { readFileSync, rmSync, writeFileSync } from "node:fs";
+import { appendFileSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { beforeEach, describe, expect, test } from "bun:test";
@@ -11,9 +11,9 @@ import * as Option from "effect/Option";
 
 import { save } from "../src/cli/ws.ts";
 import { stampOf } from "../src/clock.ts";
-import { parseObject } from "../src/json.ts";
+import { asArray, asObject, parseObject } from "../src/json.ts";
 import { machineOf } from "../src/world.ts";
-import { baseEnv, fleet, sleep, start, tmp, type Environment } from "./support.ts";
+import { baseEnv, fleet, readJson, sleep, start, tmp, type Environment } from "./support.ts";
 
 const SENTENCE = "this team records through programs: fleet-run";
 
@@ -261,4 +261,146 @@ describe("a moved team is told the programs the owner-answer gate leaves it", ()
     expect(shown.stderr).not.toContain("--decide");
     expect(shown.stderr).not.toContain("decision.decide");
   });
+
+  /** Card D1, keyed d-f819eec7, open on the moved team. */
+  function card(): void {
+    beforeMove("decision", "d-f819eec7", "--kind", "decision", "--title", "Schema", "--question", "Migrate?", "--why", "W", "--option", "A: a | x", "--option", "B: b | y", "--recommend", "A", "--reason", "R");
+  }
+
+  /** Action A1, keyed a-f819eec7, open on the moved team. */
+  function action(): void {
+    beforeMove("decision", "a-f819eec7", "--kind", "action", "--title", "Migrate", "--why", "w", "--question", "Run it", "--manual", "```nu\n./migrate\n```", "--hand", "it needs his key");
+  }
+
+  /** Line `id` from the user on card `key`, as the cloud's export appends it, at `at`. */
+  function said(id: number, text: string, key: string, at: string): void {
+    appendFileSync(join(root, "chat.jsonl"), `${JSON.stringify({ id, at, from: "user", to: ["coordinator"], text, decision: key })}\n`);
+  }
+
+  /** The cloud's write of the user's answer to question `index` of the ledger's card `key`, at `at`, with its card left open. */
+  function answerOnPage(key: string, index: number, answer: string, at: string, line: number): void {
+    const state = readJson(join(root, "state.json"));
+
+    const decisions = (asArray(state["decisions"]) ?? []).map((row) => {
+      const d = asObject(row) ?? {};
+
+      if (d["id"] !== key) return d;
+      const questions = (asArray(d["questions"]) ?? []).map((q, i) => (i === index ? { ...asObject(q), status: "answered", answer, answered: at, answer_line: line } : q));
+
+      return { ...d, questions };
+    });
+
+    writeFileSync(join(root, "state.json"), JSON.stringify({ ...state, decisions }));
+  }
+
+  /** `chat DIR wait ...keys`, started, and what it printed once it exited, or "waiting" when it did not within `ms`. */
+  async function waited(keys: readonly string[], act: () => void, ms = 6000): Promise<string> {
+    const { proc, lines } = start(["chat", root, "wait", ...keys], env);
+    await sleep(1500);
+    act();
+    const code = await Promise.race([proc.exited, sleep(ms).then(() => "waiting" as const)]);
+
+    if (code === "waiting") {
+      proc.kill();
+
+      return "waiting";
+    }
+
+    return lines.rest();
+  }
+
+  test("wait on a grilling whose question the user answered on the page says it is recorded and to re-arm, not to answer on the card", async () => {
+    beforeMove("grill", "g-f819eec7", "--title", "Search", "--ask", "Seam | one or many? | one | less code", "--ask", "Tier | local first? | yes | it is faster");
+
+    const out = await waited(["G1"], () => {
+      const at = stampOf(new Date());
+      answerOnPage("g-f819eec7", 0, "one", at, 1);
+      said(1, "Q1: one", "g-f819eec7", at);
+    });
+
+    expect(out).toEndWith("-> the user's #1 on G1 is recorded on the card, which stays open: act on it, then re-arm wait G1\n");
+    expect(out).not.toContain("Answer on the card");
+  }, 20_000);
+
+  test("wait on a grilling whose last question the user answered on the page says its grill.close", async () => {
+    beforeMove("grill", "g-f819eec7", "--title", "Search", "--ask", "Seam | one or many? | one | less code", "--ask", "Tier | local first? | yes | it is faster");
+    beforeMove("grill", "g-f819eec7", "--answer", "Q1: one");
+
+    const out = await waited(["G1"], () => {
+      const at = stampOf(new Date());
+      answerOnPage("g-f819eec7", 1, "yes", at, 1);
+      said(1, "Q2: yes", "g-f819eec7", at);
+    });
+
+    expect(out).toEndWith(`-> the user answered every question of G1 on the card: close it now with ${GRILL_PROGRAM.replace("<dir>", root)}, then answer #1 and act on it\n`);
+    expect(out).not.toContain("Answer on the card");
+  }, 20_000);
+
+  test("wait on a grilling answered in full before it starts says its grill.close at once", () => {
+    grilled();
+    const ran = fleet(["chat", root, "wait", "G1"], env);
+
+    expect(ran.code, ran.stderr).toBe(0);
+    expect(ran.stdout).toBe(`-> the user answered every question of G1 on the card: close it now with ${GRILL_PROGRAM.replace("<dir>", root)}\n`);
+  });
+
+  test("wait re-armed after the on-card reply to the user's line waits, and `state DIR show` no longer asks for one", async () => {
+    card();
+    const at = stampOf(new Date(Date.now() + 1000));
+    said(1, "B please", "d-f819eec7", at);
+    appendFileSync(join(root, "chat.jsonl"), `${JSON.stringify({ id: 2, at, from: "coordinator", to: ["user"], text: "Answer on the card, please: D1.", re: 1, decision: "d-f819eec7" })}\n`);
+
+    expect(await waited(["D1"], () => undefined, 1500)).toBe("waiting");
+    const shown = fleet(["state", root, "show"], env);
+
+    expect(shown.code, shown.stderr).toBe(0);
+    expect(shown.stderr).not.toContain("#1 from the user");
+  }, 20_000);
+
+  test("a line still owed a reply is told by `state DIR show` once a reply answers another line", () => {
+    card();
+    const at = stampOf(new Date(Date.now() + 1000));
+    said(1, "B please", "d-f819eec7", at);
+    said(2, "or A", "d-f819eec7", at);
+    appendFileSync(join(root, "chat.jsonl"), `${JSON.stringify({ id: 3, at, from: "coordinator", to: ["user"], text: "Answer on the card, please: D1.", re: 1, decision: "d-f819eec7" })}\n`);
+
+    expect(fleet(["state", root, "show"], env).stderr).toContain("state: #2 from the user on D1 (Schema)");
+  });
+
+  const FAILED_PROGRAMS = (dir: string): string =>
+    `one program on the stdin of \`FLEET_DIR=${dir} fleet-run\`: ` +
+    '`decision.revise("a-f819eec7", { manual: "..." }, "what changed"); return records.apply(ops);`, or ' +
+    '`decision.withdraw("a-f819eec7", "why"); return records.apply(ops);`';
+
+  test("wait on an action that failed gives the programs that revise or withdraw it, not the CLI's --manual or --withdraw", async () => {
+    action();
+    const out = await waited(["A1"], () => said(1, "Failed: no key", "a-f819eec7", stampOf(new Date())));
+
+    expect(out).toEndWith(`-> the user's step A1 failed, and it is not done: fix it and re-present it, or withdraw it, with ${FAILED_PROGRAMS(root)}; never decide it\n`);
+    expect(out).not.toContain("--manual");
+  }, 20_000);
+
+  test("`state DIR show` on an action that failed gives the programs that revise or withdraw it, not the CLI's --manual or --withdraw", () => {
+    action();
+    said(1, "Failed: no key", "a-f819eec7", stampOf(new Date(Date.now() + 1000)));
+    const shown = fleet(["state", root, "show"], env);
+
+    expect(shown.stderr).toContain(`It is not done: fix what failed and re-present it, or withdraw it, with ${FAILED_PROGRAMS("<dir>")}; never decide it.`);
+    expect(shown.stderr).not.toContain("--manual");
+    expect(shown.stderr).not.toContain("--withdraw");
+  });
+
+  test("wait on a card withdrawn as the user wrote says it is withdrawn, not answered on the card", async () => {
+    card();
+
+    const out = await waited(["D1"], () => {
+      const state = readJson(join(root, "state.json"));
+      const decisions = (asArray(state["decisions"]) ?? []).map((d) => ({ ...asObject(d), status: "withdrawn", resolution: "not needed" }));
+      writeFileSync(join(root, "state.json"), JSON.stringify({ ...state, decisions }));
+      said(1, "B please", "d-f819eec7", stampOf(new Date()));
+    });
+
+    expect(out).toEndWith("D1 is already withdrawn: not needed\n");
+    expect(out).not.toContain("answered D1 on the card");
+  }, 20_000);
 });

@@ -7628,6 +7628,19 @@ class MovedNudgeTest(MovedFleet, FleetCase):
                          f'4 min. Close it now with one program on the stdin of `{self.env["TSTACK_FLEET_RUN"]}`: '
                          '`grill.close("g6", "grilling finished"); return records.apply(ops);`.')
 
+    def test_a_reply_to_the_line_that_finished_a_grilling_leaves_its_close(self):
+        """The reply to the user's last answer ends the line's on-card nudge, not the grilling's grill.close."""
+        question = {"id": "q1", "title": "T", "status": "answered", "asked": "2026-01-05T08:00:00+00:00", "answer_line": 1}
+        self.ledger(decisions=[{"id": "g6", "ref": "G6", "kind": "grill", "title": "Search", "status": "open",
+                                "opened": "2026-01-05T08:00:00+00:00", "questions": [question]}])
+        self.say(1, "2026-01-05T08:10:00+00:00", "Q1: ok", decision="g6")
+        self.say(2, "2026-01-05T08:11:00+00:00", "Thanks.", frm="coordinator", to=("user",), re=1, decision="g6")
+        (self.fleet / "watch-coordinator.cursor").write_text("2")
+        self.assertEqual(self.tool("2026-01-05T08:14:00+00:00"),
+                         "Fleet: G6 (Search): every question is answered and the grilling is still open, not closed for "
+                         f'4 min. Close it now with one program on the stdin of `{self.env["TSTACK_FLEET_RUN"]}`: '
+                         '`grill.close("g6", "grilling finished"); return records.apply(ops);`.')
+
     def test_a_moved_fleet_in_the_ledger_home_the_session_served_is_nudged(self):
         """After the cut-over the registry entry is gone and the ledger is outside the scratchpad: the session that
         served it is still told an answer it left unrecorded."""
