@@ -1,7 +1,6 @@
 /**
- * The read-modify-write of a Claude Code settings file that both writers share (grants.ts for a one-time grant in
- * a session root's `.claude/`, user-settings.ts for a rule card's entry in the user's `autoMode.allow`): read it as a JSON
- * object, add the exact rules it lacks to `permissions.allow` with every other key and entry kept in order, under a
+ * The read-modify-write of a Claude Code settings file (user-settings.ts, for a rule card's entry in the user's
+ * `autoMode.allow`): read it as a JSON object, add the entry with every other key and entry kept in order, under a
  * lock directory beside it (Bun has no flock; the plugin's hook takes the same one), written whole by a rename.
  */
 import { closeSync, constants, fchmodSync, mkdirSync, openSync, renameSync, rmdirSync, rmSync, statSync, writeFileSync } from "node:fs";
@@ -34,20 +33,6 @@ export function parsed(file: string, text: string | undefined = readText(file)):
   }
 
   return asObject(value) ?? new Ungranted(`${file} is not a JSON object`);
-}
-
-/** `settings` with the `rules` it lacks added to `permissions.allow`, every other key and entry kept, and those
- * rules (`added`; none when all are there already); or why it cannot hold them. */
-export function withRules(file: string, settings: JsonObject, rules: readonly string[]): { readonly next: JsonObject; readonly added: readonly string[] } | Ungranted {
-  const permissions = settings["permissions"] === undefined ? {} : asObject(settings["permissions"]);
-
-  if (permissions === undefined) return new Ungranted(`${file}: permissions is not an object`);
-  const allow = permissions["allow"] === undefined ? [] : asArray(permissions["allow"]);
-
-  if (allow === undefined) return new Ungranted(`${file}: permissions.allow is not a list`);
-  const added = rules.filter((rule) => !allow.includes(rule));
-
-  return { next: { ...settings, permissions: { ...permissions, allow: [...allow, ...added] } }, added };
 }
 
 /** The entry of `autoMode.allow` that keeps Claude Code's own allow rules: a list made here starts with it. */
@@ -108,37 +93,6 @@ export async function lockSettings(file: string, name: string): Promise<string |
 
     if (performance.now() >= deadline) return new Ungranted(`${lock} is held: another grant or the plugin hook is writing ${file}; answer again`);
     await sleep(20);
-  }
-}
-
-/** `lockSettings` for a caller that cannot wait asynchronously (the import of a root's grant records, grant-records.ts):
- * the same lock, waited for the same 2 s by sleeping. Its path, or none when it could not be had. */
-export function lockSettingsSync(file: string, name: string): string | undefined {
-  const lock = join(dirname(file), name);
-  const deadline = performance.now() + LOCK_WAIT_MS;
-
-  for (;;) {
-    try {
-      mkdirSync(lock);
-
-      return lock;
-    } catch (cause: unknown) {
-      if (!hasCode(cause, "EEXIST")) return undefined;
-    }
-
-    try {
-      if (Date.now() - statSync(lock).mtimeMs > LOCK_STALE_MS) {
-        rmdirSync(lock);
-        continue;
-      }
-    } catch (cause: unknown) {
-      if (hasCode(cause, "ENOENT")) continue;
-
-      return undefined;
-    }
-
-    if (performance.now() >= deadline) return undefined;
-    Bun.sleepSync(20);
   }
 }
 

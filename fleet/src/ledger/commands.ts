@@ -19,7 +19,7 @@ import { asArray, asObject, asString, parseJson, parseObject, pyStr, type Json, 
 import { FLEET_BIN, isDir, makeDirs, readOrWhy, readText, remove, resolvePath, writeBytes } from "../files.ts";
 import { fleetOf, managerOf, post as postNews, TEXT_MAX } from "../news/news.ts";
 import { allowedByUser, explainCommand, explained, failedAnswer, failureWords } from "../health.ts";
-import { placeRoot, registeredSession } from "../hub/grants.ts";
+import { placeRoot, registeredSession } from "./placement.ts";
 import { Ungranted } from "../hub/settings-file.ts";
 import { holdsAutoModeRule, userSettingsFile } from "../hub/user-settings.ts";
 import { pidOfEntry } from "../registry.ts";
@@ -1684,7 +1684,7 @@ function checkExplanation(run: Run, d: Decision, wasExplained: boolean): Step$ {
 
 /**
  * The root a permission records for `root` (absolute): the session root, where a subagent's session reads its
- * permissions. A worker's workspace of this fleet's work (hub/grants.ts `placeRoot`) is recorded as its
+ * permissions. A worker's workspace of this fleet's work (placement.ts `placeRoot`) is recorded as its
  * session's root, said on stderr, or refused when that root cannot be told; any other folder is kept as given
  * (the hook gives `$CLAUDE_PROJECT_DIR`, and the hub checks the root again when the answer comes).
  */

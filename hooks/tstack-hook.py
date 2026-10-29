@@ -1868,10 +1868,10 @@ SETTINGS_LOCK_WAIT_S = 2.0
 SETTINGS_LOCK_STALE_S = 10.0
 SETTINGS_LOCK_SHARED_WITH_HUB = ".settings.local.json.lock"
 # tstack's own file beside the settings, <root>/.claude/tstack-grants.json (permission.ts's grantFileOf names it too),
-# holds the Agent grants (`permissions.allow`): auto mode drops Agent allow rules from the settings, so the hub writes
+# holds the Agent grants (`permissions.allow`): auto mode drops Agent allow rules from the settings, so the office host writes
 # an Agent grant here instead and fleet_agent_grant lets the exact spawn through.
 # A root's two grant records live outside its tree, in <home>/.claude/tstack-grants/<hash>/ (_records_dir; where, why
-# there and the one-time import: fleet/src/hub/grant-records.ts, the one place it is written down).
+# there and the one-time import: fleet/SPEC.md, "Where the records live").
 # The record of take-backs, tstack-grants-ended.json there: `ended`, the grants taken back,
 # `{decision, rule, granted, at}` each (`granted`: the grant line's `at`), newest last, the newest ENDED_KEPT kept. A
 # grant on it is over whatever its file holds, so a rule the owner adds after the take-back, byte-identical to the
@@ -1879,7 +1879,7 @@ SETTINGS_LOCK_SHARED_WITH_HUB = ".settings.local.json.lock"
 # the next sweep, twice). A grant is one grant line, not its decision: decision ids repeat (_permission_id hashes the
 # caller and the call; a revised decision keeps its id), so a later grant of the same id and rule is not on record
 # until it too is taken back.
-# The threat model, plainly: the hub, the hook and every agent run as one Unix user, and grants.jsonl is in the
+# The threat model, plainly: the office host, the hook and every agent run as one Unix user, and grants.jsonl is in the
 # fleet's DIR, a file any agent can write, so a `remove` line there is a record, never the proof. What an agent
 # cannot write is the record's place. Claude Code's permission check protects all of `.claude/`, any file name, but
 # for a few listed exceptions (worktrees, plans, agent memory): writes are prompted, routed to the classifier in auto
@@ -1889,9 +1889,9 @@ SETTINGS_LOCK_SHARED_WITH_HUB = ".settings.local.json.lock"
 # (code.claude.com/docs/en/sandboxing, "Protected paths"), so the record sits in ~/.claude, under both, as the allow
 # rules do (it sat in the root's .claude/hooks/ until a jj checkout put an older copy over it, 2026-10-21): an agent
 # that could forge a take-back there could as well write the lasting rule, so the record adds nothing to what it can
-# do. The same goes for which grants exist: when the hub grants, it first puts each grant on the root's record of
+# do. The same goes for which grants exist: when the office host grants, it first puts each grant on the root's record of
 # issued grants, tstack-grants-issued.json beside it: `issued`, `{decision, ref, rule, file, at, n, of, rev,
-# dir[, runs]}` each, newest last, the newest 4096 kept (grants.ts ISSUED_KEPT). The newest entry of a file and rule is
+# dir[, runs]}` each, newest last, the newest 4096 kept. The newest entry of a file and rule is
 # its grant, standing while its rule is in its file and it is not on the record of take-backs; its `at` (the 30
 # minutes), `runs` (the sha256 of each file its call runs), `n` (its turn) and `ref` are the entry's. grants.jsonl is
 # the log: a line names a root to read, and a deleted line hides no grant (measured on 83448844, which found grants
@@ -3170,13 +3170,13 @@ def _later(line, entry):
 def _latest_grants(hook, raw):
     """The grant of each (file, rule): the newest entry of it on the record of issued grants of the session's root
     and of each root a grants.jsonl line names (an earlier entry of the same rule is superseded, ended or not). The
-    record is the hub's, in ~/.claude (_records_dir), where no agent writes; grants.jsonl is the fleet's log, which any agent
+    record is the office host's, in ~/.claude (_records_dir), where no agent writes; grants.jsonl is the fleet's log, which any agent
     can write, so a line found nothing and hides nothing: a grant whose line was deleted still stands, and is held
     to its bounds. A record holds only the grants of its own root (_read_issued), and the session root's is read
     first: no entry of a root a line names replaces one of the session's (review 2: one did, from a folder the agent
     made, with a later `at` and no `runs`). A line is the grant of its own entry (by _ended_key), never of an earlier
     entry of its rule: a line with no entry is a grant on no record (`issued` None), which grants nothing and is
-    taken back at once: a grant of a hub that wrote no record (the host's), or a forged line, whose failure is fewer
+    taken back at once: a grant whose granter wrote no record, or a forged line, whose failure is fewer
     allowed calls; its take-back is marked `line` (_line_ended). Such a line replaces the rule's grant on record when
     that grant is over and the line came after it (_later), or the entry is one the import copied from the tree
     (`imported`, _import_records), any agent's to write; else it hides nothing, so no forged line moves a standing
@@ -3248,7 +3248,7 @@ GRANT_RECORDS = "tstack-grants"
 
 def _records_dir(home, root):
     """The folder of the grant records of the root whose real path is `root`, for the user whose home is `home`:
-    <home>/.claude/tstack-grants/<sha256 of the root's path, UTF-8, lowercase hex>, as grant-records.ts computes it
+    <home>/.claude/tstack-grants/<sha256 of the root's path, UTF-8, lowercase hex>, as the office host computes it
     (fleet/test/grant-records.cases.json). None with no home."""
     if not home:
         return None
@@ -3289,8 +3289,8 @@ def _record_at(home, file, name, locked=False, before_move=None):
 
 def _import_records(hooks, records, before_move=None):
     """Make `records` with a copy of each record in the tree's `hooks` folder that is a regular file (_regular_bytes:
-    no symlink, folder or FIFO), none when `hooks` or the .claude above it is a symlink, as grant-records.ts
-    `importRoot` does: the copies go into a fresh folder beside it, the
+    no symlink, folder or FIFO), none when `hooks` or the .claude above it is a symlink, as the office host
+    does: the copies go into a fresh folder beside it, the
     folder is made with mkdir (one there already is another importer's, and this one stops), and each copy is linked
     in, a record already there kept. Never a rename of the whole folder: rename(2) replaces an empty folder, so a late
     importer could swap its copy in over a writer's. Of the record of take-backs, only the take-backs _ended_to_import
@@ -3349,7 +3349,7 @@ def _encodes(record):
 def _regular_bytes(path):
     """The bytes of the regular file at `path`; None when it is not there, cannot be read or is anything else: opened
     O_NOFOLLOW, and O_NONBLOCK so a FIFO swapped in after a check does not hang the open, then checked on the open
-    file (grant-records.ts `regularBytes`)."""
+    file."""
     import stat
     try:
         fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
@@ -3450,7 +3450,7 @@ def _ended_entry(grant, at, why, line=False):
 
 def _ended_in(record, imported=True):
     """Each take-back in a record's `ended` by its _ended_key, to its `why` (`used`, `revoked`, `expired`, or
-    `superseded`: the hub granted the rule anew; "" for an entry that names none). The file and rev are None for an
+    `superseded`: the office host granted the rule anew; "" for an entry that names none). The file and rev are None for an
     entry that names none: master's hook and hub write neither (_ended_why). An entry marked `line` is keyed apart,
     behind "line" (_line_ended), and no lookup of an issued grant's take-back reads it. With `imported` False, an entry
     the import copied from the tree (`imported`) is left out."""
@@ -3492,7 +3492,7 @@ def _line_ended(ended, line):
 
 def _tree_record(file, name):
     """The tree's copy of record `name` of grant file `file`'s root, <root>/.claude/hooks/<name>: where the records sat
-    before, and where the one-time import reads them (grant-records.ts `treeRecordOf`). Temporary, until step
+    before, and where the one-time import reads them. Temporary, until step
     grant-dual-drop: a session on the old hook reads and writes only this copy."""
     return os.path.join(os.path.dirname(file), "hooks", name)
 
@@ -3525,7 +3525,7 @@ def _tree_ended(file):
     """Temporary, until step grant-dual-drop: the take-backs on the tree's copy of the record (_tree_record), where a
     session on the old hook puts its own; none when it is not a regular file in a plain folder (never through a
     symlink), cannot be read or does not parse. Each ends its grant; it makes a rule the owner's only as _rules_gone
-    says (grant-records.ts, "The transition")."""
+    says (fleet/SPEC.md, "Where the records live")."""
     folder = _tree_folder(file)
     if folder is None:
         return {}
@@ -3614,8 +3614,8 @@ def _issued_file(home, file):
 
 
 def _read_issued(home, file):
-    """The grants the hub put on record for `file`'s root, oldest first, each naming a grant file of the record's own root:
-    its realpath in that root's .claude/ (an entry naming another root's file is no grant; the hub writes none). None
+    """The grants the office host put on record for `file`'s root, oldest first, each naming a grant file of the record's own root:
+    its realpath in that root's .claude/ (an entry naming another root's file is no grant; the office host writes none). None
     when the record is not there, cannot be read or does not parse (a grant on it then stands on no record: fewer
     allowed calls). A full record (4096 entries with two `runs` each, 3.0 MB) costs about 30 ms to read (measured
     2026-10-16), once in each hook of a Bash, Monitor or Agent call: no other tool reads it."""
@@ -3647,14 +3647,14 @@ def _issued_of(hook, file):
 
 
 def _issued_at(grant):
-    """When the hub issued the grant, from its entry on the record of issued grants; None when it is on none."""
+    """When the office host issued the grant, from its entry on the record of issued grants; None when it is on none."""
     issued = grant.get("issued")
     return _instant(issued.get("at")) if isinstance(issued, dict) else None
 
 
 def _grant_over(grant, now):
     """Whether `grant` is past its GRANT_TTL_S by the `at` on its entry on record (_issued_at), or on no record. An `at`
-    more than GRANT_SKEW_S ahead of `now` is no hub's stamp (each writes its own clock's now): a forged one, which
+    more than GRANT_SKEW_S ahead of `now` is no office host's stamp (each writes its own clock's now): a forged one, which
     never came to its end, so its grant is over."""
     at = _issued_at(grant)
     return at is None or not -GRANT_SKEW_S <= now - at < GRANT_TTL_S
@@ -3976,7 +3976,7 @@ def _list_of(grant):
 def _due_grants(hook, raw, used, now, failed=False, void=None):
     """(grant, why) for each standing grant to end now: `used` (its call ran), `revoked` (a call of its list failed,
     or the list is `void`: a list is a sequence, and what comes after a failure was allowed for another state of
-    things), `expired` (30 minutes after the `at` on the hub's record of issued grants, or on no such record, or with an
+    things), `expired` (30 minutes after the `at` on the office host's record of issued grants, or on no such record, or with an
     `at` ahead of now: _grant_over). A grant
     is the sweep's while its rule is (_held), ended or not."""
     standing = [g for g in _latest_grants(hook, raw) if _held(hook, g)]
@@ -4075,7 +4075,7 @@ def _take_back_locked(home, file, rule, ended):
     granted and the stamp). A grant already on the record, read again under the lock, is over: the rule there is the
     owner's, and stays; not for a take-back the import copied (`imported`), which makes no rule the owner's. The
     settings first: a record that cannot be written leaves fewer allowed calls, never more; one that does not parse
-    is left as it is (the hub's expireGrants), and what was not recorded is returned. A file that is no grant file now
+    is left as it is, and what was not recorded is returned. A file that is no grant file now
     (_grant_file: a symlink made since the sweep read it) is left, and nothing written."""
     if _grant_file(file) != file:
         return None
@@ -4121,7 +4121,7 @@ def fleet_grant_sweep(hook):
     (_due_grants). A rule of these tools' is all a grant writes, and no other tool's call is let through by one, so
     another tool's call reads no record (a full one costs ~30 ms to read: measured, 2026-10-16); an expired grant
     then waits for the next call of these tools in its root, which refuses it before it runs (fleet_grant_alone,
-    fleet_agent_grant), or for the hub's timer."""
+    fleet_agent_grant), or for the office host's timer."""
     if hook.input.get("tool_name") not in GRANT_TOOLS:
         return None
     dirs = grant_state_dirs(hook)
@@ -4137,7 +4137,7 @@ def fleet_grant_sweep(hook):
     for d in dirs:
         raw, unread = _read_grants(d)
         if raw is None:
-            log(hook.data_dir, f"{hook.event} fleet_grant_sweep: {unread}; its grants are left to the hub's timer")
+            log(hook.data_dir, f"{hook.event} fleet_grant_sweep: {unread}; its grants are left to the office host's timer")
         elif _due_grants(hook, raw, used, now, failed):
             _close_due_grants_exclusively(hook, d, used, now, failed)
     return None
@@ -4187,9 +4187,9 @@ def _close_due_grants_exclusively(hook, d, used, now, failed=False, void=None):
 
 def fleet_agent_grant(hook):
     """PreToolUse (Agent): auto mode drops Agent allow rules from the settings, and a PreToolUse allow is
-    what clears a classifier refusal of a spawn (measured). A spawn whose exact rule the hub granted in the
+    what clears a classifier refusal of a spawn (measured). A spawn whose exact rule the office host granted in the
     session root's .claude/tstack-grants.json is allowed; the sweep takes the rule back once it ran or
-    expired. Needs no fleet: the file holds only what the hub granted."""
+    expired. Needs no fleet: the file holds only what the office host granted."""
     if hook.input.get("tool_name") != "Agent" or not isinstance(hook.input.get("tool_input"), dict):
         return None
     tool_input = hook.input["tool_input"]
@@ -4209,7 +4209,7 @@ def fleet_agent_grant(hook):
     rule = f"Agent({_agent_call(tool_input)})"
     if not isinstance(allow, list) or rule not in allow:
         return None
-    # The rule alone is no grant: it is one while the hub's entry of it on the root's record stands, within its 30
+    # The rule alone is no grant: it is one while the office host's entry of it on the root's record stands, within its 30
     # minutes and its list's turn, whatever grants.jsonl holds.
     file = os.path.realpath(os.path.join(root, ".claude", AGENT_GRANTS))
     grants = [g for g in _latest_grants(hook, b"") if g["rule"] == rule and os.path.realpath(g["file"]) == file]
@@ -4249,7 +4249,7 @@ def _take(hook, d, grant):
 
 
 def _moved_file(grant):
-    """Why a file the grant binds is no longer the one the user allowed (the hub put each one's sha256 on the record of
+    """Why a file the grant binds is no longer the one the user allowed (the office host put each one's sha256 on the record of
     issued grants when it granted: _latest_grants takes `runs` from there); None when every one is, or it binds none.
     A ws hook bound by its absence (ABSENT_SHA256) must still be absent."""
     import hashlib
@@ -4369,7 +4369,7 @@ def _out_of_turn(hook, grant, grants):
 
 
 def _alone_denial(hook, d, grant, grants, now):
-    """Why the granted call may not run on `grant` now: it is on no record of the hub's grants, or 30 minutes old (the
+    """Why the granted call may not run on `grant` now: it is on no record of the office host's grants, or 30 minutes old (the
     grant is then taken back), out of its list's turn (the list void when an earlier call of it never ran), or a
     file it binds moved (the grant and its list revoked)."""
     ref = grant.get("ref") or grant["decision"]
@@ -4379,7 +4379,7 @@ def _alone_denial(hook, d, grant, grants, now):
         except Exception:  # the hub's timer or the next sweep takes the rule back; the call is refused all the same
             log(hook.data_dir, f"{hook.event} fleet_grant_alone could not close {ref}\n{traceback.format_exc()}")
         if grant["issued"] is None:
-            return Deny(f"tstack: this call's grant is on no record of the hub's grants ({_issued_file(hook.env.get('HOME'), grant['file'])}): "
+            return Deny(f"tstack: this call's grant is on no record of the office host's grants ({_issued_file(hook.env.get('HOME'), grant['file'])}): "
                         f"a line in grants.jsonl alone grants nothing, so its rule is taken back. {ASK_AGAIN}")
         return Deny(f"tstack: the user allowed this call once ({ref}), and a one-time grant lasts {GRANT_TTL_S // 60} minutes: "
                     f"this one is over. {ASK_AGAIN}")
@@ -4412,7 +4412,7 @@ def fleet_grant_alone(hook):
     lets a compound command through when each of its parts has an allow rule (measured on 2.1.296: with one rule for
     A, `A; A` ran A twice, and two rules let `A; B` and `A | B` through), so a command that runs a granted call inside
     more would run on the grant, more than once or beside what the user never read as one call: refused while the
-    rule stands. The call itself is refused when its grant is on no record of the hub's grants or over 30 minutes old
+    rule stands. The call itself is refused when its grant is on no record of the office host's grants or over 30 minutes old
     by that record, when an earlier call of its list has not run, when a file it binds changed, and when another call
     took the grant first; else it is marked taken and left to the permission check, where its rule lets it through. A record of grants that cannot be read fails
     closed (_alone_by_settings). This handler never allows."""
@@ -4482,7 +4482,7 @@ class Deny(str):
 
 
 class Allow(str):
-    """What a PreToolUse handler returns to allow the call: only fleet_agent_grant, for an Agent call the hub granted
+    """What a PreToolUse handler returns to allow the call: only fleet_agent_grant, for an Agent call the office host granted
     once. Any other PreToolUse text decides nothing."""
 
 
@@ -6905,7 +6905,7 @@ def dispatch(event, raw, env):
     """The text to print for this event, or "" for nothing. On Stop, a handler's Block turns the whole
     output into the block decision, whose reason (every handler's text) Claude reads as it goes on. On
     PreToolUse, a handler's Deny refuses the call, with the Deny texts alone as the reason; else an Allow (an Agent
-    call the hub granted) allows it; else a Note is context beside the call's result, with no decision; any other
+    call the office host granted) allows it; else a Note is context beside the call's result, with no decision; any other
     text decides nothing. A PreToolUse handler that can deny (GUARDS) and fails denies the call, naming itself and
     the error; any other handler that fails is logged and decides nothing.
     Under TSTACK_ROLE=tape (a tape builder's own `claude -p` call) no handler runs: no wake lands in the

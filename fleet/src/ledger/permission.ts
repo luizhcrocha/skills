@@ -45,9 +45,6 @@ export function asksKind(answer: string): boolean {
 /** How long a grant the call has not used stays; the hook's GRANT_TTL_S is the same. */
 const GRANT_TTL_MIN = 30;
 
-/** The same in milliseconds: the hub takes a grant's rule back itself once it is this old (hub/grants.ts). */
-export const GRANT_TTL_MS = GRANT_TTL_MIN * 60_000;
-
 /** The longest Bash call a permission holds: the user reads it whole, wrapped, on a phone (about a screen and a
  * half at 390 px); a longer one is a script. */
 export const MAX_CALL_CHARS = 2000;
@@ -598,13 +595,13 @@ export function fileSha256(path: string): string | undefined {
 
 /** The sha256 a run entry gives a `fleet ws DIR trash` hook file that does not exist (`<n> <64 zeros> <path>`): the
  * card binds the hook's absence, in the form every reader of `runs` already parses, as no file's content hashes to
- * it. The hub grants only while the file is still absent, and the hook lets the call run only while it is. */
+ * it. The office host grants only while the file is still absent, and the hook lets the call run only while it is. */
 export const ABSENT_SHA256 = "0".repeat(64);
 
 /** The files a permission's calls are bound to, as the row and the page hold them: `<n> <sha256> <path>` for each
  * script call n runs by an absolute path that can be read now (`scriptsOf`), and for each `fleet ws DIR trash`, the
  * repo's pre-remove hook it runs (`wsHooksOf`), by its sha256 when it is there and by ABSENT_SHA256 when it does not
- * exist (trash then runs none). The hub grants a call only while its files hash to what the page showed, and the
+ * exist (trash then runs none). The office host grants a call only while its files hash to what the page showed, and the
  * hook lets it run only while they still do. A call with no entry is bound to no file. */
 export function runsOf(calls: readonly string[]): string[] {
   return calls.flatMap((call, k) => {
@@ -699,7 +696,7 @@ export function whyNoCalls(tool: string, calls: readonly string[]): string | und
 /** Why the calls of an ask cannot be asked for (`whyNoAsk`, a script that cannot be read, and a `fleet ws DIR trash
  * NAME` whose repo's pre-remove hook runsOf cannot bind: the workspace's repo is not found, or the hook is there and
  * cannot be read, a folder or a file of mode 000, which an agent could swap for a script after the yes), naming
- * which. The hub checks a row by the same rule before it grants, and the fleet repo's whyNoGrant refuses a trash card
+ * which. The office host checks a row by the same rule before it grants, and the fleet repo's whyNoGrant refuses a trash card
  * whose runs hold no entry for the hook. */
 export function whyNoAsks(calls: readonly string[]): string | undefined {
   for (const [k, call] of calls.entries()) {

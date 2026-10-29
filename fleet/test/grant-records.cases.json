@@ -1,5 +1,5 @@
 {
-  "about": "Where a session root's grant records live: <home>/.claude/tstack-grants/<sha256 of the root's realpath, UTF-8, lowercase hex>/. The hub (fleet/src/hub/grant-records.ts), the plugin's hook (hooks/tstack-hook.py _records_dir) and the office host (fleet-live apps/host/src/grants.ts) must all read these cases the same: copy this file there and change all copies together.",
+  "about": "Where a session root's grant records live: <home>/.claude/tstack-grants/<sha256 of the root's realpath, UTF-8, lowercase hex>/. The plugin's hook (hooks/tstack-hook.py _records_dir, scripts/tests/test_tstack_hook.py) and the office host (fleet-ship apps/host/src/grants.ts) must both read these cases the same: copy this file there and change all copies together.",
   "cases": [
     { "home": "/home/luizrocha", "root": "/home/luizrocha/repos/coelhorocha/skills", "dir": "/home/luizrocha/.claude/tstack-grants/522374296bda46be3c88ef4433663f6ca8bea87644ca7ca8ea4e64ef269d42e1" },
     { "home": "/home/luizrocha", "root": "/home/luizrocha/repos/coelhorocha/custom-mcp-servers", "dir": "/home/luizrocha/.claude/tstack-grants/98feed0b52a468bcd391aa87fcc02634d54e32beca3f96793a31761454455a4e" },

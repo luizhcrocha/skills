@@ -42,7 +42,7 @@ HOOK_CPU_RATIO = 2.1
 
 def records_dir(home, root):
     """Where the grant records of the root whose real path is ROOT live, for the user whose home is HOME:
-    <home>/.claude/tstack-grants/<sha256 of the root's path, UTF-8, hex> (fleet/src/hub/grant-records.ts)."""
+    <home>/.claude/tstack-grants/<sha256 of the root's path, UTF-8, hex> (fleet/test/grant-records.cases.json)."""
     return Path(home) / ".claude" / "tstack-grants" / hashlib.sha256(str(root).encode()).hexdigest()
 
 
@@ -2767,7 +2767,7 @@ class GrantRemovalTest(GrantCase):
         self.assertEqual(self.lines()[-1]["why"], "expired")
 
     def test_a_forged_stamp_keeps_no_grant_past_thirty_minutes(self):
-        """The age is read from the hub's record of the grant: a later line of the same grant with an `at` of its own,
+        """The age is read from the office host's record of the grant: a later line of the same grant with an `at` of its own,
         on no record, grants nothing, and the sweep takes the rule back."""
         self.grant()
         self.grant(at="2026-01-05T09:29:00+00:00", issued=False)
@@ -3327,7 +3327,7 @@ JJ_TEST_ENV = {"JJ_USER": "t", "JJ_EMAIL": "t@t", "JJ_CONFIG": "/dev/null"}
 
 
 class GrantRecordsTest(GrantCase):
-    """A root's grant records live outside its tree, in <home>/.claude/tstack-grants/<hash>/ (grant-records.ts): a
+    """A root's grant records live outside its tree, in <home>/.claude/tstack-grants/<hash>/ (grant-records.cases.json): a
     checkout in the root changes no grant the hook sees, and the tree's copy is imported once and never written."""
 
     CASES = ROOT / "fleet" / "test" / "grant-records.cases.json"
@@ -3357,7 +3357,7 @@ class GrantRecordsTest(GrantCase):
 
     def test_a_checkout_over_the_trees_copy_changes_no_grant(self):
         """2026-10-21: in a root jj tracked the records in, `jj workspace update-stale` put an older tree's copy back
-        over them, and the hook took back a grant the user had allowed ("on no record of the hub's grants")."""
+        over them, and the hook took back a grant the user had allowed ("on no record of the office host's grants")."""
         project = self.settings.parent.parent
         self.jj("git", "init", str(project), cwd=self.tmp)
         (project / ".gitignore").write_text(".claude/settings.local.json\n")
@@ -4051,7 +4051,7 @@ class GrantAloneTest(GrantCase):
 
     def test_a_copied_line_with_no_runs_and_a_later_stamp_lets_no_edited_script_run(self):
         """Measured on 72729f26: a copy of a bound grant's line with no `runs` and an `at` an hour on, then the script
-        edited, ran on the rule. The copy is on no record of the hub's grants (.claude/hooks/, where an agent cannot
+        edited, ran on the rule. The copy is on no record of the office host's grants (.claude/hooks/, where an agent cannot
         write), so it grants nothing: the call is refused and its rule taken back."""
         script = self.script()
         call = self.grant_bound(script)
