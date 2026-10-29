@@ -12,7 +12,7 @@ import { ADVISOR } from "../advisor/advisor.ts";
 import { parseInstant } from "../clock.ts";
 import { ChatError } from "../errors.ts";
 import { isMoved, readText, remove, resolvePath, writeText } from "../files.ts";
-import { answeredAt, answeredGrill, answerRecorded, closeProgram, decisionRow, explainCommand, FAILED, failedProgram, onCardProgram, owed, silentWorkers, unexplained } from "../health.ts";
+import { answeredAt, answeredGrill, answerRecorded, closeProgram, decisionRow, explainCommand, FAILED, failedProgram, onCardProgram, owed, silentWorkers, stepProgram, unexplained } from "../health.ts";
 import { Out } from "../io.ts";
 import { asArray, asNumber, asObject, asString, dumps, parseObject, pyRepr, type Json, type JsonObject } from "../json.ts";
 import { decodeLedger, type Decision, type Ledger } from "../ledger/model.ts";
@@ -425,6 +425,47 @@ function answeredGrillings(root: string, told: Map<string, Json>): string[] {
   return lines;
 }
 
+/** The `!` lines for the steps of `root` their worker left: current under a done worker (the cloud refuses that done
+ * now, but a ledger from before keeps it, and an unmoved team's CLI does not refuse it), or current or pending under a
+ * stopped or failed one. Each told once per change of its worker, as a grilling answered is. */
+export function strandedSteps(root: string, told: Map<string, Json>): string[] {
+  const ledger = numberedLedger(root);
+  const lines: string[] = [];
+  const moved = isMoved(root);
+  const workers = new Map((ledger?.agents ?? []).map((a) => [a.id, a]));
+
+  for (const m of ledger?.roadmap ?? []) {
+    for (const s of m.steps) {
+      const w = s.agent === undefined || s.agent === null ? undefined : workers.get(s.agent);
+
+      if (w === undefined) continue;
+      const done = w.status === "done" && s.status === "current";
+      const left = (w.status === "stopped" || w.status === "failed") && (s.status === "current" || s.status === "pending");
+      const mark = `stranded:${m.id}/${s.id}:${w.updated ?? w.started ?? ""}`;
+
+      if ((!done && !left) || (told.has(mark) && told.get(mark) !== false)) continue;
+      told.set(mark, true);
+      const head = `! ${oneLine(m.id)}/${oneLine(s.id)} (${oneLine(s.title)}): its worker ${oneLine(w.id)}`;
+
+      if (done) {
+        const close = moved
+          ? stepProgram("<dir>", m.id, s.id, s.title, [["done", w.id]])
+          : `\`fleet state <dir> step ${s.id} --milestone ${m.id} --status done\``;
+
+        lines.push(`${head} is done and the step is still current. Close it now with ${close}, or hand it to another worker.`);
+      } else {
+        const ways = moved
+          ? stepProgram("<dir>", m.id, s.id, s.title, [["current", "<new worker>"], ["dropped", w.id]])
+          : `\`fleet state <dir> step ${s.id} --milestone ${m.id} --status current --agent <new worker>\`, or \`fleet state <dir> step ${s.id} --milestone ${m.id} --remove "<why>"\``;
+
+        lines.push(`${head} ${w.status} and the step is still ${s.status}. Retake it with a fresh worker, or drop it and its changes: ${ways}.`);
+      }
+    }
+  }
+
+  return lines;
+}
+
 /** The `!` lines for the permissions of `root` the coordinator has not explained and the user has not
  * answered: the hook opened each from a refused spawn (before refusal drafts, from any refused call), and the
  * page shows it as waiting for the explanation. A moved team has none (health's `unexplained`).
@@ -479,7 +520,7 @@ export function draftReminders(machine: Machine, root: string, told: Map<string,
 }
 
 /** For a coordinator's watch: its own silent workers and those queued past half an hour, the messages its
- * workers left unanswered for FLEET_NUDGE_S (ten minutes), its grillings answered and not recorded, its permissions not explained, its
+ * workers left unanswered for FLEET_NUDGE_S (ten minutes), its grillings answered and not recorded, the steps its workers left, its permissions not explained, its
  * refusal drafts left open for fifteen minutes, each told once across watches, and its batches of marks still
  * open, once per FLEET_BATCH_REMIND_S. */
 export function ownSilent(machine: Machine, root: string): string[] {
@@ -491,6 +532,7 @@ export function ownSilent(machine: Machine, root: string): string[] {
     ...queuedLines(machine, root, undefined, told),
     ...nudgeLines(machine, root, told, seconds(machine.env, "FLEET_NUDGE_S", NUDGE_S)),
     ...answeredGrillings(root, told),
+    ...strandedSteps(root, told),
     ...unexplainedPermissions(root, told),
     ...draftReminders(machine, root, told),
     ...batchReminders(machine, root, told, seconds(machine.env, "FLEET_BATCH_REMIND_S", BATCH_REMIND_S)),

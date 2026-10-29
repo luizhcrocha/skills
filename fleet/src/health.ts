@@ -75,6 +75,16 @@ export function closeProgram(dir: string, key: string, resolution: string): stri
   return onStdin(dir, program(movedPrograms.close, { key, resolution }));
 }
 
+/** How a moved team sets step `id` of `milestone`: one program per `[status, agent]` of `steps`, each an alternative to
+ * the one before. The watch says it for a step its worker left. */
+export function stepProgram(dir: string, milestone: string, id: string, title: string, steps: readonly (readonly [string, string])[]): string {
+  const [first, ...rest] = steps.map(([status, agent]) =>
+    program("step({milestone}, {id}, {title}, {status}, {agent}); return records.apply(ops);", { milestone, id, title, status, agent }),
+  );
+
+  return [onStdin(dir, first ?? ""), ...rest.map((text) => `\`${text}\``)].join(", or ");
+}
+
 /** How a moved team answers the user's line #`re` on its card `key` (the ledger row's id), `number` on the page, that
  * left the card open: words typed in the chat, a None of these or a Failed:. Only the user's answer on the card
  * records it, so the reply asks for that, naming the card's number, which the page links. The hook's nudge says the
