@@ -52,7 +52,7 @@ If the workspace exists, run `jj workspace update-stale` in it and start from `t
 
 1. Edit the rules the verdict named, in SKILL.md or its references, written through `tstack:unslop` and `tstack:writing-for-agents`.
 2. In `references/sources.md`, update each checked row: version targeted, checked on (today), and the URL when the notes moved.
-3. Describe it in the repo's style, the evidence in the body: `jj describe -m "lang-<id>: <what changed, in words>"`, with one line per moved row (item, old → new version, release-notes URL) and the session trailer.
+3. Describe it in the repo's style, the evidence in the body: `jj describe -m "lang-<id>: <what changed, in words>"`, with one line per moved row (item, old → new version, release-notes URL).
 
 Current skills share one more change off `trunk()` that only bumps their `checked on` dates: `lang-*: sources checked <date>, all current`, so the next run's staleness is right.
 

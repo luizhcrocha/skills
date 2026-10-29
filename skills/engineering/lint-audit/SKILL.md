@@ -33,7 +33,7 @@ Then one `AskUserQuestion` round with Luiz: promotions and retirements as multi-
 
 ## 4. Apply
 
-For each approved rule, `lint-registry set-status <id> <status> --note "<runs, hits, Luiz's yes on <date>>"`. A retired custom rule loses its code and its registration (`lint/ts/tstack/index.ts`); a retired native lint loses its line in the pack. A status move changes the pack itself only for native lints whose severity lives there (clippy levels, ruff selections); TypeScript severities come from the registry through `lint-vendor wiring`. Run `just test` and `just validate`, describe the change in the repo's style with the bucket table and the session trailer, then `jj new`. Done when the change is described and the tests pass.
+For each approved rule, `lint-registry set-status <id> <status> --note "<runs, hits, Luiz's yes on <date>>"`. A retired custom rule loses its code and its registration (`lint/ts/tstack/index.ts`); a retired native lint loses its line in the pack. A status move changes the pack itself only for native lints whose severity lives there (clippy levels, ruff selections); TypeScript severities come from the registry through `lint-vendor wiring`. Run `just test` and `just validate`, describe the change in the repo's style with the bucket table, then `jj new`. Done when the change is described and the tests pass.
 
 ## 5. Re-vendor
 

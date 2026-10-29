@@ -18,7 +18,7 @@ The result is one straight stack by default. A branchy shape (independent change
 ## Steps
 
 1. **Record the start**: `janitor-audit start [--from <rev>]` from inside the workspace. It snapshots `@`, prints the operation id (the _start op_), the scope revset, its revisions, files and conflicted paths. An empty scope, or one whose only revision is an empty `@`, is already clean: say so and stop.
-2. **Spawn** the agent (`subagent_type: tstack:worktree-janitor`) with only: the workspace path, the scope revset from step 1, any trailer the caller wants on new messages (a `Claude-Session:` line, say), the branch shape when the caller asked for one, and, when the caller asked for per-revision checks, the check command. Its rules live in the agent; leave them out of the brief.
+2. **Spawn** the agent (`subagent_type: tstack:worktree-janitor`) with only: the workspace path, the scope revset from step 1, the branch shape when the caller asked for one, and, when the caller asked for per-revision checks, the check command. Its rules live in the agent; leave them out of the brief.
 3. **Audit**: `janitor-audit check --op <start op> [--from <rev>] [--check "<cmd>"]`. It passes only when every check holds:
    - _tree_: the tree of `@` equals the start's, except paths conflicted at the start; each resolution is printed with its diff.
    - _base_: the base is still an ancestor of `@`, unchanged, so nothing immutable or below the stack was rewritten.
