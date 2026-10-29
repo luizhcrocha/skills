@@ -963,7 +963,7 @@ refusal drafts (<id>, <id>, ...) have waited up to <N> min: ... See them with ..
 is in it: eleven drafts had printed 11.6 KB on every state command (measured 2026-10-13). Before it, **a
 draft whose line reached the host nowhere** (`told: false`) is said in full, once, by the first command
 that writes the ledger and is not the hook's own record (`decision --kind refusal`, a `--cause`, or a
-manual of the old hook's): `state: the hub could not tell you this when it happened. [hub] Auto mode
+manual of the old hook's): `state: you were not told this when it happened. [hub] Auto mode
 refused ...`, and the command clears `told` ([Permission grants](#permission-grants), A refusal is a
 draft first). With 5 (`set --status done`), the open drafts are named after the open decisions: `state: the
 fleet is done with D1, refusal draft <id> still open: withdraw each with its reason ...`.
@@ -974,7 +974,7 @@ the mark is its `revised`, else `opened`). Each told once (`watch-coordinator.to
 watch and a manager's also remind, once, of each refusal draft of their own ledger left open for
 `FLEET_REFUSAL_REMIND_S` (`! refusal draft <id> ... has waited 15 min: ...`, [Permission
 grants](#permission-grants), A refusal is a draft first), say at once and once the whole line of a draft
-the host could not be told of when it opened (`! the hub could not tell you this when it happened. [hub]
+the host could not be told of when it opened (`! you were not told this when it happened. [hub]
 ...`, mark `refusal-line:<id>:<opened>`), and remind of each batch of marks to the host still open, once per
 `FLEET_BATCH_REMIND_S` ([Marks on a decision](#marks-on-a-decision-typescript-only), Follow-through).
 
@@ -1063,12 +1063,12 @@ marks: {
 
 - `on` (optional, on a `general` item only: `mark <n>.on is only for a general reply`): the earlier mark of
   the decision whose thread this item replies in, a positive int; the user's replies in a comment thread or
-  the page thread wait for that agent's next batch as `general` items. The Delivery keeps it, and the
+  the page thread wait for that agent's next batch as `general` items. `marksOf` keeps it, and the
   follow-through closes a `general` with `on` by any answer naming it, as a question.
 - `withdrawn` (optional): the marks of the decision the user withdrew since they were sent, distinct
   positive ints, at most 100, riding with the next batch to that agent rather than waking it alone; a batch
   may then have no `items` (never neither). It prints in the tag (`[2 marks, withdrew marks 5, 7 on D30 d30,
-  revision ...]`, `[withdrew mark 5 on D30 d30, revision ...]`), the Delivery keeps it, a `--mark` answer to a
+  revision ...]`, `[withdrew mark 5 on D30 d30, revision ...]`), `marksOf` keeps it, a `--mark` answer to a
   withdrawn mark is still taken, and the follow-through closes a withdrawn mark in every earlier batch on that
   decision the host received.
 - `n`: a positive int, unique in the batch; the page numbers a decision's marks 1, 2, … across the
@@ -1101,7 +1101,7 @@ marks: {
     ledger takes the same grammar) before `title`, `question`, `recommendation` (its reason), `option:<id>` or `option:<id>:consequence`
     (`q2:option:a:consequence`). Its blocks have no `cell`, and its `hint` names the
     place in words (`the question`, `option B's consequence`, `Q2, option a's consequence`). Any other value is refused (`mark <n>.quote.field
-    is title, question, ...`); the Delivery keeps it, and the printed line is as for any batch.
+    is title, question, ...`); `marksOf` keeps it, and the printed line is as for any batch.
 
 A batch with any other shape is refused (`marks are {decision, at, items}: <what is wrong>`, a mark named
 `mark <n>`): `at.hash` is `#decision/<id>` or `#decision/<fleet>/<id>` for `decision.id` (encoded as the page
@@ -1112,9 +1112,8 @@ replacement is refused. A batch is a message of its own: `marks` with a `decisio
 (`a batch of marks is a message of its own: no decision, quote or side chat with it`), and so is a `side`
 other than its decision's page thread: a side chat whose opener quotes the page as a whole (`quote.at` the
 batch's `marks.at.hash`, `anchor: "dv-page"`) or is a side-less batch on the same place. The first batch,
-with no page thread yet, goes side-less and opens it: later messages and batches name its id as `side`,
-the Delivery maps that `side` to its copy's id in the fleet's chat, and the Courier mirrors an answer's
-thread as for any side chat. A reply (`re`) to such an opener, from the moment it is stored, as to any message
+with no page thread yet, goes side-less and opens it: later messages and batches name its id as `side`.
+A reply (`re`) to such an opener, from the moment it is stored, as to any message
 in a side chat, joins the thread (`side` = the opener's id) unless it names its own, and is owned as the
 thread is on the manager's page; so a `--mark` answer stays in the page thread.
 `fleet/src/chat/chat.ts`'s `marksOf` and `marksAlone` are the one check (`append` refuses a batch that fails it).
@@ -1124,9 +1123,10 @@ writes each mark's @-cites into the batch's Markdown), and to no one else. On a 
 the host, so `1 mark, @a1 too` goes to `coordinator, a1` (any other message of the user's with a mention
 goes to the mentions only). On the manager's page the owner is the live fleet its `marks.at` names
 (`#decision/<fleet>/<id>`, `quotedFleet`), else the manager (its own decision, or a fleet no longer
-served): `decision/<fleet>/<id>` goes to that fleet only, never the manager unless cited. The
-Delivery (the page's server, in the cloud) copies `marks` into the fleet's chat with its `at` rewritten as a quote's is (`#decision/<id>`,
-the fleet's own page). A comment reaches the owner plus the agents it cites, and the page sends one batch per
+served): `decision/<fleet>/<id>` goes to that fleet only, never the manager unless cited. Nothing copies
+such a batch into the fleet's own chat now: the relay that did (`at` rewritten to the fleet's `#decision/<id>`,
+`to` to `coordinator`) was removed with the hub (src/chat/relay.ts), and the cloud's page is each fleet's
+own. A comment reaches the owner plus the agents it cites, and the page sends one batch per
 recipient and decision (the owner's holds every comment; a cited agent's, the comments citing it), each
 naming its one agent in `marks.to` (a name as a mention resolves it, ≤ 200 characters). With `to` the batch
 goes to that agent alone (the text's mentions stay parts and add no one), refused unless it is the owner or
@@ -1134,7 +1134,7 @@ cited in the text (`a batch goes to the decision's owner (<owner>) or to an agen
 neither`, `marks.to <to> names no one in this chat`). A batch to a cited agent goes side-less and opens no
 thread (`a batch to <to> goes in no side chat: the page thread is <owner>'s`); only the owner's batches join or
 open the page thread, and only the owner's rides along with an answer (`the batch that rides along with an
-answer is the decision owner's (<owner>)`). The Delivery writes `to` as `coordinator` in the fleet's copy.
+answer is the decision owner's (<owner>)`).
 Without `to`, the batch goes to the owner plus whoever it cites. Each agent the page reaches wakes once.
 The decision page's main thread is a side chat like any other: its opener quotes the decision's title
 `at: {hash: <decision's place>, anchor: "dv-page"}`, so on the manager's page the decision's fleet owns
@@ -1149,7 +1149,7 @@ stored, and a failing one is refused and stores nothing (`batch is {text, marks}
 are on decision <id>, not on <decision>, the one answered`, `a batch rides along with an answer to its
 decision only`). Then the batch and the answer are written in one write under the chat's lock, batch first
 (`appendAll`), so one wake of a `--once` watch prints both. A refusal under the lock (a side chat the store
-does not hold) stores neither message and delivers nothing (the Delivery runs only once both compose), so
+does not hold) stores neither message, so
 the page keeps its comments pending. The answer as stored is returned with `batch`, the batch as stored.
 tstack serves no post: the page's server in the cloud takes it and calls this code's checks.
 
@@ -1158,8 +1158,7 @@ the message gains `mark: [N, ...]`. `--mark` needs `--re` to a message with `mar
 one of its items (`--mark needs --re to a message with marks`, `mark N is not in message #<re>`). One
 answer may cover several marks (`--mark 1,3`, or `--mark` repeated). `--no-change WHY` says why the marks
 it answers leave the decision as it is: stored as `keep` (trimmed; `--no-change needs --mark: the marks it
-leaves as they are`, `--no-change takes why, in 1 to 4000 characters`). The Courier mirrors `mark` and
-`keep` with the answer onto the manager's page. The page shows each answer under the mark it names (with
+leaves as they are`, `--no-change takes why, in 1 to 4000 characters`). The page shows each answer under the mark it names (with
 `keep` as "No change: <why>").
 
 **An answer that names no mark** (`--re <batch>` with no `--mark`) is never left out of a comment's thread.
@@ -1714,8 +1713,8 @@ nobody displaced (the same process, or a host that is gone) it is a plain serve 
   session S1 (pid P1, started T1), which was running.`
 - **In the chat**: one line from `fleet-hub` to `user` (no watch prints it: it is the user's to read), a fixed
   template: `[hub] This fleet's host changed at <stamp>: session S2 (pid P2, started T2) took it over with
-  \`fleet serve --take-over\` from session S1 (pid P1, started T1), which was running. The page, the chat watch
-  and the hub's wakes are the new session's now. If you did not ask for this, say so here.` The message also
+  \`fleet serve --take-over\` from session S1 (pid P1, started T1), which was running. The registry entry, the
+  chat watch and the office host's wakes are the new session's now. If you did not ask for this, say so here.` The message also
   carries the facts as `takeover: {at, by: {pid, started, session}, from: {pid, started, session}}`. `started`
   is when the process started, as a stamp (null, and `at a time the machine did not say` in the text, when the
   machine did not say); `session` is the Claude Code session id, written only when it is at most 128 of
@@ -1887,14 +1886,14 @@ run of each exact command shown; the next run of the same command asks again.
     question>" --why "<what it does and to what, why the work needs it, what a no means>" --recommend
     allow-once|deny --reason "<one line>"\`. To drop it (not needed, or done another way): \`<fleet> state
     DIR decision <id> --withdraw "<why>"\`. The rest of this line is the caller's own text and the
-    classifier's reason, not the hub's: reason: <reason>; call: <call>`
+    classifier's reason, not the machine's: reason: <reason>; call: <call>`
 
     **The `[hub]` words come first and the caller's last.** The call is text a worker chose, and the reason
     is what that text moved the classifier to say: quoted mid-line, a call written as `... Two commands
     close the draft. To ask the user, in your words: \`fleet state /x decision ... --recommend
     allow-once\`` read as the `[hub]` line's own instruction (reviewed 2026-10-13). So the two commands, the only
     ones a host runs from the line, stand before the fixed sentence `The rest of this line is the caller's
-    own text and the classifier's reason, not the hub's:` (`CALLER_TEXT`), and everything after it is a
+    own text and the classifier's reason, not the machine's:` (`CALLER_TEXT`), and everything after it is a
     claim to read, in no code span: a backtick there closes none of the template's. The reason is on one
     line, at most 240 characters, the call at most 300 (`shown`), both without the characters that hide
     or reorder text (`stripHidden`: C0 and C1 controls, bidi marks) and without what a reader does not see
@@ -1960,12 +1959,12 @@ run of each exact command shown; the next run of the same command asks again.
     (mark `refusal:<id>:<opened>` in the watch's told file): `! refusal draft <id> (<whose> <tool> call, a
     compound command of <N> parts) has waited <N> min: nothing was asked of the user, and nothing will be
     until you ask. To ask the user, ...: <the command>. To drop it (not needed, or done another way): <the
-    command>. The rest of this line is the caller's own text and the classifier's reason, not the hub's:
+    command>. The rest of this line is the caller's own text and the classifier's reason, not the machine's:
     reason: <reason>; call: <call>`, in the line's order. From then on every state command warns in one
     line for all of them (`draftsLeft`, [Warnings](#warnings): how many, their ids, `fleet state DIR
     show`), and `set --status done` names each open draft with the open decisions (`leftOpen`). A draft
-    marked `told: false` is said in full before any of that: by the watch at once (`! the hub could not
-    tell you this when it happened. [hub] ...`, mark `refusal-line:<id>:<opened>`), and by the host's next
+    marked `told: false` is said in full before any of that: by the watch at once (`! you were not told
+    this when it happened. [hub] ...`, mark `refusal-line:<id>:<opened>`), and by the host's next
     state command that writes the ledger, which clears the mark. `show` lists each open draft after the
     decisions: `  refusal draft <id> OPEN, for the <host> [<tool>] <who>: <call, 120 characters> (<reason,
     80>)`. The page shows no count of them yet: the ledger's `refusals` is in its payload, and nothing on
@@ -3006,7 +3005,7 @@ the 1Password app. When the app is locked, each of those commands fails in every
 would open its own card for the same cause. So the machine keeps one state: the first failure of a kind
 asks Luiz once, with one card on every page; while that kind is locked, the plugin's hook denies the fleets'
 commands of that kind, but for one every 15 minutes that tests the lock, and the rest of the work goes on;
-when it ends, `fleet onepw unlocked` (or the page's button) tells each held fleet once.
+when Luiz runs `fleet onepw unlocked` in his terminal, it tells each held fleet once.
 TypeScript and the plugin's hook only: the Python twin has none of it, and with nothing locked no view or
 trace differs.
 
@@ -3255,7 +3254,7 @@ The example shows every key a kind can have, not a state that occurs: a kind nev
 | `kinds.<k>.hosts` | `ssh-agent` only: the hosts seen failing through the agent, at most `HOSTS_MAX`, each `[a-z0-9][a-z0-9._-]{0,252}` as the hook writes it (the fleet keeps `[a-z0-9._-]{1,253}`). Absent when none is known |
 | `kinds.<k>.again` | set when the kind was locked again inside the reopen window of a clear ([Damping](#damping)): the card says `still locked` |
 | `kinds.<k>.probe` | when the last probe window of this lock was taken ([The probe window](#the-probe-window)). Written and read by the hook; the fleet keeps it as it is |
-| `kinds.<k>.cleared` | `{at, by, note}`: `by` is `user` (`note`: `answered on the page` for the button, else the CLI's `--note` or `fleet onepw unlocked`) or `command` (`note`: the command's `what`). Absent or empty (null, false, `{}`) while locked |
+| `kinds.<k>.cleared` | `{at, by, note}`: `by` is `user` (`note`: the CLI's `--note`, else `fleet onepw unlocked`; a state from before 1.9.89 may hold `answered on the page`, from the removed hub's button) or `command` (`note`: the command's `what`). Absent or empty (null, false, `{}`) while locked |
 | `kinds.<k>.lapsed` | written by the settle pass the first time it sees the kind past its lapse, so the lapse is logged once |
 | `waiting[]` | who is held: one row per fleet DIR and kind, written for the first command of that kind that failed or was held there, at most `ONEPW_WAITING_MAX` rows. A fleet is told once per hold, so one row per kind is all it needs, and the cap counts fleets, never one fleet's commands. The sessions of no registered fleet share one row per kind, with no `dir`. A row stays until its fleet is told, or it is dropped because nobody can be told |
 | `waiting[].dir` | the fleet's DIR, resolved; null for a session whose fleet is in no registry |
@@ -3361,7 +3360,7 @@ line, with the kind's fixed words, the local `HH:MM` of the kind's `since`, the 
 the local `HH:MM` the kind's next probe window opens at (its lapse when that comes first; never before now):
 
 ```
-1Password is locked for <kind's words>. <told> Do not poll, do not open a card and do not ask Luiz: he was asked at HH:MM, by the card "Unlock 1Password" on the fleet's page. Go on with work that needs no 1Password, or end the turn if nothing else is left. The hook lets one command of this kind through at <next>, from any fleet, to test the lock: that is its own test, not a time to wait for.
+1Password is locked for <kind's words>. <told> Do not poll and do not ask Luiz in chat: the lock was recorded for the machine at HH:MM, and he clears it by running `fleet onepw unlocked` in his terminal. A coordinator whose work waits on it asks him once, with an action card whose manual is that command in a ```nu block. Go on with work that needs no 1Password, or end the turn if nothing else is left. The hook lets one command of this kind through at <next>, from any fleet, to test the lock: that is its own test, not a time to wait for.
 ```
 
 `<told>` says who tells the fleet, and so when it retries. It is one of three, the first that fits:
@@ -3369,7 +3368,7 @@ the local `HH:MM` the kind's next probe window opens at (its lapse when that com
 | The session's fleet | `<told>` |
 | :-- | :-- |
 | is in no registry (its row has no `dir`) | ``This fleet is not in the registry, so it will not be told when 1Password is unlocked: check `<cli> onepw` before you retry `<what>`.`` |
-| has a row of this kind in the state | ``This fleet is on the waiting list: the hub tells it when 1Password is unlocked, in its chat, or in its session when its watch is not running. Retry `<what>` then, not before.`` |
+| has a row of this kind in the state | ``This fleet is on the waiting list: it is told when Luiz says 1Password is unlocked, in its chat, or in its session when its watch is not running. Retry `<what>` then, not before.`` |
 | has none: no room was left (`ONEPW_WAITING_MAX`), or the state could not be written | ``This fleet could not be put on the waiting list, so it will not be told when 1Password is unlocked: check `<cli> onepw` before you retry `<what>`.`` |
 
 `<cli>` is the plugin's fleet CLI by its path, `<plugin root>/fleet/bin/fleet`, as the hook names it in the
@@ -3403,7 +3402,7 @@ the same characters replaced, or `unknown`.
 `additionalContext`, with the same three `<told>` as the denial:
 
 ```
-1Password is locked for <kind's words> (<why>). <told> Do not poll, do not open a card and do not ask Luiz: the lock was recorded once for the machine at HH:MM, and he is asked by the card "Unlock 1Password" on the fleet's page. Go on with work that needs no 1Password, or end the turn if nothing else is left.
+1Password is locked for <kind's words> (<why>). <told> Do not poll and do not ask Luiz in chat: the lock was recorded once for the machine at HH:MM, and he clears it by running `fleet onepw unlocked` in his terminal. A coordinator whose work waits on it asks him once, with an action card whose manual is that command in a ```nu block. Go on with work that needs no 1Password, or end the turn if nothing else is left.
 ```
 
 On PostToolUseFailure nothing is returned: the event is registered asynchronous, so the session reads no
@@ -3418,13 +3417,12 @@ A lock ends in exactly three ways, each kind on its own:
 
 | Way | Which kinds | What is written |
 | :-- | :-- | :-- |
-| Luiz's answer: the button on the card ([The card](#the-card)), or `fleet onepw unlocked` typed in a terminal outside Claude Code ([The CLI](#the-cli)) | every kind that is locked at that moment | `cleared: {at, by: "user", note}` on each, log `cleared by user: <note>` |
+| Luiz's answer: `fleet onepw unlocked` typed in a terminal outside Claude Code ([The CLI](#the-cli)), the command the card gives ([The card](#the-card)) | every kind that is locked at that moment | `cleared: {at, by: "user", note}` on each, log `cleared by user: <note>` |
 | a command that clears ([What the hook does](#what-the-hook-does)) | that command's kind alone | `cleared: {at, by: "command", note: <what>}` |
 | the lapse: `FLEET_ONEPW_LAPSE_S` (2 h) after the kind's `since` with no answer | each kind by its own `since` | nothing at that moment: the kind reads as lapsed from then on, and the settle pass stamps `lapsed` when it first sees it |
 
 An agent does not say that 1Password is unlocked: `fleet onepw unlocked` is refused inside a Claude Code
-session, and the page's server takes the button's POST as the user's. Both stop an honest agent
-only ([The card](#the-card), [The CLI](#the-cli)). While a kind is locked, a fleet's sessions are denied
+session, which stops an honest agent only ([The CLI](#the-cli)). While a kind is locked, a fleet's sessions are denied
 every command that could clear it (a use that clears is always held), so a command clears from a session of
 no fleet, when it was already running as the lock was recorded, or when it took a probe window.
 
@@ -3548,7 +3546,7 @@ unlocked template is used.
 
 **`fleet-hub` is kept** (TypeScript only): no worker may have it as its id or name (`agent X cannot be
 called 'fleet-hub': that name is a chat participant`, with `user` and `coordinator`), and no fleet may be
-named it (`'<name>' cannot name a fleet; the hub signs its own lines in a chat with it`), so nobody
+named it (`'<name>' cannot name a fleet; the machine signs its own chat lines with it`), so nobody
 but the machine's own lines (`[hub]`) is from it through `chat say`.
 
 ### The card
@@ -3582,20 +3580,19 @@ page of its own:
 | :-- | :-- |
 | title | `Unlock 1Password` |
 | pills | `blocks work`; `still locked` when `again` is set; `something to do` |
-| first line | `1Password, here or on the machine you are connected from, is refusing commands: <why>. Unlock the app, then say so here.` It names both machines because `~/.ssh/config` may send SSH signing to a forwarded agent (`~/.ssh/forwarded-agent.sock`, the machine the user connected from), and the hook reads no ssh config |
+| first line | `1Password, here or on the machine you are connected from, is refusing commands: <why>. Unlock the app, then run the command below in your terminal, outside Claude Code: it tells each fleet that waits.` It names both machines because `~/.ssh/config` may send SSH signing to a forwarded agent (`~/.ssh/forwarded-agent.sock`, the machine the user connected from), and the hook reads no ssh config |
 | with `again` | `It was cleared and a command failed again <N min ago>.` |
 | a line per row | `Waiting: <who>, for <what>.` |
 | under them | `Asked <N min ago>. Every fleet holds its commands that need 1Password until then, and goes on with the rest.` |
-| the button | `1Password is unlocked` (`Telling the fleets…` while it posts); then `The fleets are told.`, or the server's error |
+| last | the command, `fleet onepw unlocked`, in a `nu` code block with its copy button (`#onepw-run`) |
 
 A card that was cleared and reopened is the same card: the same `since`, so the same "Asked ... ago". The
-lead sentence counts it as one action that blocks work; the tab's badge and the decision lists do not. The
-button is disabled, with the reason, for a viewer who may not write.
+lead sentence counts it as one action that blocks work; the tab's badge and the decision lists do not.
 
-**The button** posts `onepw/unlocked` with `{}` from any page (`fleet/page/src/Overview.tsx`). tstack serves no
-such route now: the page's server in the cloud answers it, and the call that does the work is the one
-`fleet onepw unlocked` makes: clear every locked kind as the user (`note`: `answered on the page`), then settle. A
-viewer who may not write has the button disabled. The stream's next `state` has no `onepw`, and the card goes.
+**No answer button.** The card once had one, "1Password is unlocked", that posted `onepw/unlocked` to the hub. No
+route answers it since the hub was removed (1.9.89): neither tstack nor the cloud page serves one, and the cloud
+page has no 1Password card. So the card gives the command and posts nothing (`fleet/page/src/Overview.tsx`);
+the stream's next `state` has no `onepw` once the command has cleared the lock, and the card goes.
 
 The refusal of `fleet onepw unlocked` inside a Claude Code session stops an honest agent only: everything on the
 machine runs as one Unix user ([The CLI](#the-cli)).
@@ -3604,7 +3601,7 @@ machine runs as one Unix user ([The CLI](#the-cli)).
 
 | Command | Does | Output | Exit |
 | :-- | :-- | :-- | :-- |
-| `fleet onepw` | reads the state; runs anywhere, in a session too; changes nothing | `1Password: not known to be locked`, or `1Password: locked: ssh-agent since 13:50 (<why>), op-desktop since 13:52 (<why>); waiting: skills (jj git push, secretspec run), casos (gh pr)` (`nothing waits` with no row; the rows of no fleet as `a session outside the fleets (...)`). A second line when a notice is owed: `a hold is over and N fleet(s) are not told yet: the hub tells each within seconds, or 30 min after its last notice` (the code's own words; no hub runs now) | 0 |
+| `fleet onepw` | reads the state; runs anywhere, in a session too; changes nothing | `1Password: not known to be locked`, or `1Password: locked: ssh-agent since 13:50 (<why>), op-desktop since 13:52 (<why>); waiting: skills (jj git push, secretspec run), casos (gh pr)` (`nothing waits` with no row; the rows of no fleet as `a session outside the fleets (...)`). A second line when a notice is owed: `a hold is over and N fleet(s) are not told yet: each is told the next time the user clears the lock from his own terminal, once 30 min have passed since it was last told` (it does not name the command: an agent reads it too) | 0 |
 | `fleet onepw unlocked [--note TEXT]` | outside Claude Code only: clears every locked kind as the user (`note` TEXT, else `fleet onepw unlocked`) and settles at once | a line per fleet told, `told <fleet> (<host>, #<id>): <text>` or `told <fleet> (its session): <text>`; with none told, `1Password: nothing was locked` or `1Password: unlocked; no fleet was told now`; then the owed line, when one is owed | 0; 1 refused, or the settle failed; 2 a usage error |
 | `fleet onepw -h` | prints the usage | | 0 |
 
@@ -3628,7 +3625,7 @@ ancestor, and clears as the user (measured, 2026-10-12).
 Refused, it clears nothing, exits 1 and prints on stderr:
 
 ```
-onepw: only the button on the card clears the lock ("1Password is unlocked", on any fleet's page); an agent does not say for the user that 1Password is unlocked. `fleet onepw` prints the state.
+onepw: only the user clears the lock, by running `fleet onepw unlocked` in his own terminal; an agent does not say for the user that 1Password is unlocked. `fleet onepw` prints the state.
 ```
 
 A usage error (exit 2: the usage and `fleet onepw: error: unrecognized arguments: ...` on stderr) and
@@ -3956,8 +3953,11 @@ coordinator integrated it. The preview (TypeScript only, approved 2026-10-01) se
 not yet integrated, merged, in one live page, and optionally one worker's alone.
 
 - `fleet preview DIR start [--cmd C] [--port N] [--setup C] [--repo PATH] [--stack REVSET]`: the combined preview. Refused
-  in a shared fleet (its one working copy already holds every worker's edits), for a fleet not served (the
-  preview is reached through the preview server, which answers the fleets the registry shows), and while it already runs.
+  in a shared fleet (its one working copy already holds every worker's edits), for a fleet with no preview
+  here, not registered or moved to the cloud (``<DIR> has no preview here: the preview server (`fleet preview serve`)
+  serves the preview at /f/<fleet>/preview/, under the name `fleet serve <DIR>` registers; run that first (a team moved
+  to the cloud has none)``; a
+  per-worker start says the same of `/f/<fleet>/preview/<worker>/`), and while it already runs.
   - **Workspace**: `jj workspace add <repo>-preview --name preview` at the stack, made once and recorded in
     `workspaces[]` as `{id: "preview", kind: "preview", agent: null, ...}`: the fleet's, never a worker's
     (`fleet ws add --reuse preview` is refused; `list` shows it as the preview). Its @ is the merge: parents
@@ -4254,7 +4254,7 @@ not yet integrated, merged, in one live page, and optionally one worker's alone.
   public_error}`, `public` the root-mode public port or null, `public_url` the `https://<MagicDNS
   name>:<public>/` the running preview server serves it at (null while it serves none) and `public_error` the
   running preview server's word on it. The Fleet view's Preview block links a root-mode preview (and each per-worker
-  one) at `public_url` (an `https:` address only) and shows `The hub cannot serve https on port N:
+  one) at `public_url` (an `https:` address only) and shows `The preview server cannot serve https on port N:
   <public_error>`. It also shows the link, a box
   per worker's workspace (disabled for a viewer who may not write; put back when the page's server refuses), the
   conflicts with the workers' names, the build error and each per-worker preview; the Links view lists
