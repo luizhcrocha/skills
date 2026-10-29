@@ -1759,12 +1759,19 @@ class SaidOnceTest(FleetCase):
         self.assertTrue(reason.startswith("You answered on the page (#42)."), reason)
         self.assertIn("'Answered #42 on the page.'", reason)
 
-    def test_a_fleet_run_say_naming_a_card_the_user_answered_counts(self):
-        self.transcribe(said("go"))
+    def test_a_fleet_run_say_naming_the_card_whose_answer_woke_the_turn_counts(self):
         self.say(61, "2026-01-05T09:00:00+00:00", text="Picked b: KV", decision="D219")
+        self.transcribe(said("<task-notification><result>#61 user -> coordinator: Picked b: KV</result>"
+                             "</task-notification>"))
         self.run_program('say(`Sessions go to KV, as you picked on D219.`, {decision: "D219"})',
                          ("message", "applied", "62"))
         self.assertIn("(#62)", self.blocked(self.stop(last=self.LONG)))
+
+    def test_a_say_on_a_card_answered_in_an_earlier_turn_leaves_a_terminal_question_to_the_terminal(self):
+        self.say(61, "2026-01-05T09:00:00+00:00", text="Picked b: KV", decision="D219")
+        self.transcribe(said("why did the deploy fail?"))
+        self.run_program('say("KV namespace bound.", { decision: "D219" })', ("message", "applied", "62"))
+        self.assertSilent(self.stop(last=self.LONG))
 
     def test_a_fleet_run_say_from_a_turn_woken_by_the_users_chat_line_counts(self):
         line = "#50 user -> coordinator: where are we on the login form?"
@@ -1774,22 +1781,68 @@ class SaidOnceTest(FleetCase):
         self.run_program('say("The login form is in review.")', ("message", "applied", "51"))
         self.assertIn("(#51)", self.blocked(self.stop(last=self.LONG)))
 
-    def test_a_user_line_that_arrives_mid_turn_starts_the_turn_again(self):
+    def queue(self, prompt, mode):
+        self.calls += 1
+        self.transcribe({"type": "attachment", "uuid": f"q{self.calls}", "attachment": {
+            "type": "queued_command", "prompt": prompt, "commandMode": mode}})
+
+    def test_a_terminal_line_typed_mid_turn_lets_its_answer_stop(self):
         self.transcribe(said("go"))
         self.say_on_page()
-        # the user types in the terminal while the turn runs: what follows answers them there
-        self.transcribe({"type": "attachment", "uuid": "q1", "attachment": {
-            "type": "queued_command", "prompt": "explain it here", "commandMode": "prompt"}})
+        self.queue("explain it here", "prompt")
         self.reply(self.LONG)
         self.assertSilent(self.stop(last=self.LONG))
-        # a chat line queued mid-turn, answered on the page, is held to the rule
+
+    def test_a_users_chat_line_queued_mid_turn_and_answered_on_the_page_is_held(self):
+        self.transcribe(said("go"))
+        self.say_on_page()
+        self.queue("explain it here", "prompt")
         self.say(50, "2026-01-05T09:00:00+00:00", text="and the login form?")
-        self.transcribe({"type": "attachment", "uuid": "q2", "attachment": {
-            "type": "queued_command", "commandMode": "task-notification",
-            "prompt": "<task-notification><result>#50 user -> coordinator: and the login form?</result>"
-                      "</task-notification>"}})
+        self.queue("<task-notification><result>#50 user -> coordinator: and the login form?</result>"
+                   "</task-notification>", "task-notification")
         self.run_program('say("In review.")', ("message", "applied", "51"))
         self.assertIn("(#51)", self.blocked(self.stop(last=self.LONG)))
+
+    def test_a_workers_notification_queued_after_an_answer_on_the_page_keeps_the_turn(self):
+        self.transcribe(said("go"))
+        self.say(41, "2026-01-05T09:00:00+00:00", text="how is the deploy?")
+        self.run_program('say("Green.", { re: 41 })', ("message", "applied", "42"))
+        self.queue("<task-notification><result>a1 finished: report written</result></task-notification>",
+                   "task-notification")
+        self.reply(self.LONG)
+        self.assertIn("(#42)", self.blocked(self.stop(last=self.LONG)))
+
+    def test_a_say_to_a_variable_audience_is_not_to_the_user(self):
+        self.transcribe(said("go"))
+        self.say(41, "2026-01-05T09:00:00+00:00", text="how is the deploy?")
+        self.run_program('const who = ["a1"];\nsay("on it", { re: 41, to: who });', ("message", "applied", "42"))
+        self.assertSilent(self.stop(last=self.LONG))
+
+    def test_says_that_do_not_line_up_with_their_lines_count_only_when_each_answers_the_user(self):
+        self.transcribe(said("go"))
+        self.say(41, "2026-01-05T09:00:00+00:00", text="how is the deploy?")
+        self.run_program('for (const n of [1, 2]) say(`step ${n}`);\nsay("Green.", { re: 41 });',
+                         ("message", "applied", "42"), ("message", "applied", "43"), ("message", "applied", "44"))
+        self.assertSilent(self.stop(last=self.LONG))
+        self.run_program('for (const n of [1, 2]) say("Green.", { re: 41 });',
+                         ("message", "applied", "45"), ("message", "applied", "46"))
+        self.assertIn("(#45, #46)", self.blocked(self.stop(last=self.LONG)))
+
+    def test_a_program_piped_into_fleet_run_and_one_with_block_comments_are_read(self):
+        self.transcribe(said("go"))
+        self.say(41, "2026-01-05T09:00:00+00:00", text="how is the deploy?")
+        self.bash(f"{{ cat <<'EOF'\nsay('Green.', {{ re: 41 }});\nreturn records.apply(ops);\nEOF\n}} | "
+                  f"FLEET_DIR=$PWD {ROOT}/fleet/bin/fleet-run",
+                  json.dumps({"status": "completed", "ops": [{"_tag": "applied", "kind": "message", "key": "42"}]},
+                             indent=2))
+        self.assertIn("(#42)", self.blocked(self.stop(last=self.LONG)))
+
+    def test_a_say_inside_a_block_comment_is_not_code(self):
+        self.transcribe(said("go"))
+        self.say(41, "2026-01-05T09:00:00+00:00", text="how is the deploy?")
+        self.run_program('/* say("Green.", { re: 41 }); */\nsay("status: a2 runs", { re: 41, to: ["a2"] });',
+                         ("message", "applied", "42"))
+        self.assertSilent(self.stop(last=self.LONG))
 
     def test_a_fleet_run_say_that_answers_no_user_line_does_not_count(self):
         self.transcribe(said("go"))

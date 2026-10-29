@@ -1419,13 +1419,15 @@ _MARK_REPLY = re.compile(r"(?:^|[\s/;&|(])picasso\s+mark-reply\s+(?:--?[\w-]+\s+
 
 def _start_text(entry):
     """The words that start a turn, or None: a user entry carrying text (a prompt, a task notification), or
-    a message queued while the turn ran (the user's typed line, or a notification, as Claude Code attaches it)."""
+    a line queued while the turn ran (Claude Code's `queued_command`) that the user typed (`commandMode`
+    `prompt`) or that holds the user's chat line. A worker's notification queued mid-turn starts none."""
     if entry.get("isSidechain"):
         return None
     if entry.get("type") == "attachment":
         a = entry.get("attachment")
-        ok = isinstance(a, dict) and a.get("type") == "queued_command" and isinstance(a.get("prompt"), str)
-        return a["prompt"] if ok else None
+        if not isinstance(a, dict) or a.get("type") != "queued_command" or not isinstance(a.get("prompt"), str):
+            return None
+        return a["prompt"] if a.get("commandMode", "prompt") == "prompt" or _USER_LINE.search(a["prompt"]) else None
     if entry.get("type") != "user":
         return None
     content = (entry.get("message") or {}).get("content")
@@ -1487,7 +1489,7 @@ def _is_say(command):
 
 def _js_masked(src):
     """A program's code with each string literal (quoted or a template) as `"i"`, i its index in the list of
-    their texts, and `//` comments cut: a say or an option named inside a string is not code."""
+    their texts, and `//` and `/* */` comments cut: a say or an option named inside either is not code."""
     out, strings, i, n = [], [], 0, len(src)
     while i < n:
         c = src[i]
@@ -1501,6 +1503,8 @@ def _js_masked(src):
             i = j + 1
         elif src.startswith("//", i):
             i = n if src.find("\n", i) < 0 else src.find("\n", i)
+        elif src.startswith("/*", i):
+            i = n if src.find("*/", i + 2) < 0 else src.find("*/", i + 2) + 2
         else:
             out.append(c)
             i += 1
@@ -1508,12 +1512,15 @@ def _js_masked(src):
 
 
 def _program_says(command):
-    """The `say(text, options)` calls of a `fleet-run` program in a shell command, in order, each as
-    (re, decision, to the user): its options read as the prelude does (`to` defaults to the user)."""
+    """The `say(text, options)` calls of a `fleet-run` program in a shell command, in order, each as (re, to
+    the user): `to` defaults to the user, as the prelude's does, and one that is not a literal list of
+    strings reads as not to the user. The program is what follows `fleet-run` (its here-document), or the
+    whole command when it is piped in (`{ cat <<'EOF' ... } | fleet-run`)."""
     run = _FLEET_RUN.search(command)
     if not run:
         return []
-    code, strings = _js_masked(command[run.end():])
+    piped = re.search(r"\|\s*(?:\w+=\S*\s+)*\S*fleet-run(?=$|[\s;&|)<])", command)
+    code, strings = _js_masked(command if piped else command[run.end():])
     says = []
     for m in re.finditer(r"(?<![\w.$])say\s*\(", code):
         depth, end = 1, m.end()
@@ -1522,10 +1529,12 @@ def _program_says(command):
             end += 1
         args = code[m.end():end]
         r = re.search(r"\bre\s*:\s*(\d+)", args)
-        d = re.search(r"\bdecision\s*:\s*\"(\d+)\"", args)
-        to = re.search(r"\bto\s*:\s*\[([^\]]*)\]", args)
-        to_user = to is None or "user" in [strings[int(x)] for x in re.findall(r'"(\d+)"', to.group(1))]
-        says.append((int(r.group(1)) if r else None, strings[int(d.group(1))] if d else None, to_user))
+        if re.search(r"\bto\s*:", args):
+            to = re.search(r"\bto\s*:\s*\[\s*((?:\"\d+\"\s*,?\s*)*)\]", args)
+            to_user = bool(to) and "user" in [strings[int(x)] for x in re.findall(r'"(\d+)"', to.group(1))]
+        else:
+            to_user = True
+        says.append((int(r.group(1)) if r else None, to_user))
     return says
 
 
@@ -1543,9 +1552,8 @@ def _run_messages(text):
 
 
 def _from_user(dirs, ids):
-    """(which of the message numbers `ids` are the user's own messages, the cards the user's lines name: an
-    answer on a card), in the chats of the fleets `dirs`."""
-    found, cards = set(), set()
+    """Which of the message numbers `ids` are the user's own messages, in the chats of the fleets `dirs`."""
+    found = set()
     for d in dirs:
         try:
             with open(os.path.join(d, "chat.jsonl"), "rb") as f:
@@ -1556,15 +1564,11 @@ def _from_user(dirs, ids):
                         m = json.loads(line)
                     except ValueError:
                         continue
-                    if not isinstance(m, dict) or m.get("from") != "user":
-                        continue
-                    if m.get("id") in ids:
+                    if isinstance(m, dict) and m.get("from") == "user" and m.get("id") in ids:
                         found.add(m["id"])
-                    if isinstance(m.get("decision"), str):
-                        cards.add(m["decision"])
         except OSError:
             continue
-    return found, cards
+    return found
 
 
 def _blocks(entry, kind):
@@ -1585,8 +1589,8 @@ def fleet_said_once(hook):
     """Stop: a coordinator or manager that answered the user on the page this turn ends the turn with one line
     naming where, not the answer again. An answer on the page is a `fleet chat DIR say --re M` whose output
     shows the message written to the user, M one of the user's own messages; a `fleet-run` program's `say` to
-    the user that `applied`, with `re` one of the user's messages, `decision` a card the user's line answered,
-    or in a turn the user's chat line woke; or a `picasso mark-reply` that answered ok (mark <id>). A news
+    the user that `applied`, with `re` one of the user's messages or in a turn the user's chat line woke (an
+    answer on a card arrives as such a line); or a `picasso mark-reply` that answered ok (mark <id>). A news
     post, a `fleet tell`, a state event, or a message that answers no message of the user's is not one. A
     turn starts at a prompt, a task notification, or a line queued while the turn ran. A final text over
     SAID_ONCE_LINES lines or SAID_ONCE_CHARS characters is blocked, once per turn: never on a stop that
@@ -1614,7 +1618,7 @@ def fleet_said_once(hook):
             command = str((b.get("input") or {}).get("command") or "") if b.get("name") == "Bash" else ""
             mark = _MARK_REPLY.search(command)
             calls[b.get("id")] = ("say" if _is_say(command) else "mark" if mark else "run", mark, command)
-    candidates, marks = [], []  # (where, re, decision, to the user)
+    candidates, marks = [], []  # (where, the says it may be: it counts when each answers the user)
     for e in entries:
         for b in _blocks(e, "tool_result"):
             if b.get("tool_use_id") not in calls or b.get("is_error"):
@@ -1622,7 +1626,7 @@ def fleet_said_once(hook):
             kind, mark, command = calls[b["tool_use_id"]]
             text = _result_text(b)
             if kind == "say":
-                candidates += [(f"#{n}", int(m), None, True) for n, to, m in _POSTED.findall(text)
+                candidates += [(f"#{n}", [(int(m), True)]) for n, to, m in _POSTED.findall(text)
                                if re.search(r"(?:^|, )user\b", to)]
             elif kind == "mark":
                 if re.search(r'"ok":\s*true', text):
@@ -1630,15 +1634,15 @@ def fleet_said_once(hook):
             elif says := _program_says(command):
                 keys = _run_messages(text)
                 if len(keys) == len(says):
-                    candidates += [(f"#{k}", *say) for k, say in zip(keys, says) if k]
-                else:  # a say in a loop or a branch: each line it applied, by what any of its says asked
-                    candidates += [(f"#{k}", *say) for k in keys if k for say in says]
+                    candidates += [(f"#{k}", [say]) for k, say in zip(keys, says) if k]
+                else:  # a say in a loop or a branch: which line is which is unknown, so each must answer
+                    candidates += [(f"#{k}", says) for k in keys if k]
     woke = {int(n) for n in _USER_LINE.findall(_start_text(entries[0]) or "")} if entries else set()
     if not candidates and not marks:
         return None
-    asked, cards = _from_user(dirs, {r for _, r, _, _ in candidates if r is not None} | woke)
-    posted = [where for where, r, card, to_user in candidates
-              if to_user and (r in asked or card in cards or woke & asked)] + marks
+    asked = _from_user(dirs, {r for _, says in candidates for r, _ in says if r is not None} | woke)
+    posted = [where for where, says in candidates
+              if all(to_user and (r in asked or woke & asked) for r, to_user in says)] + marks
     if not posted:
         return None
     final = hook.input.get("last_assistant_message")
