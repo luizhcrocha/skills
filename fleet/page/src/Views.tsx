@@ -594,7 +594,7 @@ function RootLink(props: { readonly server: PreviewServer; readonly id?: string 
           </Show>
           <Show when={props.server.publicError}>
             <p class="meta deaf-line">
-              The hub cannot serve https on port {String(port())}: {props.server.publicError}
+              The preview server cannot serve https on port {String(port())}: {props.server.publicError}
             </p>
           </Show>
         </>
@@ -628,12 +628,12 @@ function PreviewPart(props: { readonly preview: Preview }): JSX.Element {
       const res = await fetch("preview-workers", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ worker, include }) });
 
       if (!res.ok) {
-        // SAFETY: the hub answers a refusal with {error}; anything else shows as its status.
+        // SAFETY: the page's server answers a refusal with {error}; anything else shows as its status.
         const body = (await res.json().catch(() => ({}))) as { readonly error?: string };
-        refused = body.error ?? `the hub answered ${String(res.status)}`;
+        refused = body.error ?? `the page's server answered ${String(res.status)}`;
       }
     } catch {
-      refused = "the hub did not answer";
+      refused = "the page's server did not answer";
     }
 
     if (refused) {
@@ -805,14 +805,14 @@ function OrphanRow(props: { readonly o: Orphan }): JSX.Element {
       // The hub puts a Stop token in the manager's page when it loads; a Stop without it is refused.
       const token = document.querySelector<HTMLMetaElement>('meta[name="fleet-stop-token"]')?.content ?? "";
       const res = await fetch("orphans/stop", { method: "POST", headers: { "Content-Type": "application/json", "X-Fleet-Stop-Token": token }, body: JSON.stringify({ pid: o().pid, started: o().started }) });
-      // SAFETY: the hub answers {stopped, left} or {error}; anything else shows as its status.
+      // SAFETY: the page's server answers {stopped, left} or {error}; anything else shows as its status.
       const body = (await res.json().catch(() => ({}))) as { readonly error?: string; readonly stopped?: readonly number[]; readonly left?: readonly number[] };
 
-      if (!res.ok) setSaid(body.error ?? `the hub answered ${String(res.status)}`);
+      if (!res.ok) setSaid(body.error ?? `the page's server answered ${String(res.status)}`);
       else if (body.left?.length) setSaid(`Still running after KILL: ${body.left.join(", ")}`);
       else setSaid(`Stopped ${String(body.stopped?.length ?? 0)} ${body.stopped?.length === 1 ? "process" : "processes"}.`);
     } catch {
-      setSaid("the hub did not answer");
+      setSaid("the page's server did not answer");
     }
 
     setBusy(false);

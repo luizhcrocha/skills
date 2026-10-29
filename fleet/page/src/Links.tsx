@@ -51,7 +51,7 @@ function statusOf(l: Link): Status {
   if (l.reach === "file") {
     if (!l.up) return { dot: "down", words: "file missing" };
 
-    return l.file ? { dot: "up", words: "file, opens through the hub" } : { dot: "none", words: "only on this machine" };
+    return l.file ? { dot: "up", words: "file, on this machine" } : { dot: "none", words: "only on this machine" };
   }
 
   if (l.reach === "external") return { dot: "none", words: "elsewhere, not checked" };

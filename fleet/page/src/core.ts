@@ -388,26 +388,15 @@ export interface Deaf {
   readonly first: number;
   /** When the hub woke the session for it, each wake that was written. */
   readonly woken: readonly string[];
-  /** Where it stands, when the hub no longer just wakes: the session is `gone` (with `why`), the machine did
-   * not say whether it is there (`unknown`, with `why`; the hub looks again), it is at its usage `limit`,
-   * could not be woken (`failed`, with `why`), did not answer the wakes the hub allows (`spent`), has not
-   * read the last wake yet (`queued`), or is in a tool call (`busy`). Empty while the hub still wakes. */
-  readonly end: "" | "gone" | "unknown" | "limit" | "failed" | "spent" | "queued" | "busy";
+  /** Where it stands, when the hub no longer just wakes: the session is `gone` (with `why`), it is at its
+   * usage `limit`, could not be woken (`failed`, with `why`), did not answer the wakes the hub allows
+   * (`spent`), or has not read the last wake yet (`queued`). Empty while the hub still wakes. */
+  readonly end: "" | "gone" | "limit" | "failed" | "spent" | "queued";
   readonly why: string;
   /** Why "Wake now" cannot be used now; empty when it can. */
   readonly held: string;
   /** When "Wake now" can be used again, a stamp; empty when it can now or when no time ends the hold. */
   readonly again: string;
-}
-
-/** A fleet the hub's look cannot read (fleet/src/wake.ts `blindView`): the hub cannot tell whether its host
- * listens, and wakes nobody for it. Only a hub gives it, and only while its last look at the fleet failed. */
-export interface Blind {
-  /** When the look first failed this way. */
-  readonly since: string;
-  /** What it could not read: the fleet's chat, or its session (the transcript, the ledger's status). */
-  readonly what: "chat" | "session";
-  readonly why: string;
 }
 
 /** One side of a takeover: a session's process. */
@@ -513,8 +502,6 @@ export interface Coordinator {
   readonly hearing: Hearing | null;
   /** While the fleet's host does not listen and the user's messages wait: what the hub did about it. */
   readonly deaf: Deaf | null;
-  /** While the hub's look cannot read the fleet: what it could not read, and why. */
-  readonly blind: Blind | null;
   /** The fleet's last change of host, until the new host has read a message the user wrote after it. */
   readonly takeover: Takeover | null;
   readonly active: string;
@@ -577,8 +564,6 @@ export interface State {
   readonly hearing: Hearing | null;
   /** While this fleet's host does not listen and the user's messages wait: what the hub did about it. */
   readonly deaf: Deaf | null;
-  /** While the hub's look cannot read this fleet: what it could not read, and why. */
-  readonly blind: Blind | null;
   /** This fleet's last change of host, until the new host has read a message the user wrote after it. */
   readonly takeover: Takeover | null;
   readonly roadmap: readonly Milestone[];
@@ -835,8 +820,6 @@ export interface StuckRow {
   readonly what: string;
   /** For `not listening`: what the hub did to wake the host. */
   readonly deaf?: Deaf;
-  /** For `not read by the hub`: what the hub's look could not read. */
-  readonly blind?: Blind;
   /** For `host changed`: who took the fleet over from whom. */
   readonly takeover?: Takeover;
   readonly id?: string;
@@ -1660,7 +1643,6 @@ function parseState(value: Json | undefined): State | null {
       spent: spent(c["spent"]),
       hearing: hearingOf(c["chat"]),
       deaf: deafOf(c["deaf"]),
-      blind: blindOf(c["blind"]),
       takeover: takeoverOf(c["takeover"]),
       moved: c["moved"] === true,
       active: text(c["active"], ""),
@@ -1675,7 +1657,6 @@ function parseState(value: Json | undefined): State | null {
     spent: spent(value["spent"]),
     hearing: hearingOf(value["chat"]),
     deaf: deafOf(value["deaf"]),
-    blind: blindOf(value["blind"]),
     takeover: takeoverOf(value["takeover"]),
     updated: text(value["updated"], value["started"]),
     roadmap: withId(rows("roadmap")).map((m) => ({ ...m, title: text(m["title"], m["id"]), steps: withId(Array.isArray(m["steps"]) ? m["steps"].filter(isRow) : []) })),
@@ -1783,7 +1764,7 @@ function deafOf(v: Json | undefined): Deaf | null {
     unread: Number.isInteger(v["unread"]) ? Number(v["unread"]) : 0,
     first: Number(v["first"]),
     woken: Array.isArray(v["woken"]) ? v["woken"].filter(isText) : [],
-    end: end === "gone" || end === "unknown" || end === "limit" || end === "failed" || end === "spent" || end === "queued" || end === "busy" ? end : "",
+    end: end === "gone" || end === "limit" || end === "failed" || end === "spent" || end === "queued" ? end : "",
     why: isText(v["why"]) ? v["why"] : "",
     held: isText(v["held"]) ? v["held"] : "",
     again: isText(v["again"]) ? v["again"] : "",
@@ -1807,33 +1788,13 @@ function deafWords(d: Deaf, clock: (iso: string) => string): string {
 
   if (d.end === "gone") said.push(`The session is gone${why}. Open it in a terminal.`);
 
-  if (d.end === "unknown") said.push(`The hub could not tell whether the session is there${why}: it looks again.`);
-
   if (d.end === "limit") said.push("The session is at its usage limit. Open it in a terminal.");
 
   if (d.end === "failed") said.push(`The session could not be woken${why}. Open it in a terminal.`);
 
   if (d.end === "queued") said.push("The session has not read the last wake. Open it in a terminal.");
 
-  if (d.end === "busy") said.push("The session is in a tool call: the hub waits for it to end.");
-
   return said.join(" ");
-}
-
-/** What the hub says of a fleet its look cannot read; null when it said nothing. */
-function blindOf(v: Json | undefined): Blind | null {
-  if (!isRow(v) || !isText(v["since"])) return null;
-
-  return { since: v["since"], what: v["what"] === "session" ? "session" : "chat", why: isText(v["why"]) ? v["why"] : "" };
-}
-
-/** A fleet the hub cannot read, in the words the page says first: what, since when, why, and what follows. */
-function blindWords(b: Blind, clock: (iso: string) => string): string {
-  const why = b.why ? ` (${b.why})` : "";
-
-  return b.what === "chat"
-    ? `The hub cannot read this fleet's chat since ${clock(b.since)}${why}: it cannot tell whether your messages wait, and wakes nobody for it.`
-    : `The hub cannot read this fleet's session since ${clock(b.since)}${why}: it cannot tell whether it may be woken, and wakes nobody for it.`;
 }
 
 function partyOf(v: Json | undefined): Party | null {
@@ -2256,12 +2217,12 @@ const silentWorker = (a: Pick<Agent, "status" | "active">, now: number): boolean
 /**
  * What is stuck, said first on the page: an answer the fleet has had for more than STUCK_MS and has not
  * recorded, and a fleet that does not read its chat while the user's messages wait there (from a hub, as
- * soon as it gives `deaf` and with what the hub did to wake it: `not listening`), a fleet the hub's look
- * cannot read (`blind`) and one that changed host (`takeover`), each in the hub's facts. On a fleet's page
+ * soon as it gives `deaf` and with what the hub did to wake it: `not listening`) and one that changed host
+ * (`takeover`), each in the hub's facts. On a fleet's page
  * `fleets` holds the page itself; on the manager's, every coordinator.
  */
 function stuckOf(
-  own: Partial<Pick<State, "decisions" | "agents" | "hearing" | "deaf" | "blind" | "takeover">>,
+  own: Partial<Pick<State, "decisions" | "agents" | "hearing" | "deaf" | "takeover">>,
   coordinators: readonly Partial<Coordinator>[] | null | undefined,
   messages: Iterable<Message> | null | undefined,
   now: number,
@@ -2288,8 +2249,6 @@ function stuckOf(
     rows.push({ fleet: "", ref: "", title: `${hearing.unread} message${hearing.unread === 1 ? "" : "s"} unread`, since: hearing.since, what: "chat not read" });
   }
 
-  if (own.blind) rows.push({ fleet: "", ref: "", title: "", since: own.blind.since, what: "not read by the hub", blind: own.blind });
-
   if (own.takeover) rows.push({ fleet: "", ref: "", title: "", since: own.takeover.at, what: "host changed", takeover: own.takeover });
 
   for (const a of own.agents ?? []) if (silentWorker(a, now)) rows.push({ fleet: "", ref: a.id, title: a.name || a.id, since: a.active ?? "", what: "worker silent", agent: a.id });
@@ -2304,8 +2263,6 @@ function stuckOf(
 
     if (c.deaf) rows.push({ fleet, ref: "", title: "", since: c.deaf.since, what: "not listening", deaf: c.deaf });
     else if (h && !h.on && h.unread && now - stamp(h.since) > STUCK_MS) rows.push({ fleet, ref: "", title: `${h.unread} message${h.unread === 1 ? "" : "s"} from you unread`, since: h.since, what: "chat not read" });
-
-    if (c.blind) rows.push({ fleet, ref: "", title: "", since: c.blind.since, what: "not read by the hub", blind: c.blind });
 
     if (c.takeover) rows.push({ fleet, ref: "", title: "", since: c.takeover.at, what: "host changed", takeover: c.takeover });
   }
@@ -2555,8 +2512,6 @@ export const Core = {
   deafOf,
   deafWords,
   wakeButton,
-  blindOf,
-  blindWords,
   takeoverOf,
   takeoverWords,
   unreadBy,

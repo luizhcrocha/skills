@@ -1,8 +1,7 @@
 /**
  * What only a hub says of a fleet, whole, in the stuck band: a change of host (the view's `takeover`,
- * fleet/src/takeover.ts) and a fleet the hub's look cannot read (`blind`, fleet/src/wake.ts). On the fleet's
- * own page and, for each fleet, on the manager's, where the line opens with the fleet's name. Run in
- * happy-dom. A time of day reads as every other on the page does (`clock`).
+ * fleet/src/takeover.ts). On the fleet's own page and, for each fleet, on the manager's, where the line opens
+ * with the fleet's name. A `blind` key is no longer read: nothing gives it. Run in happy-dom. A time of day reads as every other on the page does (`clock`).
  */
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { flush } from "solid-js";
@@ -21,8 +20,6 @@ const before = (min: number): string => new Date(NOW - min * 60_000).toISOString
 const hhmm = (iso: string): string => iso.slice(11, 16);
 
 const TAKEOVER: View = { id: 12, at: before(7), by: { pid: 222, started: before(15), session: "sess-new" }, from: { pid: 111, started: before(300), session: "sess-old" } };
-
-const BLIND: View = { since: before(9), what: "chat", why: "EACCES: permission denied, access '/tmp/infra/chat.jsonl'" };
 
 let dispose: () => void;
 
@@ -77,35 +74,20 @@ test("a change of host, in words: when, who took the fleet from whom with each p
   expect([Core.takeoverOf(null), Core.takeoverOf({ at: before(7) }), Core.takeoverOf({ at: before(7), by: { pid: "x" }, from: { pid: 1 } })]).toEqual([null, null, null]);
 });
 
-test("a fleet the hub cannot read, in words: its chat or its session, since when, why, and that nobody is woken for it", () => {
-  const said = (v: View): string => {
-    const parsed = Core.blindOf(v);
-
-    if (!parsed) throw new Error("no blind");
-
-    return Core.blindWords(parsed, hhmm);
-  };
-
-  expect(said(BLIND)).toBe(`The hub cannot read this fleet's chat since ${hhmm(before(9))} (EACCES: permission denied, access '/tmp/infra/chat.jsonl'): it cannot tell whether your messages wait, and wakes nobody for it.`);
-  expect(said({ since: before(9), what: "session", why: "" })).toBe(`The hub cannot read this fleet's session since ${hhmm(before(9))}: it cannot tell whether it may be woken, and wakes nobody for it.`);
-  expect([Core.blindOf(null), Core.blindOf({ what: "chat" })]).toEqual([null, null]);
-});
-
-test("on the fleet's own page each is a line of the stuck band, and neither is there when the hub says nothing", () => {
+test("on the fleet's own page it is a line of the stuck band, and is not there when the hub says nothing", () => {
   show(coordinatorView(NOW));
-  expect([told("takeover"), told("blind")]).toEqual([[], []]);
+  expect(told("takeover")).toEqual([]);
   dispose();
-  show({ ...coordinatorView(NOW), takeover: TAKEOVER, blind: BLIND });
+  show({ ...coordinatorView(NOW), takeover: TAKEOVER, blind: { since: before(9), what: "chat", why: "" } });
   expect(told("takeover")).toEqual([Core.takeoverWords(Core.takeoverOf(TAKEOVER) ?? { at: "", by: { pid: 0, started: "", session: "" }, from: { pid: 0, started: "", session: "" } }, clock)]);
-  expect(told("blind")).toEqual([Core.blindWords(Core.blindOf(BLIND) ?? { since: "", what: "chat", why: "" }, clock)]);
+  expect(root.querySelectorAll(".stuck li[data-told]").length).toBe(1);
   expect(told("takeover")[0]).toContain("session sess-new (pid 222");
   expect(root.querySelector(".stuck h3")?.textContent).toBe("Stuck");
 });
 
 test("on the manager's page the line opens with the fleet's name, a link to its page", () => {
-  show(managerWith({ takeover: TAKEOVER, blind: BLIND }));
+  show(managerWith({ takeover: TAKEOVER }));
   expect(told("takeover")[0]?.startsWith(`infra: The host changed at ${clock(before(7))}: session sess-new (pid 222, `)).toBe(true);
-  expect(told("blind")[0]?.startsWith("infra: The hub cannot read this fleet's chat since ")).toBe(true);
   const links = [...root.querySelectorAll<HTMLAnchorElement>('.stuck li[data-fleet="infra"] a')].map((a) => a.textContent);
-  expect(links).toEqual(["infra", "infra"]);
+  expect(links).toEqual(["infra"]);
 });

@@ -182,7 +182,7 @@ test("a root-mode preview links the https address the hub serves it at, and says
   expect(own?.getAttribute("title") ?? "").not.toContain("secure context");
   const links = [...root.querySelectorAll("#preview .preview-root-link")].map((a) => a.getAttribute("href"));
   expect(links).toEqual(["https://box.example.ts.net:7501/"]);
-  expect(root.querySelector("#preview")?.textContent).toContain("The hub cannot serve https on port 7502: tailscale cert box.example.ts.net: HTTPS is disabled");
+  expect(root.querySelector("#preview")?.textContent).toContain("The preview server cannot serve https on port 7502: tailscale cert box.example.ts.net: HTTPS is disabled");
 });
 
 test("a preview that is not in root mode has no link of its own origin", () => {

@@ -1,8 +1,8 @@
 /**
  * The card "Unlock 1Password": on every page while 1Password is locked on the machine (the view's `onepw`,
- * fleet/src/onepw.ts), above everything else that waits, reading as an action of the user's. Its one button
- * posts to the hub, which tells the held fleets; the card goes when the state does. Run in happy-dom, through
- * `takeState`.
+ * fleet/src/onepw.ts), above everything else that waits, reading as an action of the user's. It gives the
+ * command that clears the lock, `fleet onepw unlocked`, for the user's own terminal, and posts nothing; the card
+ * goes when the state does. Run in happy-dom, through `takeState`.
  */
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { flush } from "solid-js";
@@ -27,8 +27,6 @@ const ONEPW: View = {
 };
 
 let posted: { readonly url: string; readonly method: string; readonly type: string; readonly body: string }[] = [];
-
-let answer: () => Response;
 
 let page: { m: Model; ui: Ui };
 
@@ -55,22 +53,18 @@ async function settle(): Promise<void> {
 
 const text = (sel: string): string => (root.querySelector(sel)?.textContent ?? "").replace(/\s+/gu, " ").trim();
 
-const button = (): HTMLButtonElement | null => root.querySelector<HTMLButtonElement>("#onepw-unlocked");
+const command = (): string => root.querySelector("#onepw-run code")?.textContent ?? "";
 
 beforeEach(() => {
   Object.assign(globalThis, { FleetCore: Core });
   localStorage.clear();
   location.hash = "";
   posted = [];
-  answer = () => Response.json({ cleared: true, told: [{ fleet: "skills", to: "coordinator", id: 4 }] });
-  // SAFETY: the stub answers the page's fetch calls; only the URL, the method, the type and the body are read.
+  // SAFETY: the stub records the page's fetch calls; only the URL, the method, the type and the body are read.
   globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
-    const url = String(input);
+    posted.push({ url: String(input), method: init?.method ?? "GET", type: new Headers(init?.headers).get("Content-Type") ?? "", body: String(init?.body ?? "") });
 
-    if (url !== "onepw/unlocked") return new Response("{}", { status: 404 });
-    posted.push({ url, method: init?.method ?? "GET", type: new Headers(init?.headers).get("Content-Type") ?? "", body: String(init?.body ?? "") });
-
-    return answer();
+    return new Response("{}", { status: 404 });
   }) as typeof fetch;
   root = document.createElement("div");
   document.body.append(root);
@@ -87,14 +81,13 @@ test("while 1Password is locked, a fleet's page and the manager's open with the 
     const card = root.querySelector("#onepw .ask");
     expect(card?.className).toBe("ask open blocking");
     expect(text("#onepw .ask-head")).toBe("Unlock 1Passwordblocks worksomething to do");
-    expect(text("#onepw .ask > .detail")).toBe("1Password, here or on the machine you are connected from, is refusing commands: SSH signing through 1Password failed. Unlock the app, then say so here.");
+    expect(text("#onepw .ask > .detail")).toBe("1Password, here or on the machine you are connected from, is refusing commands: SSH signing through 1Password failed. Unlock the app, then run the command below in your terminal, outside Claude Code: it tells each fleet that waits.");
     expect([...root.querySelectorAll("#onepw .onepw-waits")].map((l) => (l.textContent ?? "").replace(/\s+/gu, " ").trim())).toEqual([
       "Waiting: skills, for a push or fetch over SSH and reading secrets.",
       "Waiting: a session outside the fleets, for the GitHub CLI.",
     ]);
     expect(text("#onepw .ask > .meta")).toStartWith("Asked 42 min ago.");
-    expect(button()?.textContent).toBe("1Password is unlocked");
-    expect(button()?.disabled).toBe(false);
+    expect(command()).toBe("fleet onepw unlocked");
     expect(root.querySelector("#decisions")?.firstElementChild?.id).toBe("onepw");
     dispose();
     root.replaceChildren();
@@ -110,12 +103,12 @@ test("cleared and then locked again, it is the same card marked still locked: as
   expect(text("#onepw .ask-head")).toBe("Unlock 1Passwordblocks workstill lockedsomething to do");
   expect([...root.querySelectorAll("#onepw .ask-head .pill")].map((p) => p.className)).toEqual(["pill blocking", "pill warning", "pill plain"]);
   expect([...root.querySelectorAll("#onepw .ask > .detail")].slice(0, 2).map((l) => (l.textContent ?? "").replace(/\s+/gu, " ").trim())).toEqual([
-    "1Password, here or on the machine you are connected from, is refusing commands: SSH signing through 1Password failed. Unlock the app, then say so here.",
+    "1Password, here or on the machine you are connected from, is refusing commands: SSH signing through 1Password failed. Unlock the app, then run the command below in your terminal, outside Claude Code: it tells each fleet that waits.",
     "It was cleared and a command failed again 5 min ago.",
   ]);
   expect(root.querySelectorAll("#onepw .onepw-waits").length).toBe(2);
   expect(text("#onepw .ask > .meta")).toStartWith("Asked 42 min ago.");
-  expect(button()?.textContent).toBe("1Password is unlocked");
+  expect(command()).toBe("fleet onepw unlocked");
   page.m.takeState(JSON.stringify({ ...view, onepw: { ...ONEPW, again: stamp(20_000) }, updated: new Date(NOW + 1000).toISOString() }));
   flush();
   expect(text("#onepw .onepw-again")).toBe("It was cleared and a command failed again just now.");
@@ -147,35 +140,24 @@ test("the lead counts the card as one action that blocks work", () => {
   expect([text("#lead .lead-line"), text("#lead .lead-detail"), root.querySelector("#lead")?.className]).toEqual(["1 action waits on you.", "It blocks work.", "lead blocking"]);
 });
 
-test("the button posts to the hub, says the fleets are told, and the card goes when the state does", async () => {
+test("the card gives the command and posts nothing; it goes when the state does", async () => {
   const view = coordinatorView(NOW);
   show({ ...view, onepw: ONEPW });
-  button()?.click();
+  expect([root.querySelector("#onepw-unlocked"), root.querySelector("#onepw-run figure")?.getAttribute("data-lang")]).toEqual([null, "nu"]);
+
+  for (const b of root.querySelectorAll<HTMLButtonElement>("#onepw button")) b.click();
+
   await settle();
-  expect(posted).toEqual([{ url: "onepw/unlocked", method: "POST", type: "application/json", body: "{}" }]);
-  expect(text("#onepw-said")).toBe("The fleets are told.");
+  expect(posted).toEqual([]);
   page.m.takeState(JSON.stringify({ ...view, updated: new Date(NOW + 1000).toISOString() }));
   flush();
   expect(root.querySelector("#onepw")).toBeNull();
   expect(page.m.state.onepw).toBeNull();
 });
 
-test("a refusal shows the hub's reason and the card stays", async () => {
-  answer = () => Response.json({ error: "only luiz@example.com can write here" }, { status: 403 });
-  show({ ...coordinatorView(NOW), onepw: ONEPW });
-  button()?.click();
-  await settle();
-  expect(text("#onepw-said")).toBe("only luiz@example.com can write here");
-  expect(button()?.disabled).toBe(false);
-});
-
-test("a copy of the page that cannot reach the hub shows the card with its button disabled, and says why", async () => {
+test("a copy of the page with no server shows the same card and command", () => {
   show({ ...coordinatorView(NOW), onepw: ONEPW }, "unavailable");
-  expect(button()?.disabled).toBe(true);
-  expect(text("#onepw-said")).toBe("This copy of the page cannot tell the hub.");
-  button()?.click();
-  await settle();
-  expect(posted).toEqual([]);
+  expect(command()).toBe("fleet onepw unlocked");
 });
 
 test("a view without the key, or with one that is no card, shows none", () => {

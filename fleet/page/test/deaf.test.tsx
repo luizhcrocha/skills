@@ -131,14 +131,12 @@ test("a session that is gone says why when the hub does", () => {
   expect(said({ end: "gone", why: "another process has its pid (123)" })).toBe(`${head} The session is gone (another process has its pid (123)). Open it in a terminal.`);
 });
 
-test("where it stands while the hub still looks or waits: not known to be there, the last wake not read, in a tool call", () => {
+test("where it stands while the hub still waits: the last wake not read; an end the page does not know says nothing", () => {
   const said = (more: View): string => Core.deafWords(deafWith(more), hhmm);
   const head = `Not listening since ${hhmm(SINCE)}: 2 messages wait (#369…).`;
   const woken = `Woken ${hhmm(before(48))}, ${hhmm(before(38))}.`;
-  expect(said({ end: "unknown", why: "ps failed: exit 1", woken: [] })).toBe(`${head} The hub could not tell whether the session is there (ps failed: exit 1): it looks again.`);
-  expect(said({ end: "unknown", woken: [] })).toBe(`${head} The hub could not tell whether the session is there: it looks again.`);
   expect(said({ end: "queued" })).toBe(`${head} ${woken} The session has not read the last wake. Open it in a terminal.`);
-  expect(said({ end: "busy" })).toBe(`${head} ${woken} The session is in a tool call: the hub waits for it to end.`);
+  expect([said({ end: "unknown", why: "ps failed: exit 1" }), said({ end: "busy" })]).toEqual([`${head} ${woken}`, `${head} ${woken}`]);
 });
 
 test("how the button stands: held until a time it says how long is left, held with no time it is off, else it can be pressed", () => {
@@ -235,7 +233,7 @@ test("a hold no time ends: the button is off, the hub's reason its title; a view
   dispose();
   root.replaceChildren();
   show(managerWith({ ...DEAF, end: "queued", held: UNREAD }), "unavailable");
-  expect([button("infra")?.disabled, button("infra")?.title]).toEqual([true, "This copy of the page cannot tell the hub."]);
+  expect([button("infra")?.disabled, button("infra")?.title]).toEqual([true, "This copy of the page has no server to send this to."]);
 });
 
 test("a wake the hub held when it was asked (429) shows the hub's words, and the button stays", async () => {
@@ -255,7 +253,7 @@ test("a session that is gone has no button; a copy of the page that cannot reach
   dispose();
   root.replaceChildren();
   show(managerWith(DEAF), "unavailable");
-  expect([button("infra")?.disabled, button("infra")?.title]).toEqual([true, "This copy of the page cannot tell the hub."]);
+  expect([button("infra")?.disabled, button("infra")?.title]).toEqual([true, "This copy of the page has no server to send this to."]);
   button("infra")?.click();
   await settle();
   expect(posted).toEqual([]);
@@ -264,6 +262,6 @@ test("a session that is gone has no button; a copy of the page that cannot reach
 test("a key that is no such record is none", () => {
   for (const deaf of [undefined, null, "deaf", { unread: 2 }, { since: SINCE }, { since: SINCE, first: "369" }] as const) expect(Core.deafOf(deaf)).toBeNull();
   expect(Core.deafOf({ since: SINCE, first: 369, woken: [before(3), 7, null] })).toEqual({ since: SINCE, unread: 0, first: 369, woken: [before(3)], end: "", why: "", held: "", again: "" });
-  expect(Core.deafOf({ ...DEAF, end: "busy", held: MINUTE, again: before(-1) })).toMatchObject({ end: "busy", held: MINUTE, again: before(-1) });
+  expect(Core.deafOf({ ...DEAF, end: "queued", held: MINUTE, again: before(-1) })).toMatchObject({ end: "queued", held: MINUTE, again: before(-1) });
   expect(Core.deafOf({ ...DEAF, held: 7, again: false })).toMatchObject({ held: "", again: "" });
 });

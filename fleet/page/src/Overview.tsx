@@ -12,6 +12,7 @@ import { Approvals } from "./Approvals.tsx";
 import { Pill, PillAs, RefTag, usePage, When, Who, tf } from "./bits.tsx";
 import { Core, type Deaf, type Decision, type Json, type Lookup, type Message } from "./core.ts";
 import { Refs, RefsBeside } from "./DecisionRef.tsx";
+import { CodeBlock } from "./Rich.tsx";
 import { clock, dayTime, fmtDur, fmtInt, fmtShort, spentWords } from "./format.ts";
 import { keyed } from "./model.ts";
 import { ALL, held, narrow, scopes, type Scope } from "./scope.ts";
@@ -75,33 +76,12 @@ const UNLOCK = { status: "open", asks: "user", blocking: true, kind: "action" } 
 /**
  * While 1Password is locked on the machine: the card that asks the user to unlock it, the same on every
  * page, above everything else that waits. It reads as an action of the user's, though no decision holds it:
- * the hub shows it from the machine's state, and it goes when that state does. The button tells the hub,
- * which tells each held fleet in its chat. Cleared and then seen locked again, it is the same card, asked
- * since the same moment, marked "still locked".
+ * it shows from the machine's state, and it goes when that state does. The user clears the lock by running
+ * `fleet onepw unlocked` in his own terminal, which tells each held fleet; no page answers for him. Cleared
+ * and then seen locked again, it is the same card, asked since the same moment, marked "still locked".
  */
 function Unlock(): JSX.Element {
   const { m } = usePage();
-  const [said, setSaid] = createSignal("");
-  const [busy, setBusy] = createSignal(false);
-  const denied = (): string => (m.chatWritable() ? "" : m.chatAvailable() ? m.write().reason || "Read-only here." : "This copy of the page cannot tell the hub.");
-
-  async function unlocked(): Promise<void> {
-    if (!m.chatWritable() || busy()) return;
-    setBusy(true);
-    setSaid("");
-
-    try {
-      const res = await fetch("onepw/unlocked", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
-      // SAFETY: the hub answers {cleared, told} or {error}; anything else shows as its status.
-      const body = (await res.json().catch(() => ({}))) as { readonly error?: string };
-
-      setSaid(res.ok ? "The fleets are told." : (body.error ?? `the hub answered ${String(res.status)}`));
-    } catch {
-      setSaid("the hub did not answer");
-    }
-
-    setBusy(false);
-  }
 
   return (
     <Show when={m.state.onepw}>
@@ -117,7 +97,7 @@ function Unlock(): JSX.Element {
                 </Show>
                 <PillAs cls="plain" text={KIND_WORDS["action"] ?? ""} />
               </span>
-              <span class="detail">1Password, here or on the machine you are connected from, is refusing commands: {o().why}. Unlock the app, then say so here.</span>
+              <span class="detail">1Password, here or on the machine you are connected from, is refusing commands: {o().why}. Unlock the app, then run the command below in your terminal, outside Claude Code: it tells each fleet that waits.</span>
               <Show when={o().again}>{(again) => <span class="detail onepw-again">It was cleared and a command failed again {m.ago(again())}.</span>}</Show>
               <For each={o().waiting} keyed={(w) => w.who}>
                 {(w) => (
@@ -127,14 +107,9 @@ function Unlock(): JSX.Element {
                 )}
               </For>
               <span class="meta">Asked {m.ago(o().since)}. Every fleet holds its commands that need 1Password until then, and goes on with the rest.</span>
-              <button type="button" class="btn primary" id="onepw-unlocked" disabled={!m.chatWritable() || busy()} title={denied() || undefined} onClick={() => void unlocked()}>
-                {busy() ? "Telling the fleets…" : "1Password is unlocked"}
-              </button>
-              <Show when={said() || denied()}>
-                <span class="meta" id="onepw-said" role="status">
-                  {said() || denied()}
-                </span>
-              </Show>
+              <div id="onepw-run">
+                <CodeBlock lang="nu" text="fleet onepw unlocked" />
+              </div>
             </div>
           </div>
         </div>
@@ -154,7 +129,7 @@ function DeafRow(props: { readonly fleet: string; readonly deaf: Deaf }): JSX.El
   const { m } = usePage();
   const [said, setSaid] = createSignal("");
   const [busy, setBusy] = createSignal(false);
-  const denied = (): string => (m.chatWritable() ? "" : m.chatAvailable() ? m.write().reason || "Read-only here." : "This copy of the page cannot tell the hub.");
+  const denied = (): string => (m.chatWritable() ? "" : m.chatAvailable() ? m.write().reason || "Read-only here." : "This copy of the page has no server to send this to.");
   const stands = createMemo(() => Core.wakeButton(props.deaf, m.tick()));
 
   async function wake(): Promise<void> {
@@ -164,12 +139,12 @@ function DeafRow(props: { readonly fleet: string; readonly deaf: Deaf }): JSX.El
 
     try {
       const res = await fetch("wake", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(props.fleet ? { fleet: props.fleet } : {}) });
-      // SAFETY: the hub answers {woken, fleet, at} or {error} (with `again` when it holds the wake); anything else shows as its status.
+      // SAFETY: the page's server answers {woken, fleet, at} or {error} (with `again` when it holds the wake); anything else shows as its status.
       const body = (await res.json().catch(() => ({}))) as { readonly error?: string };
 
-      setSaid(res.ok ? "Woken now." : (body.error ?? `the hub answered ${String(res.status)}`));
+      setSaid(res.ok ? "Woken now." : (body.error ?? `the page's server answered ${String(res.status)}`));
     } catch {
-      setSaid("the hub did not answer");
+      setSaid("the page's server did not answer");
     }
 
     setBusy(false);
@@ -271,11 +246,11 @@ function Lead(): JSX.Element {
                       ? `The ${who()} is not reading; tell it in its session.`
                       : `The ${who()} has it and has not acted; tell it in its session if it stays.`;
 
-                // What the hub says whole: a change of host, a fleet its look cannot read.
+                // What the hub says whole: a change of host.
                 const told = (): string => {
                   const row = r();
 
-                  return row.takeover ? Core.takeoverWords(row.takeover, clock) : row.blind ? Core.blindWords(row.blind, clock) : "";
+                  return row.takeover ? Core.takeoverWords(row.takeover, clock) : "";
                 };
 
                 return (
@@ -293,7 +268,7 @@ function Lead(): JSX.Element {
                           </li>
                         }
                       >
-                        <li class="hub-told" data-told={r().takeover ? "takeover" : "blind"} data-fleet={r().fleet || "here"}>
+                        <li class="hub-told" data-told="takeover" data-fleet={r().fleet || "here"}>
                           <Show when={r().fleet}>
                             <a href={m.fleetPage(r().fleet)}>{r().fleet}</a>:{" "}
                           </Show>
