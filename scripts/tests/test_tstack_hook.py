@@ -1734,6 +1734,94 @@ class SaidOnceTest(FleetCase):
         self.say_on_page(n=43, re=42)
         self.assertIn("(#43)", self.blocked(self.stop(last=self.LONG)))  # a new turn is held to it again
 
+    # A moved team records through programs (coordinator/PROGRAMS.md): `fleet-run` prints the outcome, one result
+    # per op, a say's `applied` under its new message number.
+    RUN = f"FLEET_DIR=$PWD {ROOT}/fleet/bin/fleet-run <<'EOF'\n{{program}}\nreturn records.apply(ops);\nEOF"
+
+    def run_program(self, program, *results, is_error=False):
+        """A `fleet-run` call and its outcome, each of RESULTS (kind, tag, key) one op's result in order."""
+        ops = [{"_tag": tag, "id": f"01K{n:023d}", "kind": kind, "key": key}
+               for n, (kind, tag, key) in enumerate(results)]
+        outcome = {"id": "01K8Z", "status": "completed", "executionId": "e1", "result": ops, "logs": [], "pending": [],
+                   "ops": ops}
+        self.bash(self.RUN.format(program=program), json.dumps(outcome, indent=2) + "\n", is_error=is_error)
+
+    def test_a_fleet_run_say_answering_the_users_message_counts(self):
+        self.transcribe(said("go"))
+        self.say(41, "2026-01-05T09:00:00+00:00", text="how is the deploy?")
+        self.run_program('event("note", "a1 green; say(…) next");\n'
+                         'say("The deploy is green: (staging) done.", { re: 41 });',
+                         ("event", "applied", "e12"), ("message", "applied", "42"))
+        self.reply("Answered #42 on the page.")
+        self.assertSilent(self.stop(last="Answered #42 on the page."))
+        self.reply(self.LONG)
+        reason = self.blocked(self.stop(last=self.LONG))
+        self.assertTrue(reason.startswith("You answered on the page (#42)."), reason)
+        self.assertIn("'Answered #42 on the page.'", reason)
+
+    def test_a_fleet_run_say_naming_a_card_the_user_answered_counts(self):
+        self.transcribe(said("go"))
+        self.say(61, "2026-01-05T09:00:00+00:00", text="Picked b: KV", decision="D219")
+        self.run_program('say(`Sessions go to KV, as you picked on D219.`, {decision: "D219"})',
+                         ("message", "applied", "62"))
+        self.assertIn("(#62)", self.blocked(self.stop(last=self.LONG)))
+
+    def test_a_fleet_run_say_from_a_turn_woken_by_the_users_chat_line_counts(self):
+        line = "#50 user -> coordinator: where are we on the login form?"
+        self.say(50, "2026-01-05T09:00:00+00:00", text="where are we on the login form?")
+        self.transcribe(said(f"<task-notification>\n<status>completed</status>\n<result>{line}</result>\n"
+                             "</task-notification>"))
+        self.run_program('say("The login form is in review.")', ("message", "applied", "51"))
+        self.assertIn("(#51)", self.blocked(self.stop(last=self.LONG)))
+
+    def test_a_user_line_that_arrives_mid_turn_starts_the_turn_again(self):
+        self.transcribe(said("go"))
+        self.say_on_page()
+        # the user types in the terminal while the turn runs: what follows answers them there
+        self.transcribe({"type": "attachment", "uuid": "q1", "attachment": {
+            "type": "queued_command", "prompt": "explain it here", "commandMode": "prompt"}})
+        self.reply(self.LONG)
+        self.assertSilent(self.stop(last=self.LONG))
+        # a chat line queued mid-turn, answered on the page, is held to the rule
+        self.say(50, "2026-01-05T09:00:00+00:00", text="and the login form?")
+        self.transcribe({"type": "attachment", "uuid": "q2", "attachment": {
+            "type": "queued_command", "commandMode": "task-notification",
+            "prompt": "<task-notification><result>#50 user -> coordinator: and the login form?</result>"
+                      "</task-notification>"}})
+        self.run_program('say("In review.")', ("message", "applied", "51"))
+        self.assertIn("(#51)", self.blocked(self.stop(last=self.LONG)))
+
+    def test_a_fleet_run_say_that_answers_no_user_line_does_not_count(self):
+        self.transcribe(said("go"))
+        self.say(30, "2026-01-05T09:00:00+00:00", frm="a1", text="a1: done")
+        self.say(41, "2026-01-05T09:01:00+00:00", text="how is the deploy?")
+        self.run_program('say("thanks, a1", { re: 30 });\nsay("status: a2 runs");\n'
+                         'say("on it", { re: 41, to: ["a1"] });\n'
+                         'say("D9 asks where sessions live", { decision: "D9" });\n'
+                         'event("note", \'say("x", { re: 41 })\');',
+                         *[("message", "applied", str(n)) for n in range(31, 35)], ("event", "applied", "e1"))
+        self.run_program('say("refused", { re: 41 })', ("message", "refused", "35"))
+        self.run_program('say("queued", { re: 41 })', is_error=True)
+        self.bash(f"FLEET_DIR=$PWD {ROOT}/fleet/bin/fleet-run --types", "declare function say(text: string, "
+                  "options?: { re?: number }): LogDraft;\n")
+        self.assertSilent(self.stop(last=self.LONG))
+
+    def test_a_picasso_mark_reply_counts(self):
+        self.transcribe(said("<task-notification><result>mark m-x7 created: the header overlaps</result>"
+                             "</task-notification>"))
+        self.bash('cd ~/app && picasso mark-reply m-x7 "Fixed: the header now sits under the nav."',
+                  '{\n  "ok": true,\n  "result": {\n    "replied": true\n  }\n}\n')
+        self.assertSilent(self.stop(last="Answered on mark m-x7."))
+        reason = self.blocked(self.stop(last=self.LONG))
+        self.assertTrue(reason.startswith("You answered on the page (mark m-x7)."), reason)
+        self.assertIn("'Answered on mark m-x7.'", reason)
+
+    def test_a_failed_picasso_mark_reply_does_not_count(self):
+        self.transcribe(said("go"))
+        self.bash("picasso mark-reply m-x7 'done'", "picasso: no connected tab matches", is_error=True)
+        self.bash("picasso marks", '{\n  "ok": true,\n  "result": []\n}\n')
+        self.assertSilent(self.stop(last=self.LONG))
+
     def test_a_malformed_transcript_fails_open(self):
         self.transcript.write_bytes(os.urandom(2048) + b'\n{"type":"user" broken\n[1]\n"tool_use"\n'
                                     + b'{"type":"assistant","message":{"content":[{"type":"tool_use",'

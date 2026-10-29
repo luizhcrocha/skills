@@ -1400,7 +1400,7 @@ def fleet_news(hook):
 
 
 SAID_ONCE = ("You answered on the page ({where}). Said once: end this turn with one line naming where, e.g. "
-             "'Answered {first} on the page.' Do not repeat the answer here.")
+             "'{example}' Do not repeat the answer here.")
 SAID_ONCE_CHARS = 200  # "Answered #42 on the page." and a short note of what comes next fit; an answer does not
 SAID_ONCE_LINES = 2
 SAID_ONCE_TAIL = 256 * 1024  # the turn is read from the transcript's end, the window doubled until it holds it
@@ -1409,16 +1409,36 @@ SAID_ONCE_MAX = 8 * 1024 * 1024  # a turn longer than this is let stop: never re
 # (fleet/src/chat/chat.ts renderLines). A news item (`#21 <stamp> skills -> all [release, kept]: text`),
 # a `fleet tell` (`<fleet>: ...`) or a state event never ends in `[re #M]`.
 _POSTED = re.compile(r"^#(\d+) \S+(?: \([^)]*\))? -> (.+?): .*\[re #(\d+)(?:, marks? [\d, ]+)?\]\s*$", re.M)
+# The user's own chat line as a watch prints it (`#50 user -> coordinator: text`), in what woke the turn.
+_USER_LINE = re.compile(r"(?:^|[\s>])#(\d+) user(?: \([^)]*\))? -> ")
+# A moved team's one command (coordinator/PROGRAMS.md), by any path, its program on stdin.
+_FLEET_RUN = re.compile(r"(?:^|[\s/;&|(])fleet-run(?=$|[\s;&|)<])")
+# `picasso mark-reply <id> <text>`: an answer on the user's mark, shown in the page's overlay.
+_MARK_REPLY = re.compile(r"(?:^|[\s/;&|(])picasso\s+mark-reply\s+(?:--?[\w-]+\s+)*['\"]?([\w.:-]+)")
+
+
+def _start_text(entry):
+    """The words that start a turn, or None: a user entry carrying text (a prompt, a task notification), or
+    a message queued while the turn ran (the user's typed line, or a notification, as Claude Code attaches it)."""
+    if entry.get("isSidechain"):
+        return None
+    if entry.get("type") == "attachment":
+        a = entry.get("attachment")
+        ok = isinstance(a, dict) and a.get("type") == "queued_command" and isinstance(a.get("prompt"), str)
+        return a["prompt"] if ok else None
+    if entry.get("type") != "user":
+        return None
+    content = (entry.get("message") or {}).get("content")
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list) and any(isinstance(b, dict) and b.get("type") == "text" for b in content):
+        return "\n".join(str(b.get("text") or "") for b in content if isinstance(b, dict) and b.get("type") == "text")
+    return None
 
 
 def _is_prompt(entry):
-    """Whether a transcript entry starts a turn: a user entry carrying text, not only tool results."""
-    if entry.get("type") != "user" or entry.get("isSidechain"):
-        return False
-    content = (entry.get("message") or {}).get("content")
-    if isinstance(content, str):
-        return True
-    return isinstance(content, list) and any(isinstance(b, dict) and b.get("type") == "text" for b in content)
+    """Whether a transcript entry starts a turn (`_start_text`): not a tool result."""
+    return _start_text(entry) is not None
 
 
 def _current_turn(path):
@@ -1465,9 +1485,67 @@ def _is_say(command):
                for i in range(1, len(words) - 2))
 
 
+def _js_masked(src):
+    """A program's code with each string literal (quoted or a template) as `"i"`, i its index in the list of
+    their texts, and `//` comments cut: a say or an option named inside a string is not code."""
+    out, strings, i, n = [], [], 0, len(src)
+    while i < n:
+        c = src[i]
+        if c in "'\"`":
+            j, text = i + 1, []
+            while j < n and src[j] != c:
+                text.append(src[j + 1] if src[j] == "\\" and j + 1 < n else src[j])
+                j += 2 if src[j] == "\\" else 1
+            out.append(f'"{len(strings)}"')
+            strings.append("".join(text))
+            i = j + 1
+        elif src.startswith("//", i):
+            i = n if src.find("\n", i) < 0 else src.find("\n", i)
+        else:
+            out.append(c)
+            i += 1
+    return "".join(out), strings
+
+
+def _program_says(command):
+    """The `say(text, options)` calls of a `fleet-run` program in a shell command, in order, each as
+    (re, decision, to the user): its options read as the prelude does (`to` defaults to the user)."""
+    run = _FLEET_RUN.search(command)
+    if not run:
+        return []
+    code, strings = _js_masked(command[run.end():])
+    says = []
+    for m in re.finditer(r"(?<![\w.$])say\s*\(", code):
+        depth, end = 1, m.end()
+        while end < len(code) and depth:
+            depth += {"(": 1, ")": -1}.get(code[end], 0)
+            end += 1
+        args = code[m.end():end]
+        r = re.search(r"\bre\s*:\s*(\d+)", args)
+        d = re.search(r"\bdecision\s*:\s*\"(\d+)\"", args)
+        to = re.search(r"\bto\s*:\s*\[([^\]]*)\]", args)
+        to_user = to is None or "user" in [strings[int(x)] for x in re.findall(r'"(\d+)"', to.group(1))]
+        says.append((int(r.group(1)) if r else None, strings[int(d.group(1))] if d else None, to_user))
+    return says
+
+
+def _run_messages(text):
+    """The message numbers a `fleet-run` outcome printed as applied, in op order: each say's new line."""
+    for m in re.finditer(r"(?m)^\{", text):
+        try:
+            outcome, _ = json.JSONDecoder().raw_decode(text, m.start())
+        except ValueError:
+            continue
+        if isinstance(outcome, dict) and isinstance(outcome.get("ops"), list):
+            ops = [o for o in outcome["ops"] if isinstance(o, dict) and o.get("kind") == "message"]
+            return [str(o.get("key")) if o.get("_tag") == "applied" else None for o in ops]
+    return []
+
+
 def _from_user(dirs, ids):
-    """Which of the message numbers `ids` are the user's own messages, in the chats of the fleets `dirs`."""
-    found = set()
+    """(which of the message numbers `ids` are the user's own messages, the cards the user's lines name: an
+    answer on a card), in the chats of the fleets `dirs`."""
+    found, cards = set(), set()
     for d in dirs:
         try:
             with open(os.path.join(d, "chat.jsonl"), "rb") as f:
@@ -1478,11 +1556,15 @@ def _from_user(dirs, ids):
                         m = json.loads(line)
                     except ValueError:
                         continue
-                    if isinstance(m, dict) and m.get("from") == "user" and m.get("id") in ids:
+                    if not isinstance(m, dict) or m.get("from") != "user":
+                        continue
+                    if m.get("id") in ids:
                         found.add(m["id"])
+                    if isinstance(m.get("decision"), str):
+                        cards.add(m["decision"])
         except OSError:
             continue
-    return found
+    return found, cards
 
 
 def _blocks(entry, kind):
@@ -1500,14 +1582,19 @@ def _result_text(block):
 
 
 def fleet_said_once(hook):
-    """Stop: a coordinator or manager that answered the user on the page this turn (a `fleet chat DIR say
-    --re M` whose output shows the message written to the user, M being one of the user's own messages)
-    ends the turn with one line naming where, not the answer again. A news post, a `fleet tell`, a state
-    event, or a message that answers no message of the user's is not an answer on the page. A final text over SAID_ONCE_LINES lines or SAID_ONCE_CHARS characters is blocked, once per
-    turn: never on a stop that follows a stop hook's block (stop_hook_active), nor twice for one prompt."""
+    """Stop: a coordinator or manager that answered the user on the page this turn ends the turn with one line
+    naming where, not the answer again. An answer on the page is a `fleet chat DIR say --re M` whose output
+    shows the message written to the user, M one of the user's own messages; a `fleet-run` program's `say` to
+    the user that `applied`, with `re` one of the user's messages, `decision` a card the user's line answered,
+    or in a turn the user's chat line woke; or a `picasso mark-reply` that answered ok (mark <id>). A news
+    post, a `fleet tell`, a state event, or a message that answers no message of the user's is not one. A
+    turn starts at a prompt, a task notification, or a line queued while the turn ran. A final text over
+    SAID_ONCE_LINES lines or SAID_ONCE_CHARS characters is blocked, once per turn: never on a stop that
+    follows a stop hook's block (stop_hook_active), nor twice for one turn."""
     if fleet_worker(hook) or hook.input.get("stop_hook_active"):
         return None
-    if not any(read_ledger(d) is not None for d in fleet_dirs(hook)):
+    dirs = fleet_dirs(hook)
+    if not any(read_ledger(d) is not None for d in dirs):
         return None
     path = hook.input.get("transcript_path")
     if not isinstance(path, str) or not os.path.isfile(path):
@@ -1519,18 +1606,39 @@ def fleet_said_once(hook):
     state = hook.load_state("said-once") if hook.session_id else {}
     if state.get("turn") == key:
         return None
-    says = [b.get("id") for e in entries if e.get("type") == "assistant" for b in _blocks(e, "tool_use")
-            if b.get("name") == "Bash" and _is_say(str((b.get("input") or {}).get("command") or ""))]
-    replies = []
+    calls = {}
+    for e in entries:
+        if e.get("type") != "assistant":
+            continue
+        for b in _blocks(e, "tool_use"):
+            command = str((b.get("input") or {}).get("command") or "") if b.get("name") == "Bash" else ""
+            mark = _MARK_REPLY.search(command)
+            calls[b.get("id")] = ("say" if _is_say(command) else "mark" if mark else "run", mark, command)
+    candidates, marks = [], []  # (where, re, decision, to the user)
     for e in entries:
         for b in _blocks(e, "tool_result"):
-            if b.get("tool_use_id") in says and not b.get("is_error"):
-                replies += [(int(n), int(m)) for n, to, m in _POSTED.findall(_result_text(b))
-                            if re.search(r"(?:^|, )user\b", to)]
-    if not replies:
+            if b.get("tool_use_id") not in calls or b.get("is_error"):
+                continue
+            kind, mark, command = calls[b["tool_use_id"]]
+            text = _result_text(b)
+            if kind == "say":
+                candidates += [(f"#{n}", int(m), None, True) for n, to, m in _POSTED.findall(text)
+                               if re.search(r"(?:^|, )user\b", to)]
+            elif kind == "mark":
+                if re.search(r'"ok":\s*true', text):
+                    marks.append(f"mark {mark.group(1)}")
+            elif says := _program_says(command):
+                keys = _run_messages(text)
+                if len(keys) == len(says):
+                    candidates += [(f"#{k}", *say) for k, say in zip(keys, says) if k]
+                else:  # a say in a loop or a branch: each line it applied, by what any of its says asked
+                    candidates += [(f"#{k}", *say) for k in keys if k for say in says]
+    woke = {int(n) for n in _USER_LINE.findall(_start_text(entries[0]) or "")} if entries else set()
+    if not candidates and not marks:
         return None
-    asked = _from_user(fleet_dirs(hook), {m for _, m in replies})
-    posted = [f"#{n}" for n, m in replies if m in asked]
+    asked, cards = _from_user(dirs, {r for _, r, _, _ in candidates if r is not None} | woke)
+    posted = [where for where, r, card, to_user in candidates
+              if to_user and (r in asked or card in cards or woke & asked)] + marks
     if not posted:
         return None
     final = hook.input.get("last_assistant_message")
@@ -1544,7 +1652,10 @@ def fleet_said_once(hook):
         return None
     if hook.session_id:
         hook.save_state("said-once", {"turn": key})
-    return Block(SAID_ONCE.format(where=", ".join(dict.fromkeys(posted)), first=posted[-1]))
+    posted = list(dict.fromkeys(posted))
+    last = posted[-1]
+    example = f"Answered on {last}." if last.startswith("mark ") else f"Answered {last} on the page."
+    return Block(SAID_ONCE.format(where=", ".join(posted), example=example))
 
 
 NUDGE_EVERY_S = 60
