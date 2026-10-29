@@ -49,8 +49,9 @@ export interface Target {
   readonly prefix: string;
   /** The per-worker preview's worker, undefined for the combined one: whose last request the hub notes. */
   readonly worker: string | undefined;
-  /** Whether it is served on the hub's own origin (`/f/<fleet>/preview/`), beside the pages that hold the page token,
-   * rather than on a root-mode preview's port and origin of its own: on it, `proxyHttp` drops `ORIGIN_WIDE`. */
+  /** Whether it is served on an origin it shares: the hub's own (`/f/<fleet>/preview/`), beside the pages that hold the
+   * page token, or the public side's, beside the other shares (`preview-share.ts`); rather than on a root-mode
+   * preview's port and origin of its own. On a shared one, `proxyHttp` drops `ORIGIN_WIDE`. */
   readonly onHubOrigin: boolean;
 }
 
@@ -258,8 +259,8 @@ export function proxiedHost(req: Request, ip: string, onHubOrigin: boolean): Hea
 
 /** Ask the dev server for `target` as the browser asked the hub for it, with `identity` (`proxiedIdentity`)
  * for who asked and where (`proxiedHost`); its answer, passed back, on the hub's origin (`Target.onHubOrigin`) without the headers that act
- * on the whole origin (`ORIGIN_WIDE`). */
-export async function proxyHttp(req: Request, target: Target, search: string, identity: Headers): Promise<Response> {
+ * on the whole origin (`ORIGIN_WIDE`). A dev server that does not answer is `down`, else a 502 that says its port and why. */
+export async function proxyHttp(req: Request, target: Target, search: string, identity: Headers, down?: () => Response): Promise<Response> {
   const headers = new Headers();
 
   req.headers.forEach((value, key) => {
@@ -301,6 +302,8 @@ export async function proxyHttp(req: Request, target: Target, search: string, id
     return new Response(req.method === "HEAD" ? null : upstream.body, { status: upstream.status, statusText: upstream.statusText, headers: passed });
   } catch (cause: unknown) {
     if (kept(target.server)) return startingPage(req);
+
+    if (down !== undefined) return down();
 
     return new Response(JSON.stringify({ error: `the preview's dev server did not answer on port ${target.server.port}: ${cause instanceof Error ? cause.message : String(cause)}` }), {
       status: 502,

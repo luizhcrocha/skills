@@ -12,6 +12,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { recordJson, type DevServer, type PreviewRecord } from "../src/preview/record.ts";
 import { seenPath } from "../src/preview/sleep.ts";
 import { startedAt } from "../src/preview/tracked.ts";
+import { createShare } from "../src/hub/preview-share.ts";
 import { hubClaimPath, hubRecordPath, previewServerPath, startPreviewServer, type PreviewServerOptions, type PreviewServing } from "../src/hub/preview-server.ts";
 import { runningHub } from "../src/hub/server.ts";
 import { baseEnv, fleet, FLEET, machine, tmp, type Environment } from "./support.ts";
@@ -315,4 +316,33 @@ esac
     await hub.exited;
     expect(await until(mine)).toBe(true);
   }, 30_000);
+
+  test("the public side, on its own port: a share's link, its password, its cookie, its page and its HMR socket, held while a hub runs", async () => {
+    const sharePort = freePort();
+    await restart({ sharePort, hubRuns: () => hubRuns });
+    const own = stub("a1");
+    writeRecord(dir, "shop", { workers: [{ ...devServer(own, "/f/shop/preview/a1/", dir), worker: "a1" }] });
+    const { token, password } = createShare(join(base, "registry"), { fleet: "shop", dir, worker: "a1", ms: 60 * 60 * 1000, password: undefined, now: Date.now() });
+    const pub = (path: string): string => `http://127.0.0.1:${sharePort}${path}`;
+    expect((await fetch(pub(`/${token}/`))).status).toBe(200);
+    expect((await fetch(pub("/f/shop/preview/a1/"))).status).toBe(404);
+    const signed = await fetch(pub(`/${token}/`), { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" }, body: new URLSearchParams({ password }).toString(), redirect: "manual" });
+    expect(signed.status).toBe(303);
+    const cookie = (signed.headers.get("Set-Cookie") ?? "").split(";")[0] ?? "";
+    hubRuns = true;
+    expect(await until(async () => !(await answers()))).toBe(true);
+    const page = await fetch(pub("/f/shop/preview/a1/"), { headers: { Cookie: cookie } });
+    expect([page.status, await page.text()]).toEqual([200, "a1 GET /f/shop/preview/a1/"]);
+    const socket = new WebSocket(`ws://127.0.0.1:${sharePort}/f/shop/preview/a1/`, { protocols: ["vite-hmr"], headers: { Cookie: cookie } });
+
+    const got = new Promise<string>((resolve, reject) => {
+      socket.addEventListener("message", (e) => resolve(String(e.data)));
+      socket.addEventListener("error", () => reject(new Error("socket failed")));
+    });
+
+    await new Promise<void>((resolve) => socket.addEventListener("open", () => resolve()));
+    socket.send("hi");
+    expect(await got).toBe("a1 echo:hi");
+    socket.close();
+  });
 });

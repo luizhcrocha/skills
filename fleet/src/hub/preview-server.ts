@@ -23,6 +23,7 @@ import { PreviewPorts } from "./preview-ports.ts";
 import { previewSockets, type SocketData, type Upgrade } from "./preview-proxy.ts";
 import { servePreviewPort } from "./preview-serve.ts";
 import { PreviewCertificate, tailscaleCertificate, type CertificateSource } from "./preview-tls.ts";
+import { FUNNEL_PORT, PublicShares } from "./preview-share.ts";
 import { answersAt, jsonResponse, Logins, Previews, serviceWorkerGuard } from "./previews.ts";
 import { readTailnet, tailscale, type Tailnet } from "./tailnet.ts";
 
@@ -80,6 +81,8 @@ export interface PreviewServerOptions {
   readonly certificate?: CertificateSource;
   /** Whether a hub holds the ports now (tests); else {@link hubHolds}. */
   readonly hubRuns?: () => boolean;
+  /** The loopback port of the public side, for shared previews (`preview-share.ts`, behind Tailscale Funnel); none when undefined. */
+  readonly sharePort?: number;
   /** How often it looks whether to take or let go of the ports, and syncs the root-mode ones (ms). */
   readonly tickMs?: number;
 }
@@ -279,6 +282,27 @@ export async function startPreviewServer(options: PreviewServerOptions, log: (li
   makePrivateDir(join(home, "hub"));
   writeAtomic(previewServerPath(home), `${dumps({ pid: process.pid, port, https: options.https ?? null }, { indent: 2 })}\n`);
   await tick();
+  // The public side is apart from the private one: its own port, on loopback only (Funnel forwards to it), held
+  // whether or not a hub runs, and it answers only a share's link and its signed-in browsers.
+  const shares = new PublicShares({ home, now: () => Date.now(), log, host: () => (server.tailnet === undefined ? undefined : `${server.tailnet.self.dns}:${String(FUNNEL_PORT)}`) });
+  let publicSide: Server | undefined;
+
+  try {
+    publicSide =
+      options.sharePort === undefined
+        ? undefined
+        : Bun.serve<SocketData>({
+            hostname: "127.0.0.1",
+            port: options.sharePort,
+            idleTimeout: 60,
+            websocket: previewSockets,
+            fetch: (req, srv) => shares.fetch(req, (data, headers) => srv.upgrade(req, { data, headers })),
+            error: () => new Response("error\n", { status: 500 }),
+          });
+  } catch (cause: unknown) {
+    log(`no shared previews: cannot listen on 127.0.0.1:${String(options.sharePort)}: ${cause instanceof Error ? cause.message : String(cause)}`);
+  }
+
   const ticking = setInterval(() => void tick(), options.tickMs ?? 1000);
 
   const reread = setInterval(() => {
@@ -294,6 +318,7 @@ export async function startPreviewServer(options: PreviewServerOptions, log: (li
       clearInterval(reread);
       clearInterval(recertify);
       await release();
+      void publicSide?.stop(true);
 
       if (asNumber(asObject(Option.getOrUndefined(parseObject(readText(previewServerPath(home)) ?? "")))?.["pid"]) === process.pid) remove(previewServerPath(home));
     },
