@@ -138,7 +138,9 @@ opens. It refuses there too a call no page ask can hold (whyNoAsk, DASHBOARD.md'
 /abs/x.sh`, a script by a relative path), a program given by its path (`/abs/deploy.sh`), a wrapper (`env`,
 `timeout`, `sudo`), an assignment that changes what runs (`PATH=`, `BASH_ENV=`), inline code (`node -e`), and any
 program a page ask does not know. Open a script call from the machine: run it as a Bash call of its own, and when
-auto mode refuses it, the hook opens its card with the files it runs.
+auto mode refuses it, the hook opens its card with the files it runs. A refused call it opens no card for (a pipe,
+which no exact rule clears, or anything above) comes back beside your next tool call: no card, why, and the call
+that gets one (`bash /abs/x.sh 2>&1` for `bash /abs/x.sh 2>&1 | tail -4`). Tell the user of a card only once it is open.
 
 An event, and a note kept for the next session:
 

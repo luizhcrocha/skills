@@ -1965,10 +1965,15 @@ def _noted_caller(hook, agent_id):
     return "main" if hook.env.get("FLEET_WORKER") else None
 
 
-def _owe_note(hook, r, d, draft_id, told):
+def _owe_note(hook, r, d, draft_id, told, no_card=None):
     """Remember the note for the caller whose call was refused: one file per draft, so two refusals at once (the
-    event runs async) both stay owed. `told` is whether the CLI reached the host with its line."""
+    event runs async) both stay owed. `told` is whether the CLI reached the host with its line. `no_card` is why a
+    moved fleet's hook opened no card: the host's main thread, which hears no line of the CLI there, is owed its
+    note too (_own_note), so it never tells the user a card is on the page that is not."""
     caller = _noted_caller(hook, r.agent_id)
+    own = caller is None and no_card is not None
+    if own:
+        caller = "main"
     if not caller or not hook.session_id:
         return
     folder = _refusal_notes(hook)
@@ -1977,7 +1982,9 @@ def _owe_note(hook, r, d, draft_id, told):
         path = folder / f"{_refusal_key(caller, '')}.{re.sub(r'[^A-Za-z0-9_.-]', '_', draft_id)}"
         tmp = path.with_name(f".{path.name}.{os.getpid()}")
         tmp.write_text(json.dumps({"at": fleet_now(hook.env), "tool": r.tool, "reason": _one_line(r.reason, 120),
-                                   "id": draft_id, "host": fleet_role(read_ledger(d)), "told": bool(told)}))
+                                   "id": draft_id, "host": fleet_role(read_ledger(d)), "told": bool(told),
+                                   **({"own": True, "why": _one_line(no_card, 300), "shape": _card_shape(r)}
+                                      if own else {})}))
         os.replace(tmp, path)
     except OSError as e:
         log(hook.data_dir, f"{hook.event} fleet_permission_denied: the note for the refused worker cannot be kept ({e})")
@@ -1987,9 +1994,71 @@ def _listed(ids):
     return f"refusal draft {ids[0]}" if len(ids) == 1 else f"refusal drafts {', '.join(ids)}"
 
 
+CARD_SHAPE_RULE = ("A card opens only for a call an exact allow rule holds and a page ask binds: one line with no |, *, "
+                   "backslash or $(…), each script run by its absolute path (`bash /abs/x.sh`, an output redirect "
+                   "allowed), no wrapper (env, timeout, sudo) or assignment before it. Reshape the call so and run it "
+                   "as a Bash call of its own, or the user runs it in the terminal.")
+# The programs a pipe at a call's end may feed and still be dropped from it: they only shape the output it shows.
+OUTPUT_FILTERS = ("head", "tail", "grep", "cat", "wc", "sort", "uniq", "cut", "tr", "sed", "awk", "column", "jq")
+
+
+def _unpiped(call):
+    """The call before its pipe when every command it pipes into is an output filter (OUTPUT_FILTERS, with no
+    quote, redirect, substitution or other command in its words), else None: `bash /abs/x.sh 2>&1 | tail -4` is
+    `bash /abs/x.sh 2>&1`, whose output the result shows whole."""
+    segments, quote, start = [], "", 0
+    for at, c in enumerate(call):
+        if quote:
+            quote = "" if c == quote else quote
+        elif c in "'\"":
+            quote = c
+        elif c == "|":
+            segments.append(call[start:at])
+            start = at + 1
+    segments.append(call[start:])
+    if len(segments) < 2 or quote:
+        return None
+    for tail in segments[1:]:
+        words = tail.split()
+        if not words or words[0] not in OUTPUT_FILTERS or re.search(r"[;&()<>`$'\"\\]", tail):
+            return None
+    return segments[0].strip()
+
+
+def _card_shape(r):
+    """The exact call the hook opens a card for in place of a refused Bash call no card holds, or None: the call
+    without its pipe into output filters (_unpiped), when no card's check refuses that one (_why_no_card)."""
+    if r.tool != "Bash" or r.spawn or _carries_secret(r):
+        return None
+    head = _unpiped(r.call)
+    if not head or _why_no_card(r._replace(call=head, kept=head)) is not None:
+        return None
+    return head
+
+
+def _own_note(note):
+    """The note for the host's own call that a moved fleet's hook opened no card for: none, why, and the call that
+    gets one (_card_shape), or the shape every card's call takes, or the terminal."""
+    tool = _one_line(note.get("tool") or "tool", 80)
+    shape = note.get("shape")
+    if isinstance(shape, str) and shape:
+        then = (f"A card opens for `{shape}`: run that as a Bash call of its own, and when auto mode refuses it, the "
+                "hook opens its card with the files it runs.")
+    elif tool == "Bash" and "credential" not in (note.get("why") or ""):
+        then = CARD_SHAPE_RULE
+    else:
+        then = "No form of this call gets a card: the user allows it in the terminal, or it is not run."
+    return (f"Fleet: auto mode refused your {tool} call ({_one_line(note.get('reason') or '', 120)}), and the plugin's "
+            f"hook opened no permission card for it: {note.get('why') or 'no reason was kept'}. Nothing is on the page "
+            f"for the user to allow, so do not tell them a card is there. {then}")
+
+
 def _refusal_note(notes):
     """The one note for every draft still owed to a caller: one call by its tool and reason, several by their ids
-    alone. It says the host was told only of the drafts the CLI did tell it of."""
+    alone. It says the host was told only of the drafts the CLI did tell it of. The host's own calls no card holds
+    are each told whole (_own_note)."""
+    if notes[0].get("own"):
+        return "\n".join(_own_note(n) for n in notes)
     host = "manager" if notes[-1].get("host") == "manager" else "coordinator"
     ids = [_one_line(n.get("id") or "", 60) for n in notes]
     heard = [i for i, n in zip(ids, notes) if n.get("told") is not False]
@@ -2012,8 +2081,8 @@ def fleet_refusal_note(hook):
     """PostToolUse: a caller whose call auto mode refused reads, beside the result of its next tool call, what
     happened to the refusal: its host was told (or will see it), nothing was asked of the user, it reports `blocked:`
     and goes on. Every draft still owed to it is in the one note. Told once; one stat when the session owes none."""
-    caller = _noted_caller(hook, hook.input.get("agent_id"))
-    if not hook.session_id or not caller:
+    caller = _noted_caller(hook, hook.input.get("agent_id")) or "main"
+    if not hook.session_id:
         return None
     folder = _refusal_notes(hook)
     if not folder.is_dir():
@@ -2124,6 +2193,7 @@ def _open_refusal_program(hook, d, r, ledger, worker, refusal_id):
     host = fleet_role(ledger)
     if _statuses(ledger, "decisions").get(refusal_id) == "open":
         return
+    no_card = None
     try:
         card = refusal_card_program(refusal_id, r, worker, host)
         if card is not None:
@@ -2133,11 +2203,14 @@ def _open_refusal_program(hook, d, r, ledger, worker, refusal_id):
             except Unapplied as e:
                 log(hook.data_dir, f"{hook.event} fleet_permission_denied: {refusal_id}'s card was not applied, so the "
                                    f"host is told with a blocked event: {e}")
+                no_card = "the fleet did not apply its card"
+        no_card = no_card or _why_no_card(r)
         fleet_run(hook, d, blocked_program(refusal_blocked_text(refusal_id, r, worker, host, card is not None), worker))
-    except (RuntimeError, subprocess.TimeoutExpired, OSError):
-        _owe_note(hook, r, d, refusal_id, told=False)
+    except (RuntimeError, subprocess.TimeoutExpired, OSError) as e:
+        _owe_note(hook, r, d, refusal_id, told=False,
+                  no_card=no_card or f"the fleet could not take the refusal ({_one_line(str(e), 160)})")
         raise
-    _owe_note(hook, r, d, refusal_id, told=False)
+    _owe_note(hook, r, d, refusal_id, told=False, no_card=no_card)
 
 
 CARD_CALL_MAX = 2000  # the CLI's MAX_CALL_CHARS (fleet/src/ledger/permission.ts): a longer call is no rule a grant holds

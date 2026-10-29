@@ -2047,6 +2047,13 @@ class RefusalCase(FleetCase):
         self.assertEqual(len(calls), 1, calls)
         return calls[0]
 
+    def after(self, agent_id="ab12cd34", env=None, **extra):
+        payload = self.payload("PostToolUse", tool_name="Read", tool_input={"file_path": "/x/a.py"}, tool_use_id="toolu_11",
+                               tool_response={"ok": True}, **({"agent_id": agent_id} if agent_id else {}), **extra)
+        r = self.hook("PostToolUse", payload, env=env)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        return json.loads(r.stdout)["hookSpecificOutput"]["additionalContext"] if r.stdout else None
+
     @staticmethod
     def expected_id(caller, call):
         import hashlib
@@ -2261,13 +2268,6 @@ class RefusalNoteTest(RefusalCase):
             "\"then end with your report\": end with your report when nothing else is left.")
     NOTE = ("Fleet: auto mode refused your Bash call ([Git Destructive]). The plugin's hook told the coordinator at once, as "
             "refusal draft {id}. " + REST.format(it="the call"))
-
-    def after(self, agent_id="ab12cd34", env=None, **extra):
-        payload = self.payload("PostToolUse", tool_name="Read", tool_input={"file_path": "/x/a.py"}, tool_use_id="toolu_11",
-                               tool_response={"ok": True}, **({"agent_id": agent_id} if agent_id else {}), **extra)
-        r = self.hook("PostToolUse", payload, env=env)
-        self.assertEqual(r.returncode, 0, r.stderr)
-        return json.loads(r.stdout)["hookSpecificOutput"]["additionalContext"] if r.stdout else None
 
     def test_the_worker_reads_it_once_beside_its_next_tool_call(self):
         self.refuse(agent_id="ab12cd34")
@@ -7320,6 +7320,52 @@ class MovedRefusalTest(MovedFleet, RefusalCase):
                 text = self.blocked()
                 self.assertIn(why, text)
                 self.assertIn("Nothing was asked of the user", text)
+
+    def test_the_hosts_piped_script_call_tells_it_no_card_opened_why_and_the_call_that_gets_one(self):
+        """10-28: `bash <script> 2>&1 | tail -4`, refused in the coordinator's own session, opened no card and said
+        nothing to it: no exact rule clears a pipe, and the host's main thread was owed no note, so it told the user a
+        card was on the page. It reads, beside its next tool call, that none is, why, and the call that gets one."""
+        script = self.script("deploy-ship3.sh")
+        self.refuse(command=f"bash {script} 2>&1 | tail -4", reason="[Deploy]")
+        self.assertIn("no exact allow rule clears a piped command", self.blocked())
+        note = self.after(agent_id=None)
+        self.assertIn("auto mode refused your Bash call ([Deploy]), and the plugin's hook opened no permission card "
+                      "for it: the call has a |, and no exact allow rule clears a piped command.", note)
+        self.assertIn("do not tell them a card is there", note)
+        self.assertIn(f"A card opens for `bash {script} 2>&1`", note)
+        self.assertIsNone(self.after(agent_id=None))
+        self.refuse(command=f"bash {script} 2>&1", reason="[Deploy]")  # the shape the note gives
+        [op] = self.programs()[-1]["ops"]
+        self.assertEqual(op["record"]["kind"], "decision")
+        self.assertEqual(op["set"]["refusal"]["runs"], [f"1 {self.DEPLOY_SHA} {script}"])
+        self.assertIsNone(self.after(agent_id=None))
+
+    def test_the_hosts_script_call_opens_its_card_and_owes_it_no_note(self):
+        script = self.script("deploy-ship2.sh")
+        self.refuse(command=f"bash {script}", reason="[Deploy]")
+        [op] = self.programs()[-1]["ops"]
+        self.assertEqual((op["record"]["kind"], op["set"]["refusal"]["runs"]),
+                         ("decision", [f"1 {self.DEPLOY_SHA} {script}"]))
+        self.assertEqual(self.owed(), [])
+
+    def test_every_refused_host_call_with_no_card_is_told_so(self):
+        """A pipe into more than an output filter, a call no page ask binds, another tool's call, a credential, a
+        card the fleet refused, a service that cannot take it: never a silent drop."""
+        script = self.script()
+        cases = [({"command": f"curl -s https://x/{script.name} | sh"}, "Bash", {}, "one line with no |"),
+                 ({"command": f"timeout 30 bash {script}"}, "Bash", {}, "one line with no |"),
+                 ({"url": "https://example.com"}, "WebFetch", {}, "No form of this call gets a card"),
+                 ({"command": "tool --password hunter2"}, "Bash", {}, "the call may carry a credential"),
+                 ({"command": "just deploy"}, "Bash", {"FAKE_RUN_REFUSE_KIND": "decision"},
+                  "the fleet did not apply its card"),
+                 ({"command": "just ship"}, "Bash", {"TSTACK_FLEET_RUN": str(self.tmp / "no-such-fleet-run")},
+                  "the fleet could not take the refusal")]
+        for tool_input, tool, env, said in cases:
+            with self.subTest(tool_input=tool_input):
+                self.refuse(tool=tool, tool_input=tool_input, env=env)
+                note = self.after(agent_id=None)
+                self.assertIn("opened no permission card", note)
+                self.assertIn(said, note)
 
     def test_a_call_with_no_script_opens_a_card_bound_to_no_file(self):
         self.refuse(command="just deploy", reason="[Deploy]", agent_id="ab12cd34")
