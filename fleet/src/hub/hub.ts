@@ -44,7 +44,7 @@ import { readChat, Tail } from "../chat/store.ts";
 import { stampOf } from "../clock.ts";
 import { ChatError } from "../errors.ts";
 import { MOVED_MARKER, readBytes, readText, resolvePath, strerror } from "../files.ts";
-import { asArray, asNumber, asObject, asString, dumps, parseObject, type Json, type JsonObject, type JsonOut } from "../json.ts";
+import { asArray, asNumber, asObject, asString, dumps, parseObject, type Json, type JsonObject } from "../json.ts";
 import { answerRefusal } from "../ledger/answers.ts";
 import { renameAgent } from "../ledger/rename.ts";
 import { filePathOf, filesRoot } from "../ledger/links.ts";
@@ -52,7 +52,7 @@ import { allows } from "../ledger/permission.ts";
 import { addsRule } from "../ledger/rule-card.ts";
 import { pageHtml, readTemplate } from "../page/render.ts";
 import { pick, readLedger } from "../preview/updater.ts";
-import { readRecord, recordPath, type DevServer } from "../preview/record.ts";
+import { recordPath } from "../preview/record.ts";
 import { PreviewError } from "../errors.ts";
 import { summary, view, type Lookups } from "../page/view.ts";
 import { gateOf } from "../gate.ts";
@@ -69,13 +69,15 @@ import { indexHtml } from "./index-page.ts";
 import { LinkProbes, ProbeCache } from "./probes.ts";
 import { answerAsOffered, expireGrants, grantAnswer, registeredSession, type GrantAnswer, type Registered } from "./grants.ts";
 import { allowedOrigin, chatOriginsPath, grantor, grantRefusal, hello, MAX_POST_BYTES, PAGE_TOKEN_META, PAGE_TOKEN_HEADER, parseChatOrigins, postRefusal, STALE_PAGE_TOKEN, STOP_TOKEN_META, stopRefusal, tooBig, viewerOf, writerRefusal, type Viewer } from "./policy.ts";
-import { idleMs, noteRequest, serverStanding } from "../preview/sleep.ts";
-import { haltedPage, isOriginWide, isPing, killSwitch, previewTarget, proxiedHost, proxiedIdentity, proxyHttp, proxySocket, startingPage, type Target, type Upgrade } from "./preview-proxy.ts";
+import { isOriginWide, killSwitch, type Upgrade } from "./preview-proxy.ts";
 import { Served } from "./served.ts";
 import { HubTokens, tokensPath } from "./tokens.ts";
 import { OrphanWatch } from "./orphan-watch.ts";
 import { PLUGIN_ROOT, readSkills, repoOf } from "./skills.ts";
-import { readTailnet, whois, type Tailnet } from "./tailnet.ts";
+import { readTailnet, type Tailnet } from "./tailnet.ts";
+import { answersAt, jsonResponse, Logins, Previews, serviceWorkerGuard, type Rooted } from "./previews.ts";
+
+export { jsonResponse, type Rooted } from "./previews.ts";
 
 import * as Option from "effect/Option";
 
@@ -128,15 +130,6 @@ export interface HubOptions {
   readonly log?: (line: string) => void;
 }
 
-/** A root-mode preview the hub serves at the root of its public port: which fleet, which dev server. */
-export interface Rooted {
-  readonly port: number;
-  readonly fleet: string;
-  readonly dir: string;
-  /** The worker of a per-worker preview; undefined for the combined one. */
-  readonly worker: string | undefined;
-}
-
 /** A peer hub, as it last answered. */
 interface Peer {
   readonly name: string;
@@ -161,9 +154,6 @@ const PAGE_ISOLATION = { "Cross-Origin-Opener-Policy": "same-origin", "Content-S
 
 /** What a file of a fleet's DIR outside `decisions/` is served with: no origin, no script, never sniffed. */
 const FILE_HEADERS = { "Content-Security-Policy": FILE_POLICY, "X-Content-Type-Options": "nosniff" } as const;
-
-/** A preview's path, combined or a worker's, on this hub or a peer's: the only one that serves a service worker. */
-const PREVIEW_PATH = /^\/f\/[^/]+\/preview\//u;
 
 /** The body of a `grantRefusal` (a grant's or an upload's): `reload: true` with it only for a page that sent a token
  * the hub no longer accepts; one that sent none is not a page the hub served. */
@@ -205,14 +195,6 @@ const PREFLIGHT_MAX_AGE = 600;
 /** The CORS headers on every answer to a chat post from `origin`, a page the hub's config allows. */
 function corsHeaders(origin: string) {
   return { "Access-Control-Allow-Origin": origin, "Access-Control-Allow-Credentials": "true", Vary: "Origin" };
-}
-
-/** A JSON response. */
-export function jsonResponse(status: number, body: JsonOut, headers: Readonly<Record<string, string>> = {}): Response {
-  return new Response(dumps(body, { ensureAscii: false }), {
-    status,
-    headers: { "Content-Type": "application/json; charset=utf-8", ...NO_STORE, ...headers },
-  });
 }
 
 /** One server-sent event. */
@@ -312,9 +294,9 @@ export class Hub {
   private readonly views = new Map<string, Viewed>();
   private readonly skillLists = new Map<string, { readonly body: string; readonly at: number }>();
 
-  /** When the hub last noted a request to each preview's dev server (`preview/sleep.ts`), by fleet dir and worker. */
-  private readonly noted = new Map<string, number>();
-  private readonly logins = new Map<string, { readonly login: string | undefined; readonly at: number }>();
+  private readonly logins: Logins;
+  /** Its preview path (`previews.ts`), which `fleet preview serve` serves too. */
+  private readonly previews: Previews;
   private timer: ReturnType<typeof setInterval> | undefined;
   private courierTimer: ReturnType<typeof setInterval> | undefined;
   private onepwTimer: ReturnType<typeof setInterval> | undefined;
@@ -350,6 +332,15 @@ export class Hub {
       takeover: (entry, heard) => takeoverView(entry.dir, heard.seen),
       spend: this.spend,
     };
+    this.logins = new Logins(options.tailscale);
+    this.previews = new Previews({
+      machine: options.machine,
+      entries: () => this.options.machine.registry.shown(),
+      viewer: (req, ip) => this.viewer(req, ip),
+      owner: () => this.owner,
+      answersAt: (host, port) => this.answersAt(host, port),
+      port: options.port,
+    });
     this.setHosts();
   }
 
@@ -538,18 +529,8 @@ export class Hub {
     }
   }
 
-  private async login(ip: string): Promise<string | undefined> {
-    const held = this.logins.get(ip);
-
-    if (held !== undefined && performance.now() - held.at < 60_000) return held.login;
-    const login = await whois(this.options.tailscale, ip);
-    this.logins.set(ip, { login, at: performance.now() });
-
-    return login;
-  }
-
   private viewer(req: Request, ip: string): Promise<Viewer> {
-    return viewerOf(ip, (name) => req.headers.get(name), this.owner, (at) => this.login(at), this.tailnet?.self.ip);
+    return viewerOf(ip, (name) => req.headers.get(name), this.owner, (at) => this.logins.login(at), this.tailnet?.self.ip);
   }
 
   // -- the fleets of this machine --------------------------------------------------------------
@@ -637,20 +618,9 @@ export class Hub {
     const url = new URL(req.url);
     const path = collapse(url.pathname);
 
-    // A preview runs on this origin, and a service worker it registers from a script here (a file of a fleet's DIR)
-    // would see every page in that script's folder, the page token included. Only a preview's own path serves one.
-    // Elsewhere a worker's script is the kill switch, which ends a worker registered before this rule at its next
-    // update check; any other worker's request is refused. On a preview's path, a script that asks for a scope past
-    // it (`Service-Worker-Allowed`) is the kill switch too (`proxyHttp`, and `proxy` for a peer's preview).
-    if (!PREVIEW_PATH.test(path)) {
-      const worker = req.headers.get("Service-Worker");
+    const guarded = serviceWorkerGuard(req, path);
 
-      if (worker === "script") return killSwitch(req);
-
-      if (worker !== null || req.headers.get("Sec-Fetch-Dest") === "serviceworker") {
-        return jsonResponse(403, { error: "a service worker is registered only under a preview's path" });
-      }
-    }
+    if (guarded !== undefined) return guarded;
 
     if (path === "/" || path === "/index.html") return this.index(req);
 
@@ -758,9 +728,9 @@ export class Hub {
     const root = entry.dir;
     const params = url.searchParams;
 
-    if (rest === "/preview") return new Response(null, { status: 301, headers: { Location: `/f/${encodeURIComponent(entry.id)}/preview/${url.search}`, ...NO_STORE } });
+    const preview = this.previews.route(req, ip, entry, rest, url, keepOpen, upgrade);
 
-    if (rest.startsWith("/preview/")) return this.preview(req, ip, entry, rest.slice("/preview/".length), url.search, keepOpen, upgrade);
+    if (preview !== undefined) return preview;
 
     if (rest === "/preview-workers" && req.method === "POST") return this.previewWorkers(req, ip, root);
 
@@ -820,126 +790,21 @@ export class Hub {
     return this.file(req, root, rest === "/" ? "/index.html" : rest);
   }
 
-  /** A preview path, passed to its dev server (`pass`). */
-  private async preview(req: Request, ip: string, entry: Entry, tail: string, search: string, keepOpen: () => void, upgrade: Upgrade | undefined): Promise<Response | undefined> {
-    const target = previewTarget(readRecord(entry.dir), entry.id, tail);
-
-    if ("waking" in target) return this.wake(req, entry.dir, target.waking);
-
-    if ("halted" in target) return haltedPage(req, entry.dir, target);
-
-    if (!("server" in target)) return jsonResponse(target[0], { error: target[1].replace("DIR", entry.dir) });
-
-    return this.pass(req, ip, entry.dir, target, search, keepOpen, upgrade);
-  }
-
-  /** A request to a dev server asleep or waking: noted, which wakes it (unless it is Vite's ping), and
-   * answered with the page that reloads itself until the server answers. */
-  private wake(req: Request, root: string, worker: string | undefined): Response {
-    if (isPing(req)) return jsonResponse(503, { error: "the preview's dev server is asleep" });
-    noteRequest(root, worker);
-    this.noted.set(`${root}\0${worker ?? ""}`, Date.now());
-
-    return startingPage(req);
-  }
-
-  /** Note a request to a dev server for its idle sleep (not Vite's ping). */
-  private note(req: Request, root: string, worker: string | undefined): void {
-    if (!isPing(req)) this.noteUse(root, worker);
-  }
-
-  /** Note a use of a dev server (a request, a WebSocket frame) for its idle sleep, at most every few seconds per server. */
-  private noteUse(root: string, worker: string | undefined): void {
-    const key = `${root}\0${worker ?? ""}`;
-    const every = Math.min(5000, (idleMs(this.options.machine.env) ?? 20_000) / 4);
-
-    if (Date.now() - (this.noted.get(key) ?? 0) < every) return;
-    this.noted.set(key, Date.now());
-    noteRequest(root, worker);
-  }
-
-  /** Pass a request to a preview's dev server: a WebSocket piped, anything else asked and answered, with the
-   * identity the hub verified and where the browser asked (`proxiedHost`). A request that could change something there (not GET, HEAD or OPTIONS) is the
-   * chat's writers' only. */
-  private async pass(req: Request, ip: string, root: string, target: Target, search: string, keepOpen: () => void, upgrade: Upgrade | undefined): Promise<Response | undefined> {
-    this.note(req, root, target.worker);
-    const viewer = await this.viewer(req, ip);
-    const identity = proxiedIdentity(ip, viewer, req.headers);
-    proxiedHost(req, ip, target.onHubOrigin).forEach((value, key) => identity.set(key, value));
-
-    if ((req.headers.get("Upgrade") ?? "").toLowerCase() === "websocket") {
-      if (upgrade === undefined) return jsonResponse(400, { error: "WebSockets are not served here" });
-
-      return proxySocket(req, target, search, upgrade, identity, () => this.noteUse(root, target.worker));
-    }
-
-    if (!["GET", "HEAD", "OPTIONS"].includes(req.method)) {
-      const denied = writerRefusal(this.owner, viewer);
-
-      if (denied !== undefined) return jsonResponse(403, { error: denied });
-    }
-
-    keepOpen();
-
-    return proxyHttp(req, target, search, identity);
-  }
-
   // -- root mode -------------------------------------------------------------------------------
 
-  /** The root-mode previews of this machine's fleets the hub listens for: each recorded dev server with a
-   * public port, while it is started (its pid recorded), asleep, or failed or unkept (to say so). A port named
-   * twice goes to the first; the hub's own never. */
+  /** The root-mode previews of this machine's fleets the hub listens for (`Previews.rootedPreviews`). */
   rootedPreviews(): Rooted[] {
-    const found: Rooted[] = [];
-    const ports = new Set<number>([this.options.port]);
-
-    for (const entry of this.entries()) {
-      const record = readRecord(entry.dir);
-
-      if (record === undefined) continue;
-      const servers: (readonly [string | undefined, DevServer | null])[] = [[undefined, record.server], ...record.workers.map((w) => [w.worker, w] as const)];
-
-      for (const [worker, server] of servers) {
-        if (server === null || server.public === null || (server.pid === null && server.keeper === null && server.failed === null) || ports.has(server.public)) continue;
-        ports.add(server.public);
-        found.push({ port: server.public, fleet: entry.id, dir: entry.dir, worker });
-      }
-    }
-
-    return found;
+    return this.previews.rootedPreviews();
   }
 
   /** Whether `host` (`host:port`, lower case) names this machine at `port`: loopback, or its tailnet name or address. */
   answersAt(host: string, port: number): boolean {
-    const self = this.tailnet?.self;
-    const names = ["127.0.0.1", "localhost", "[::1]", self?.dns, self?.name, self?.ip].flatMap((n) => (n === undefined ? [] : [`${n.toLowerCase()}:${port}`]));
-
-    return names.includes(host);
+    return answersAt(this.tailnet, host, port);
   }
 
-  /** Answer one request from `ip` on `slot`'s public port: every path goes to its dev server at its root,
-   * WebSocket or not, as `/f/<fleet>/preview/` does, with `X-Forwarded-Prefix: /`. A Host that is not this
-   * machine at that port is refused (421), against DNS rebinding. */
-  async fetchRooted(req: Request, ip: string, slot: Rooted, keepOpen: () => void, upgrade?: Upgrade): Promise<Response | undefined> {
-    if (!this.answersAt((req.headers.get("Host") ?? "").toLowerCase(), slot.port)) return jsonResponse(421, { error: "unknown host" }, { Connection: "close" });
-    const record = readRecord(slot.dir);
-    const server = slot.worker === undefined ? record?.server : record?.workers.find((w) => w.worker === slot.worker);
-
-    const now = server === undefined || server === null ? "stopped" : serverStanding(server);
-
-    if (now === "asleep" || now === "waking") return this.wake(req, slot.dir, slot.worker);
-
-    if (server !== undefined && server !== null && (now === "failed" || now === "unkept")) return haltedPage(req, slot.dir, { halted: now, worker: slot.worker, server });
-
-    if (server === undefined || server === null || now !== "running") {
-      const start = slot.worker === undefined ? `fleet preview ${slot.dir} start --root` : `fleet preview ${slot.dir} start --per-worker ${slot.worker} --root`;
-
-      return jsonResponse(502, { error: `this preview's dev server is not running: \`${start}\`` });
-    }
-
-    const url = new URL(req.url);
-
-    return this.pass(req, ip, slot.dir, { server, path: url.pathname, prefix: "/", worker: slot.worker, onHubOrigin: false }, url.search, keepOpen, upgrade);
+  /** Answer one request from `ip` on `slot`'s public port (`Previews.fetchRooted`). */
+  fetchRooted(req: Request, ip: string, slot: Rooted, keepOpen: () => void, upgrade?: Upgrade): Promise<Response | undefined> {
+    return this.previews.fetchRooted(req, ip, slot, keepOpen, upgrade);
   }
 
   /** `POST /f/<fleet>/preview-workers` `{worker, include}`: a worker taken into the combined preview or out

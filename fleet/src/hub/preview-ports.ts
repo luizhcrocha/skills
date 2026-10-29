@@ -21,7 +21,7 @@ import * as Option from "effect/Option";
 
 import { makePrivateDir, readText, remove, writeAtomic } from "../files.ts";
 import { asArray, asBoolean, asNumber, asObject, asString, dumps, parseObject } from "../json.ts";
-import type { Rooted } from "./hub.ts";
+import type { Rooted } from "./previews.ts";
 import { NoCertificate, type Named } from "./preview-tls.ts";
 
 /** What the hub says of one public port. */
