@@ -1390,11 +1390,14 @@ describe("marks on a decision", () => {
 
     /* A grilling's question's own words: its title, the question, its reason, an option and its consequence. */
     for (const field of ["q1:title", "q1:question", "q1:recommendation", "q2:option:a", "q12:option:a:consequence"]) expect(fieldOf(on(field))).toBe(field);
+
+    /* By the question's id as the card holds it, 1 to 32 letters, digits, _ or -, as the ledger's MARK_FIELD. */
+    for (const field of ["file-upload:title", "Q1:option:a:consequence", "Q1:title", "q0:title", "auth_flow:recommendation", `${"x".repeat(32)}:question`]) expect(fieldOf(on(field))).toBe(field);
     expect(fieldOf(on(null))).toBeNull();
     const why = marksOf(on("why"));
     expect(Object.keys(asObject(asObject(asArray(why instanceof ChatError ? undefined : why?.["items"])?.[0])?.["quote"]) ?? {})).toEqual(["text", "prefix", "suffix", "hint", "field", "blocks"]);
 
-    for (const bad of ["body", "Title", "option:", "option:B:why", "option:a b", `option:${"x".repeat(61)}`, "history:", "history:x", "history:-1", "question ", "q1", "q1:", "q0:title", "q1:why", "q1:step", "q1:history:1", "q1:q2:title", "Q1:title", "q1:option:"]) {
+    for (const bad of ["body", "Title", "option:", "option:B:why", "option:a b", `option:${"x".repeat(61)}`, "history:", "history:x", "history:-1", "question ", "q1", "q1:", "q1:why", "q1:step", "q1:history:1", "q1:q2:title", "q1:option:", "file-upload:why", "file.upload:title", "file upload:title", ":title", `${"x".repeat(33)}:title`]) {
       expect(refusal(on(bad))).toStartWith("marks are {decision, at, items}: mark 1.quote.field is title, question");
     }
 

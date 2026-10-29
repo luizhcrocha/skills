@@ -1346,6 +1346,13 @@ describe("answers to decisions", () => {
     expect([plain.status, plain.body["batch"]]).toEqual([201, undefined]);
   });
 
+  test("a mark on a grilling question named by its id, not q<n>, rides along with the answer", async () => {
+    const quote = { text: "upload", prefix: "", suffix: "", hint: "file-upload, the title", field: "file-upload:title", blocks: [{ exact: "upload", prefix: "", suffix: "" }] };
+    const marks = { ...pending(), items: [{ n: 1, kind: "comment", quote, comment: "which files?" }] };
+    const sent = await post({ text: "file-upload: B", decision: "d1", batch: { text: "1 mark on d1", marks } });
+    expect([sent.status, asObject(asObject(asArray(asObject(asObject(sent.body["batch"])?.["marks"])?.["items"])?.[0])?.["quote"])?.["field"]]).toEqual([201, "file-upload:title"]);
+  });
+
   test("a batch that cannot ride along is a 400, and neither it nor the answer is stored", async () => {
     const cases: JsonObject[] = [
       { text: "A", decision: "d1", batch: "1 mark" },

@@ -150,11 +150,12 @@ function blockOf(value: Json, where: string): JsonObject | ChatError {
 
 /** The decision's own text a mark's quote is in, when it is not the body (`quote.field`): the page renders
  * it, not the frame. An option's id is 1 to 60 characters of [A-Za-z0-9_.-]; a history line is its number;
- * `q<n>:` before title, question, recommendation or an option names a grilling's question's own. */
-const FIELD = /^(?:title|question|why|step|recommendation|option:[A-Za-z0-9_.-]{1,60}(?::consequence)?|history:[0-9]+|q[1-9][0-9]*:(?:title|question|recommendation|option:[A-Za-z0-9_.-]{1,60}(?::consequence)?))$/u;
+ * `<id>:` before title, question, recommendation or an option names a grilling's question's own, by the id the
+ * card holds (1 to 32 letters, digits, _ or -: `q1`, `Q1`, `file-upload`), the ledger's `MARK_FIELD`. */
+const FIELD = /^(?:title|question|why|step|recommendation|option:[A-Za-z0-9_.-]{1,60}(?::consequence)?|history:[0-9]+|[A-Za-z0-9_-]{1,32}:(?:title|question|recommendation|option:[A-Za-z0-9_.-]{1,60}(?::consequence)?))$/u;
 
 const FIELDS_SAID =
-  "title, question, why, step, recommendation, option:<id>, option:<id>:consequence or history:<n>, or of a grilling's question q<n>:title, q<n>:question, q<n>:recommendation, q<n>:option:<id> or q<n>:option:<id>:consequence";
+  "title, question, why, step, recommendation, option:<id>, option:<id>:consequence or history:<n>, or of a grilling's question <id>:title, <id>:question, <id>:recommendation, <id>:option:<id> or <id>:option:<id>:consequence";
 
 function markQuoteOf(value: Json | undefined, where: string): JsonObject | ChatError {
   const given = asObject(value);

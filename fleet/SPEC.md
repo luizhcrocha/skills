@@ -1102,8 +1102,9 @@ marks: {
   - `field` (optional): the decision's own text the quote is in, when it is not the body: the page
     renders it, not the frame. One of `title`, `question`, `why`, `step` (a manual step or its command
     block), `recommendation`, `option:<id>`, `option:<id>:consequence` (id 1 to 60 characters of
-    `[A-Za-z0-9_.-]`) or `history:<n>` (n an int); or, of a grilling's question, `q<n>:` (n an int from 1)
-    before `title`, `question`, `recommendation` (its reason), `option:<id>` or `option:<id>:consequence`
+    `[A-Za-z0-9_.-]`) or `history:<n>` (n an int); or, of a grilling's question, `<id>:` (the question's id as the
+    card holds it, 1 to 32 letters, digits, `_` or `-`: `q2`, `Q2`, `file-upload`; a mirrored team's
+    ledger takes the same grammar) before `title`, `question`, `recommendation` (its reason), `option:<id>` or `option:<id>:consequence`
     (`q2:option:a:consequence`). Its blocks have no `cell`, and its `hint` names the
     place in words (`the question`, `option B's consequence`, `Q2, option a's consequence`). Any other value is refused (`mark <n>.quote.field
     is title, question, ...`); the Delivery keeps it, and the printed line is as for any batch.
