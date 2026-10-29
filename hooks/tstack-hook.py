@@ -5227,6 +5227,168 @@ def land_turn_gate(hook):
                 f"to push doesn't skip the queue: it answers whether this may land, the turn answers when.{unclear_line}")
 
 
+# Luiz's rule (fleet decision D585, 2026-10-29): no commit he publishes carries an agent's attribution. Only real
+# trailers count, so a description that quotes the rule in prose still pushes.
+GENERATED_LINE = re.compile(r"^(?:\U0001f916 ?)?Generated with (?:\[Claude Code\]\([^)\s]*\)|Claude Code)\s*$")
+JJ_PUSH_TARGET = re.compile(r"^\s*bookmark: \S+ \[(?:add to|move (?:forward|backward|sideways) from \S+ to) ([0-9a-f]+)\]",
+                            re.M)
+# Each call's own cap: the hook's 30 s are shared with land_turn_gate, and this guard only reads local state.
+ATTRIBUTION_TIMEOUT_S = 3
+JJ_TRAILERS = ('json(change_id.short()) ++ "\\t" ++ json(description) ++ "\\t[" '
+               '++ trailers.map(|t| json(t.key()) ++ "," ++ json(t.value())).join(",") ++ "]\\n"')
+
+
+def attribution_lines(description, trailers):
+    """The attribution lines of a commit: a Claude-Session: trailer, a Co-Authored-By: trailer naming Claude (both
+    from `trailers`, the (key, value) pairs jj or git parse out of its last paragraph), and a whole
+    "Generated with Claude Code" line in its last two paragraphs."""
+    found = [f"{key}: {value}" for key, value in trailers
+             if key.lower() == "claude-session" or (key.lower() == "co-authored-by" and re.search(r"\bClaude\b", value))]
+    paragraphs = re.split(r"\n[ \t]*\n", description.strip("\n"))
+    return found + [line.rstrip() for p in paragraphs[-2:] for line in p.splitlines() if GENERATED_LINE.match(line)]
+
+
+def _run_out(argv, cwd, stderr=False):
+    """The command's stdout (and its stderr after it, with `stderr`), or None when it fails or hangs."""
+    import subprocess
+    try:
+        r = subprocess.run(argv, cwd=cwd, capture_output=True, text=True, timeout=ATTRIBUTION_TIMEOUT_S,
+                           env={**os.environ, "JJ_EDITOR": "true", "EDITOR": "true", "GIT_TERMINAL_PROMPT": "0"})
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    return (r.stdout + (r.stderr if stderr else "")) if r.returncode == 0 else None
+
+
+def _jj_pushed(push):
+    """(change id, attribution lines) of each commit the jj push sends, from its dry run (local): every commit under a
+    target that no bookmark of the remote holds yet. None when the hook cannot tell, and for a remote that holds no
+    bookmark yet (a new fork), whose range would be the whole history."""
+    repo = _jj_repo(push.args, push.cwd)
+    said = _run_out(["jj", *push.args, "--dry-run"], push.cwd, stderr=True)
+    if said is None or repo is None:
+        return None
+    remote = re.search(r"^Changes to push to (\S+):", said, re.M)
+    targets = JJ_PUSH_TARGET.findall(said)
+    if remote is None or not targets:
+        return []
+    held = f"remote_bookmarks(remote=exact:{json.dumps(remote.group(1))})"
+    jj = ["jj", "-R", repo, "--ignore-working-copy", "log", "--no-graph"]
+    if not _run_out([*jj, "-r", held, "--limit", "1", "-T", '"x"'], repo):
+        return None
+    log = _run_out([*jj, "-r", f"::({'|'.join(targets)}) ~ ::{held}", "-T", JJ_TRAILERS], repo)
+    if log is None:
+        return None
+    out = []
+    for line in log.splitlines():
+        change, description, pairs = (json.loads(part) for part in line.split("\t", 2))
+        out.append((change, attribution_lines(description, list(zip(pairs[::2], pairs[1::2])))))
+    return out
+
+
+def _git_sources(push, repo):
+    """(the remote a `git push` writes to, the local revisions it sends), read from its words and the repo's config,
+    without asking the remote; None when the hook cannot tell."""
+    _, i, _ = _git_sub(push.args, push.cwd)
+    positionals, every, args, j = [], False, push.args[i + 1:], 0
+    while j < len(args):
+        a = args[j]
+        if a in ("-d", "--delete"):
+            return "", []
+        if a in ("--mirror", "--prune", "--repo") or a.startswith("--repo="):
+            return None
+        if a in ("--all", "--branches"):
+            every = True
+        elif a in GIT_PUSH_VALUED:
+            j += 1
+        elif not a.startswith("-"):
+            positionals.append(a)
+        j += 1
+
+    def git(*argv):
+        return (_run_out(["git", "-C", repo, *argv], repo) or "").strip() or None
+
+    def config(key):
+        return git("config", "--get", key)
+
+    branch = git("symbolic-ref", "--short", "-q", "HEAD")
+    remote = positionals[0] if positionals else (
+        (config(f"branch.{branch}.pushRemote") or config(f"branch.{branch}.remote")) if branch else None
+    ) or config("remote.pushDefault") or "origin"
+    refspecs = positionals[1:]
+    if every:
+        return remote, ["--branches"]
+    if not refspecs:
+        if config(f"remote.{remote}.push") or config("push.default") in ("matching", "nothing"):
+            return None
+        return remote, ["HEAD"] if branch else []
+    sources = []
+    for spec in refspecs:
+        src = spec.lstrip("+").partition(":")[0]
+        if "*" in src or spec == "tag":
+            return None
+        if src:
+            sources.append(src)
+    return remote, sources
+
+
+def _git_pushed(push):
+    """(commit id, attribution lines) of each commit the git push sends, worked out locally: every commit under a
+    pushed source that no remote-tracking ref holds. None when the hook cannot tell, and for a URL, a path or a remote
+    with no tracking ref yet (a new fork)."""
+    repo = _git_sub(push.args, push.cwd)[2]
+    read = _git_sources(push, repo) if repo is not None else None
+    if read is None:
+        return None
+    remote, sources = read
+    if not sources:
+        return []
+    if any(c in remote for c in ":/") or remote.startswith(".") or not _run_out(
+            ["git", "-C", repo, "for-each-ref", "--count=1", "--format=x", f"refs/remotes/{remote}/"], repo):
+        return None
+    log = _run_out(["git", "-C", repo, "log", "--format=%H%x00%B%x00%(trailers:only,unfold)%x01", *sources,
+                    "--not", "--remotes", "--"], repo)
+    if log is None:
+        return None
+    out = []
+    for entry in log.split("\1"):
+        commit, _, rest = entry.strip("\n").partition("\0")
+        if commit:
+            body, _, trailers = rest.partition("\0")
+            pairs = [(k.strip(), v.strip()) for k, _, v in (t.partition(":") for t in trailers.splitlines()) if v]
+            out.append((commit[:12], attribution_lines(body, pairs)))
+    return out
+
+
+def push_attribution(hook):
+    """PreToolUse (Bash): a `jj git push` or `git push` that sends a commit whose description carries an
+    attribution trailer is denied, naming each such change and how to re-describe it. A push the hook cannot read,
+    or whose range it cannot work out, goes through: this guard never blocks a push by failing."""
+    tool_input = hook.input.get("tool_input") if isinstance(hook.input.get("tool_input"), dict) else {}
+    command = tool_input.get("command") if hook.input.get("tool_name") == "Bash" else None
+    if not isinstance(command, str) or not PUSH_IN_TEXT.search(command):
+        return None
+    found = {}
+    try:
+        for push in Reader().pushes(command, hook.cwd):
+            if push.unclear or push.tool not in ("jj", "git"):
+                continue
+            for change, lines in (_jj_pushed if push.tool == "jj" else _git_pushed)(push) or []:
+                if lines:
+                    found.setdefault(change, lines)
+    except Exception:  # noqa: BLE001 - a range it cannot work out lets the push through, unlike the other guards
+        log(hook.data_dir, f"{hook.event} push_attribution let a push through\n{traceback.format_exc()}")
+        return None
+    if not found:
+        return None
+    listed = "; ".join(f"{change} ({_one_line(' | '.join(lines), 120)})" for change, lines in found.items())
+    first = next(iter(found))
+    return Deny(f"This push sends {len(found)} commit{'s' if len(found) > 1 else ''} whose description carries an "
+                f"attribution trailer: {listed}. Luiz's rule (fleet decision D585): no commit carries a Claude-Session: "
+                f"trailer, a Co-Authored-By: trailer naming Claude, or a \"Generated with Claude Code\" line. Re-describe "
+                f"each without it "
+                f"(`jj describe -r {first} -m \"<the message without it>\"`, and the same for the others), then push again.")
+
+
 def _log_denial(hook, lc, cli, text):
     """The denial as an important `blocked` event in the fleet's ledger (land-check's find_ledger: $FLEET_DIR,
     else the served fleet among the session's processes; else the session's own fleet folder)."""
@@ -6700,8 +6862,8 @@ HANDLERS = {
     "SessionStart": [memo_wake, jj_hints, tuca_mode, fleet_news, memo_dream_pending, fleet_heartbeat, grant_records_tracked, tape_build],
     "Stop": [memo_nudge, fleet_listen_guard, fleet_idle_guard, fleet_said_once, fleet_news, fleet_heartbeat],
     "PreCompact": [memo_precompact],
-    "PreToolUse": [fleet_agent_grant, fleet_spawn_effort, fleet_moved_writes, land_turn_gate, suite_gate, onepw_hold, rm_guard,
-                   fleet_monitor_watch, fleet_grant_alone],
+    "PreToolUse": [fleet_agent_grant, fleet_spawn_effort, fleet_moved_writes, land_turn_gate, push_attribution, suite_gate,
+                   onepw_hold, rm_guard, fleet_monitor_watch, fleet_grant_alone],
     "PostToolUse": [fleet_heartbeat, fleet_grant_sweep, fleet_refusal_forgotten, fleet_refusal_note, fleet_chat_nudge, onepw_watch],
     "PostToolUseFailure": [fleet_heartbeat, fleet_grant_sweep, onepw_watch],
     "PermissionDenied": [fleet_permission_denied],
@@ -6712,8 +6874,8 @@ HANDLERS = {
 
 # The PreToolUse handlers that can deny, each of which denies the call when it fails (dispatch); fleet_agent_grant
 # only allows, and its failure allows nothing.
-GUARDS = frozenset({fleet_spawn_effort, fleet_moved_writes, land_turn_gate, suite_gate, onepw_hold, fleet_monitor_watch,
-                    rm_guard, fleet_grant_alone})
+GUARDS = frozenset({fleet_spawn_effort, fleet_moved_writes, land_turn_gate, push_attribution, suite_gate, onepw_hold,
+                    fleet_monitor_watch, rm_guard, fleet_grant_alone})
 
 
 def _context(event, text):

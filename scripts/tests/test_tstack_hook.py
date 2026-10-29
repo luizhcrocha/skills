@@ -5347,6 +5347,130 @@ class LandTurnGateTest(FleetCase):
         self.assertEqual(self.events(), [])
 
 
+@unittest.skipUnless(shutil.which("jj") and shutil.which("git"), "needs jj and git")
+class PushAttributionTest(HookCase):
+    """push_attribution (PreToolUse, Bash): a push is refused while a commit it sends carries an attribution trailer
+    (Claude-Session:, a Co-Authored-By: naming Claude, "Generated with Claude Code"): Luiz's rule, fleet decision D585.
+    Commits the remote has already are not read, and a push whose range the hook cannot work out goes through."""
+
+    JJ = {"JJ_USER": "Test", "JJ_EMAIL": "test@example.com", "JJ_CONFIG": ""}
+
+    def setUp(self):
+        super().setUp()
+        self.env.update(self.JJ, XDG_CONFIG_HOME=str(self.tmp / "config"))
+        remote = self.tmp / "remote.git"
+        subprocess.run(["git", "init", "-q", "--bare", str(remote)], check=True)
+        self.work = self.tmp / "work"
+        self.jj("git", "init", "--colocate", str(self.work), cwd=self.tmp)
+        self.jj("git", "remote", "add", "origin", str(remote))
+        self.commit("a\n\nClaude-Session: https://claude.ai/code/session_old")
+        self.jj("bookmark", "set", "master", "-r", "@-")
+        self.jj("git", "push", "--bookmark", "master")
+
+    def jj(self, *args, cwd=None):
+        return subprocess.run(["jj", *args], cwd=cwd or self.work, env={**os.environ, **self.env}, check=True,
+                              capture_output=True, text=True).stdout
+
+    def commit(self, message):
+        (self.work / f"f{len(list(self.work.iterdir()))}").write_text("x\n")
+        self.jj("commit", "-m", message)
+        self.jj("bookmark", "set", "master", "-r", "@-")
+        return self.jj("log", "-r", "@-", "--no-graph", "-T", "change_id.short()")
+
+    def push(self, command):
+        payload = {**self.base("PreToolUse"), "tool_name": "Bash", "tool_input": {"command": command},
+                   "cwd": str(self.work)}
+        r = self.hook("PreToolUse", payload)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        return r
+
+    def denied(self, r):
+        self.assertTrue(r.stdout, f"not denied; stderr: {r.stderr}; log: {self.log()}")
+        decision = json.loads(r.stdout)["hookSpecificOutput"]
+        self.assertEqual(decision["permissionDecision"], "deny")
+        return decision["permissionDecisionReason"]
+
+    def test_a_trailer_in_the_pushed_range_is_refused_with_the_change_named(self):
+        clean = self.commit("b")
+        dirty = self.commit("c\n\nClaude-Session: https://claude.ai/code/session_x")
+        reason = self.denied(self.push("jj git push --bookmark master"))
+        self.assertIn(dirty, reason)
+        self.assertNotIn(clean, reason)
+        self.assertIn("Claude-Session:", reason)
+        self.assertIn(f"jj describe -r {dirty}", reason)
+        self.assertIn("D585", reason)
+
+    def test_co_authored_by_claude_and_generated_with_are_refused(self):
+        co = self.commit("b\n\nCo-Authored-By: Claude <noreply@anthropic.com>")
+        gen = self.commit("c\n\n\U0001f916 Generated with [Claude Code](https://claude.com/claude-code)")
+        reason = self.denied(self.push("jj git push -b master"))
+        self.assertIn(co, reason)
+        self.assertIn(gen, reason)
+
+    def test_a_git_push_is_read_too(self):
+        self.commit("b\n\nClaude-Session: https://claude.ai/code/session_x")
+        commit = self.jj("log", "-r", "@-", "--no-graph", "-T", "commit_id.short(12)")
+        reason = self.denied(self.push("git push origin master"))
+        self.assertIn(commit, reason)
+        self.assertIn("Claude-Session:", reason)
+
+    def test_a_clean_range_another_coauthor_and_an_unreadable_push_go_through(self):
+        self.commit("b\n\nCo-Authored-By: Ana <ana@example.com>")
+        self.assertSilent(self.push("jj git push --bookmark master"))
+        self.assertSilent(self.push("jj git push --bookmark nosuch"))
+        self.assertSilent(self.push("jj git push --bookmark $B"))
+        self.assertSilent(self.push("jj log"))
+
+    def test_the_rule_quoted_in_prose_or_an_indented_block_goes_through(self):
+        self.commit("b\n\nThe rule: never add a\nClaude-Session: line to a commit.")
+        self.commit("c\n\nThe trailer it refuses:\n\n    Claude-Session: https://claude.ai/code/session_x")
+        self.commit("d\n\nThis was generated with claude code's help.")
+        self.commit('e\n\nDrop the "\U0001f916 Generated with [Claude Code](https://claude.com/claude-code)" line '
+                    "from the PR template.")
+        self.assertSilent(self.push("jj git push --bookmark master"))
+        self.assertSilent(self.push("git push origin master"))
+
+    def test_a_git_push_is_read_without_asking_the_remote(self):
+        self.commit("b\n\nClaude-Session: https://claude.ai/code/session_x")
+        commit = self.jj("log", "-r", "@-", "--no-graph", "-T", "commit_id.short(12)")
+        subprocess.run(["git", "remote", "set-url", "origin", str(self.tmp / "gone.git")], cwd=self.work, check=True)
+        for command in ("git push origin master", "git push origin HEAD:refs/heads/master",
+                        "git push origin +master:master", "git -C . push origin master"):
+            with self.subTest(command=command):
+                self.assertIn(commit, self.denied(self.push(command)))
+        self.assertSilent(self.push("git push origin :master"))
+
+    def test_a_remote_with_no_bookmark_yet_goes_through(self):
+        fork = self.tmp / "fork.git"
+        subprocess.run(["git", "init", "-q", "--bare", str(fork)], check=True)
+        self.jj("git", "remote", "add", "fork", str(fork))
+        self.commit("b\n\nClaude-Session: https://claude.ai/code/session_x")
+        self.assertSilent(self.push("jj git push --remote fork --bookmark master"))
+        self.assertSilent(self.push("git push fork master"))
+
+
+class AttributionLinesTest(unittest.TestCase):
+    """attribution_lines: only real trailers and a whole "Generated with Claude Code" line near the end count."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.lines = staticmethod(load_hook(onepw=False).attribution_lines)
+
+    def test_trailers_naming_claude(self):
+        self.assertEqual(self.lines("a", [("Claude-Session", "https://x"), ("Co-Authored-By", "Claude <n@a.com>"),
+                                          ("Co-Authored-By", "Ana <ana@example.com>"), ("Signed-off-by", "Claude")]),
+                         ["Claude-Session: https://x", "Co-Authored-By: Claude <n@a.com>"])
+
+    def test_a_generated_line_counts_only_whole_near_the_end_and_as_written(self):
+        gen = "\U0001f916 Generated with [Claude Code](https://claude.com/claude-code)"
+        self.assertEqual(self.lines(f"a\n\n{gen}\n\nSigned-off-by: Ana", []), [gen])
+        self.assertEqual(self.lines("a\n\nGenerated with Claude Code", []), ["Generated with Claude Code"])
+        for body in (f"a\n\n{gen}\n\nb\n\nc", "a\n\ngenerated with Claude Code", f"a\n\n    {gen}",
+                     f"a\n\nSee {gen} in the template."):
+            with self.subTest(body=body):
+                self.assertEqual(self.lines(body, []), [])
+
+
 class SuiteParseTest(unittest.TestCase):
     """SuiteReader: which Bash lines run a repo's whole test suite (gated) and which a scoped run (left alone)."""
 
@@ -7218,7 +7342,7 @@ class PreToolUseDecisionTest(unittest.TestCase):
 
     def test_the_gates_return_only_a_deny(self):
         import inspect
-        for gate in (self.mod.land_turn_gate, self.mod.suite_gate):
+        for gate in (self.mod.land_turn_gate, self.mod.push_attribution, self.mod.suite_gate):
             with self.subTest(gate=gate.__name__):
                 returns = re.findall(r"^\s+return (.*)$", inspect.getsource(gate), re.M)
                 self.assertTrue(returns)
