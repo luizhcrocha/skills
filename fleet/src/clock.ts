@@ -49,14 +49,6 @@ export function stampOf(at: Date): string {
   );
 }
 
-/** An instant to the millisecond, as {@link stampOf} writes it with the fraction (`2026-01-05T09:00:00.250+00:00`):
- * for what is compared with a file's time within one second (wake.ts). {@link parseInstant} reads both. */
-export function stampMsOf(at: Date): string {
-  const whole = stampOf(at);
-
-  return `${whole.slice(0, 19)}.${String(at.getMilliseconds()).padStart(3, "0")}${whole.slice(19)}`;
-}
-
 /** The clock `FLEET_NOW` names, else the machine's. A `FLEET_NOW` that does not parse stops nothing. */
 export function clockFrom(fixed: string | undefined): Layer.Layer<Clock> {
   const at = fixed === undefined || fixed === "" ? undefined : parseInstant(fixed);
