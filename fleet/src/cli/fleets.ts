@@ -209,7 +209,7 @@ function fleetView(machine: Machine, e: Entry): FleetView {
         asks: d["asks"] === "manager" ? "manager" : "user",
         title: oneLine(d["title"]),
         blocking: d["blocking"] === true,
-        answeredAt: answeredAt(d, said),
+        answeredAt: answeredAt(d, said, e.moved === true),
         held: truthy(d["held"]) ? str(d["held"]) : undefined,
       })),
     spent:
@@ -329,7 +329,7 @@ function waiting(machine: Machine): Effect.Effect<void, never, Out> {
         const since = truthy(d["revised"]) ? str(d["revised"]) : truthy(d["opened"]) ? str(d["opened"]) : "";
         const ref = truthy(d["ref"]) ? str(d["ref"]) : str(d["id"]);
         let line = `${e.id} ${ref} [${marks}] ${oneLine(d["title"])}  since ${since.slice(0, 16).replace("T", " ")}`;
-        const at = answeredAt(d, said);
+        const at = answeredAt(d, said, e.moved === true);
 
         if (at !== undefined) {
           const m = [...said].reverse().find((x) => x.decision !== undefined && pyRepr(x.decision) === pyRepr(d["id"]) && str(x.at) === at);
@@ -387,7 +387,7 @@ function show(machine: Machine, fleet: string): Effect.Effect<void, Refusal, Out
       say(`    decision ${ref} ${str(d["id"])} [${asks}${truthy(d["blocking"]) ? ", blocks work" : ""}] ${str(d["title"])}: ${str(d["question"])}`);
 
       if (truthy(d["held"])) say(`        held by the fleet since ${str(d["held_at"]).slice(11, 16)}: ${str(d["held"])}`);
-      const at = answeredAt(d, said);
+      const at = answeredAt(d, said, entry.moved === true);
 
       if (at !== undefined) {
         const m = [...said].reverse().find((x) => x.decision !== undefined && pyRepr(x.decision) === pyRepr(d["id"]) && str(x.at) === at);

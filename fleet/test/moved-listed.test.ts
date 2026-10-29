@@ -4,7 +4,7 @@
  * service exports from the cloud. What waits on the user there is listed, read from those files, and links go to
  * the team's cloud page, `<cloud>/<fleet>`.
  */
-import { mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
+import { appendFileSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 
@@ -108,6 +108,23 @@ describe("a moved team no server here serves", () => {
     expect(ran.stdout).toContain("1 from the user unread");
     expect(ran.stdout).toContain("Pick the export host: Which machine exports?");
     expect(fleet(["fleets", "decision", "skills", "A1"], env).stdout).toContain("skills A1 [action, for the user] Approve the 1Password prompt");
+  });
+
+  test("a card answer the fleet replied to on the card is not 'ANSWERED, not recorded' in `fleets list`, `waiting` or `show`", () => {
+    const at = "2026-10-15T14:05:00+00:00";
+    const answer = { id: 2, at, from: "user", to: ["coordinator"], text: "the office host", decision: "D1" };
+    const reply = { id: 3, at, from: "coordinator", to: ["user"], text: "Answer on the card, please: D1.", re: 2, decision: "D1" };
+    appendFileSync(join(root, "chat.jsonl"), `${JSON.stringify(answer)}\n`);
+
+    expect(fleet(["fleets", "waiting"], env).stdout, "before the reply").toContain("not recorded yet");
+    appendFileSync(join(root, "chat.jsonl"), `${JSON.stringify(reply)}\n`);
+
+    for (const args of [["list"], ["waiting"], ["show", "skills"]]) {
+      const ran = fleet(["fleets", ...args], env);
+
+      expect(ran.code, ran.stderr).toBe(0);
+      expect(ran.stdout, args.join(" ")).not.toContain("ANSWERED");
+    }
   });
 
   test("a folder without cloud.json beside the registry is not a moved team", () => {
