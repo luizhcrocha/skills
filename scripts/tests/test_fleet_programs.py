@@ -153,6 +153,38 @@ class WorkedCallsTest(unittest.TestCase):
         self.assertIn('"answered on the page (#N)" is how the page words', refused[0]["issue"])
 
 
+class DoneRuleTest(unittest.TestCase):
+    """PROGRAMS.md's done rule, as the cloud's fold holds it: a worker is not done while a step it owns is current, a stop
+    always applies, and done sent again to a done worker is not refused."""
+
+    def test_the_fold_refuses_done_over_a_current_step_and_applies_the_rest(self):
+        current = 'step("m1", "s9", "Search", "current", "w1");\n'
+        refused, closed, stopped, made = fold(self, [
+            {"name": "done over a current step", "fresh": True,
+             "body": f'{current}worker("w1", {{ status: "done" }});\nreturn records.apply(ops);\n'},
+            {"name": "done with the step closed", "fresh": True,
+             "body": f'{current}worker("w1", {{ status: "done" }});\nstep("m1", "s9", "Search", "done", "w1");\n'
+                     "return records.apply(ops);\n"},
+            {"name": "stopped over a current step", "fresh": True,
+             "body": f'{current}worker("w1", {{ status: "stopped" }});\nreturn records.apply(ops);\n'},
+            {"name": "a worker made done, then given a current step", "fresh": True,
+             "body": 'worker("w9", { task: "search", milestone: "m1", model: "opus", effort: "high", status: "done" });\n'
+                     'step("m1", "s9", "Search", "current", "w9");\nreturn records.apply(ops);\n'}])
+        self.assertNotIn("thrown", refused, refused.get("thrown"))
+        self.assertEqual([r["_tag"] for r in refused["applied"]], ["applied", "refused"], refused["applied"])
+        self.assertIn("cannot be marked done while its step", refused["applied"][1]["issue"])
+        assert_applied(self, [closed, stopped])
+        self.assertEqual([r["_tag"] for r in made["applied"]], ["applied", "refused"], made["applied"])
+        self.assertIn("cannot be current under worker w9", made["applied"][1]["issue"])
+
+    def test_done_again_is_not_refused(self):
+        outcomes = fold(self, [
+            {"name": "done", "body": 'worker("w2", { status: "done" });\nreturn records.apply(ops);\n'},
+            {"name": "a step put current under it", "body": 'step("m1", "s8", "Index", "current", "w2");\nreturn records.apply(ops);\n'},
+            {"name": "done again", "body": 'worker("w2", { status: "done" });\nreturn records.apply(ops);\n'}])
+        assert_applied(self, outcomes)
+
+
 COMMIT = "3209d730e5c1a8b4f6d2097c3e8a1b5d4f60c2e9"
 
 

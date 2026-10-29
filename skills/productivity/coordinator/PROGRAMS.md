@@ -47,6 +47,14 @@ A `clash` means you set a field from an old read (`base`) and someone changed it
 user settles it on a clash card. Pass a `base` only when your write must not overwrite another's change; a set with no
 base overwrites, as the CLI did.
 
+A program that applied an op also gets back `drift`: up to 8 lines on what drifted on the fleet, the things it wrote to
+or new since the last result listed them, each `{ what, title, why, refs, act }`. `what` names the kind ("owner done,
+step open", "worker stopped", "step idle" and the rest), `refs` the ids it joins on (milestone, step, worker, change,
+roadblock), and `act` what to do about it. What waits on the owner (a card they have not answered, a reviewed change to
+land, a roadblock on them) is never listed: `driftMore` counts it with the lines the cap cut ("+3 older or waiting on
+the owner, see the work page"). Act on each line in your next program, with the act it names, or say on the page why it
+stays.
+
 ## What a program calls
 
 `FLEET_DIR=<dir> fleet-run --types` prints the declarations of every intent, with each one's rules in its comment.
@@ -420,6 +428,14 @@ return records.read({ decisions: "open" });
 
 Then pass the row's `op` as the `base` of the write that depends on it, for example
 `worker("w2", { status: "stopped" }, "<op of w2's row>")`.
+
+A worker cannot be marked `done` while a step it owns is still `current`: the cloud refuses that op and the rest of the
+program applies. For a worker the same program creates, the cloud refuses the step op that left it current instead, and
+keeps the worker. In the same program, close or park the step with `step(ms, id, title,
+"done"|"dropped"|"pending"|"blocked", ...)`, or hand it on with `step(ms, id, title, "current", "<other worker>")`,
+before or after the worker op. `stopped` and `failed` always apply, because a stop is a fact; the step stays open, and
+the result's `drift` lists it as "worker stopped" until you retake or drop it. Sending `done` again to a worker that is
+already done is not refused.
 
 ## The owner answers on the card
 
