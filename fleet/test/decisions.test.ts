@@ -1705,14 +1705,14 @@ describe("rule card", () => {
     writeFileSync(join(home, ".claude", "settings.json"), JSON.stringify({ autoMode: { allow: ["$defaults", RULE] } }));
     const sha = (text: string): string => createHash("sha256").update(text, "utf8").digest("hex");
     const line = (decision: string, text: string): void => appendFileSync(join(root, "grants.jsonl"), `${JSON.stringify({ op: "rule", decision, file: "/h/.claude/settings.json", sha256: sha(text), at: "t", by: "local" })}\n`);
-    expect(refused("decision", "added", "--decide", "add-rule: Add this rule", "--resolution", "r")).toContain("no record that the hub added");
+    expect(refused("decision", "added", "--decide", "add-rule: Add this rule", "--resolution", "r")).toContain("no record that its rule was added");
     line("other", RULE);
     line("added", `${RULE} and more`);
-    expect(refused("decision", "added", "--decide", "add-rule", "--resolution", "r")).toContain("no record that the hub added");
+    expect(refused("decision", "added", "--decide", "add-rule", "--resolution", "r")).toContain("no record that its rule was added");
     line("added", RULE);
     // A forged rule line, with the rule not in the user's settings, closes nothing.
     writeFileSync(join(home, ".claude", "settings.json"), JSON.stringify({ autoMode: { allow: ["$defaults"] } }));
-    expect(refused("decision", "added", "--decide", "add-rule", "--resolution", "r")).toContain("no record that the hub added");
+    expect(refused("decision", "added", "--decide", "add-rule", "--resolution", "r")).toContain("no record that its rule was added");
     writeFileSync(join(home, ".claude", "settings.json"), JSON.stringify({ autoMode: { allow: ["$defaults", RULE] } }));
     ok("decision", "added", "--decide", "add-rule: Add this rule", "--resolution", "answered on the page (#4)");
     expect(item("added")["status"]).toBe("decided");

@@ -6681,10 +6681,8 @@ class OnepwTest(FleetCase):
         self.assertEqual(said["hookEventName"], "PostToolUse")
         self.assertEqual(said["additionalContext"], (
             f"1Password is locked for {SSH_KIND} (SSH signing through 1Password failed). This fleet is on the waiting "
-            "list: the hub tells it when 1Password is unlocked, in its chat, or in its session when its watch is not "
-            "running. Retry `jj git push` then, not before. Do not poll, do not open a card and do not ask Luiz: the "
-            "lock was recorded once for the machine at 09:00, and he is asked by the card \"Unlock 1Password\" on the "
-            "fleet's page. Go on with work that needs no 1Password, or end the turn if nothing else is left."))
+            "list: it is told when Luiz says 1Password is unlocked, in its chat, or in its session when its watch is "
+            "not running. Retry `jj git push` then, not before." + self.SEEN_REST))
         self.assertEqual(self.onepw_log(), f"{self.NOW} locked: SSH signing through 1Password failed (ssh-agent in p)\n")
 
     def test_each_kind_of_failure_locks_and_the_failure_event_says_nothing(self):
@@ -6872,22 +6870,24 @@ class OnepwTest(FleetCase):
         self.assertEqual([w["what"] for w in self.state()["waiting"]], ["git fetch"])  # the fleet waits once per kind
         self.assertFalse(self.held("git fetch", repo="none"))
 
-    HELD_REST = (" Do not poll, do not open a card and do not ask Luiz: he was asked at 09:00, by the card \"Unlock "
-                 "1Password\" on the fleet's page. Go on with work that needs no 1Password, or end the turn if nothing "
-                 "else is left. The hook lets one command of this kind through at 09:15, from any fleet, to test the "
-                 "lock: that is its own test, not a time to wait for.")
-    SEEN_REST = (" Do not poll, do not open a card and do not ask Luiz: the lock was recorded once for the machine at "
-                 "09:00, and he is asked by the card \"Unlock 1Password\" on the fleet's page. Go on with work that needs "
-                 "no 1Password, or end the turn if nothing else is left.")
+    HELD_REST = (" Do not poll and do not ask Luiz in chat: the lock was recorded for the machine at 09:00, and he "
+                 "clears it by running `fleet onepw unlocked` in his terminal. A coordinator whose work waits on it asks "
+                 "him once, with an action card whose manual is that command in a ```nu block. Go on with work that "
+                 "needs no 1Password, or end the turn if nothing else is left. The hook lets one command of this kind "
+                 "through at 09:15, from any fleet, to test the lock: that is its own test, not a time to wait for.")
+    SEEN_REST = (" Do not poll and do not ask Luiz in chat: the lock was recorded once for the machine at 09:00, and he "
+                 "clears it by running `fleet onepw unlocked` in his terminal. A coordinator whose work waits on it asks "
+                 "him once, with an action card whose manual is that command in a ```nu block. Go on with work that "
+                 "needs no 1Password, or end the turn if nothing else is left.")
 
     def test_the_denial_leads_with_who_tells_the_fleet(self):
         """A fleet read "Don't retry `X` before 09:15" as "I wait for that time" (Luiz, 2026-10-13): the refusal puts it
-        on the waiting list and the hub tells it, so that comes first, and the test window's time last."""
+        on the waiting list and is told when it is unlocked, so that comes first, and the test window's time last."""
         self.lock()
         got = self.asks("secretspec run -- node deploy.js", env={"FLEET_NOW": "2026-01-05T09:10:00+00:00"})
         self.assertEqual(got["permissionDecision"], "deny")
         self.assertEqual(got["permissionDecisionReason"], (
-            f"1Password is locked for {OP_KIND}. This fleet is on the waiting list: the hub tells it when 1Password is "
+            f"1Password is locked for {OP_KIND}. This fleet is on the waiting list: it is told when Luiz says 1Password is "
             "unlocked, in its chat, or in its session when its watch is not running. Retry `secretspec run` then, not "
             "before." + self.HELD_REST))
         said = got["permissionDecisionReason"]
@@ -6929,8 +6929,8 @@ class OnepwTest(FleetCase):
             self.assertTrue(self.held(f"gh {sub} list", agent_id=f"agent-{n}"))
         payload, fleet = self.other_fleet()
         got = self.asks("gh pr list", payload=payload)
-        self.assertIn(". This fleet is on the waiting list: the hub tells it when 1Password is unlocked, in its chat, "
-                      "or in its session when its watch is not running. Retry `gh pr` then, not before. ",
+        self.assertIn(". This fleet is on the waiting list: it is told when Luiz says 1Password is unlocked, "
+                      "in its chat, or in its session when its watch is not running. Retry `gh pr` then, not before. ",
                       got["permissionDecisionReason"])
         self.assertEqual([(w["dir"], w["kind"]) for w in self.state()["waiting"]],
                          [(str(self.fleet), "op-desktop"), (str(fleet), "op-desktop")])
@@ -6947,10 +6947,10 @@ class OnepwTest(FleetCase):
                          "hookSpecificOutput"]["additionalContext"]):
             self.assertIn(
                 ". This fleet could not be put on the waiting list, so it will not be told when 1Password is unlocked: "
-                f"check `{self.fleet_cli} onepw` before you retry `gh pr`. Do not poll, ", said)
-            self.assertNotIn("the hub tells it", said)
+                f"check `{self.fleet_cli} onepw` before you retry `gh pr`. Do not poll and ", said)
+            self.assertNotIn("it is told when", said)
         self.assertEqual(len(self.state()["waiting"]), load_hook().ONEPW_WAITING_MAX)
-        self.assertIn(". This fleet is on the waiting list: the hub tells it ", self.asks("gh pr list")["permissionDecisionReason"])
+        self.assertIn(". This fleet is on the waiting list: it is told when ", self.asks("gh pr list")["permissionDecisionReason"])
 
     def test_the_hook_never_allows(self):
         import inspect

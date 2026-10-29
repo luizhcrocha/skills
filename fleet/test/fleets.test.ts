@@ -1028,7 +1028,7 @@ describe("a fleet has one host: fleet serve from another process", () => {
     expect([said?.id, said?.from, said?.to, said?.re]).toEqual([1, "fleet-hub", ["user"], null]);
     expect(said?.text).toBe(
       `[hub] This fleet's host changed at ${at}: ${side(second.pid)} took it over with \`fleet serve --take-over\` from ${side(first.pid)}, which was running. ` +
-        `The page, the chat watch and the hub's wakes are the new session's now. If you did not ask for this, say so here.`,
+        `The registry entry, the chat watch and the office host's wakes are the new session's now. If you did not ask for this, say so here.`,
     );
     const party = (pid: number): JsonObject => ({ pid, started: stampOf(new Date(startedMsOf(pid) ?? 0)), session: `sess-${String(pid)}` });
     expect(said?.stored["takeover"]).toEqual({ at, by: party(second.pid), from: party(first.pid) });

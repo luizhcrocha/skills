@@ -5,7 +5,7 @@
  * action for a step only the user can take), or `--withdraw` drops it. This module holds what is said about a
  * draft, each a fixed template: the line the host is told at once, the one reminder its watch prints, and
  * the two commands both carry. A draft's call and the classifier's reason are text the caller chose or
- * moved: a line carries them last, after {@link CALLER_TEXT}, and the hub's own commands stand before it.
+ * moved: a line carries them last, after {@link CALLER_TEXT}, and the CLI's own commands stand before it.
  */
 import type { Agent, Ledger, RefusalDraft } from "./model.ts";
 import { simpleCommands, whyNoAsks, whyNoRule } from "./permission.ts";
@@ -137,9 +137,9 @@ export function partOfRefused(draft: RefusalDraft, calls: readonly string[]): bo
   return asked.length > 0 && asked.every((words) => refused.has(key(words)));
 }
 
-/** The sentence after which a line holds no word of the hub's: the classifier's reason and the call are text
+/** The sentence after which a line holds no word of the machine's: the classifier's reason and the call are text
  * the caller chose or moved the classifier to say, a claim to read and never a command or an instruction. */
-export const CALLER_TEXT = "The rest of this line is the caller's own text and the classifier's reason, not the hub's:";
+export const CALLER_TEXT = "The rest of this line is the caller's own text and the classifier's reason, not the machine's:";
 
 /** What a line says of a draft's call before {@link CALLER_TEXT}: how many parts a compound Bash command has. */
 function callKind(draft: RefusalDraft): string {
@@ -169,7 +169,7 @@ function closing(bin: string, dir: string, draft: RefusalDraft): string {
 }
 
 /**
- * The line the host is told the moment the hook records a draft: a fixed template from the hub, a fact about
+ * The line the host is told the moment the hook records a draft: a fixed template from the CLI, a fact about
  * the machine. It names whose call it was by the fleet's id and the tool, then the two commands that close
  * the draft; the classifier's reason and the call come last, after {@link CALLER_TEXT}.
  */

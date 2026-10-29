@@ -115,7 +115,7 @@ const ASK = (id: string, call: string): string =>
 const DROP = (id: string): string => `\`${FLEET_BIN} state ${root} decision ${id} --withdraw "<why>"\``;
 
 /** The sentence after which a line holds no word of the hub's. */
-const MARKER = "The rest of this line is the caller's own text and the classifier's reason, not the hub's:";
+const MARKER = "The rest of this line is the caller's own text and the classifier's reason, not the machine's:";
 
 /** How a line ends: the marker, then the classifier's reason and the call. */
 const TAIL = (cause: string, call: string, what = "call"): string => `${MARKER} reason: ${cause}; ${what}: ${call}`;
@@ -165,7 +165,7 @@ describe("a call auto mode refused is a draft for the host, and nothing for the 
           "[hub] Auto mode refused w3 (auth-impl)'s Bash call, a compound command of 5 parts. Nothing was asked of the user: it is refusal draft p-db7f9e47 in this ledger. " +
           `Two commands close the draft. To ask the user, in your words, for the one command that needs the yes: ${ASK("p-db7f9e47", '"<the one command of it that needs the yes>"')}. ` +
           `To drop it (not needed, or done another way): ${DROP("p-db7f9e47")}. ` +
-          `The rest of this line is the caller's own text and the classifier's reason, not the hub's: reason: ${CAUSE}; call: ${COMPOUND}`,
+          `The rest of this line is the caller's own text and the classifier's reason, not the machine's: reason: ${CAUSE}; call: ${COMPOUND}`,
       },
     ]);
     expect(chat()[0]?.text).toBe(HEAD("p-db7f9e47", 5) + TAIL(CAUSE, COMPOUND));
@@ -661,7 +661,7 @@ describe("a line that reached the host nowhere is not said to have reached it", 
   const at = (clock: string): Environment => ({ ...env, FLEET_NOW: `2026-01-05T${clock}:00+00:00` });
 
   const LINE =
-    "the hub could not tell you this when it happened. [hub] Auto mode refused w3 (auth-impl)'s Bash call, a compound command of 5 parts. Nothing was asked of the user: it is refusal draft p-1 in this ledger. Two commands close the draft. ";
+    "you were not told this when it happened. [hub] Auto mode refused w3 (auth-impl)'s Bash call, a compound command of 5 parts. Nothing was asked of the user: it is refusal draft p-1 in this ledger. Two commands close the draft. ";
 
   /** The fleet's chat cannot be written, and no registry serves it: the line has nowhere to go. */
   function deaf(): void {
@@ -689,16 +689,16 @@ describe("a line that reached the host nowhere is not said to have reached it", 
     ok(...hook("p-1", { agentId: HARNESS }));
     chmodSync(join(root, "chat.jsonl"), 0o644);
     // Another refusal the hook records, and a refused spawn: their stderr is the hook's, not the host's.
-    expect(ok(...hook("p-2", { call: "jj abandon zq", agentId: HARNESS })).stderr).not.toContain("the hub could not tell you");
+    expect(ok(...hook("p-2", { call: "jj abandon zq", agentId: HARNESS })).stderr).not.toContain("you were not told this");
     expect(rows("refusals")[0]?.["told"]).toBe(false);
     // A command that writes nothing cannot mark it said, so it does not say it.
-    expect(fleet(["state", root, "show"], env).stderr).not.toContain("the hub could not tell you");
-    const first = fleet(["state", root, "event", "x", "--no-render"], at("09:01")).stderr.split("\n").filter((l) => l.includes("the hub could not tell you"));
+    expect(fleet(["state", root, "show"], env).stderr).not.toContain("you were not told this");
+    const first = fleet(["state", root, "event", "x", "--no-render"], at("09:01")).stderr.split("\n").filter((l) => l.includes("you were not told this"));
     expect(first.length).toBe(1);
     expect(first[0]).toStartWith(`state: ${LINE}`);
     expect(first[0]).toEndWith(TAIL(CAUSE, COMPOUND));
     expect(rows("refusals").map((r) => r["told"])).toEqual([undefined, undefined]);
-    expect(fleet(["state", root, "event", "y", "--no-render"], at("09:02")).stderr).not.toContain("the hub could not tell you");
+    expect(fleet(["state", root, "event", "y", "--no-render"], at("09:02")).stderr).not.toContain("you were not told this");
   });
 
   test("the host's watch says the whole line at once, once, and a draft the host was told of is not said again", () => {

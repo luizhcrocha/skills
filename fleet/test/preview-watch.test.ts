@@ -84,7 +84,7 @@ describe("watchWarning", () => {
 
   test("a preview under the hub's address, open in a tab, says root mode routes its marks, and advises no claim", () => {
     const said = watchWarning(stub(status([session({ claims: ["other-7501"] })], true, onPreview)), shared) ?? "";
-    expect(said).toContain("every fleet and dashboard on the hub shares");
+    expect(said).toContain("every fleet's preview on the preview server's shared origin shares");
     expect(said).toContain("`fleet preview ui set --root`");
     expect(said).not.toContain("picasso claim");
   });

@@ -395,7 +395,7 @@ function ledgerCommand(machine: Machine, request: LedgerRequest): Effect.Effect<
       seen === undefined ? undefined : staleRows(seen),
       seen === undefined || cmd === "init" || (cmd === "set" && args.str("now") !== undefined) ? undefined : staleNow(machine, seen),
       ...(seen === undefined || cmd === "init" ? [] : unrecorded(seen, readChat(root), isMoved(root))),
-      ...(seen === undefined ? [] : untold.map((draft) => `state: the hub could not tell you this when it happened. ${draftLine("fleet", root, seen, draft)}`)),
+      ...(seen === undefined ? [] : untold.map((draft) => `state: you were not told this when it happened. ${draftLine("fleet", root, seen, draft)}`)),
       seen === undefined || cmd === "init" ? undefined : draftsLeft(machine, seen, root),
       seen === undefined ? undefined : leftOpen(seen, settingDone),
       seen === undefined || !running ? undefined : overlapping(seen, args.str("id") ?? ""),

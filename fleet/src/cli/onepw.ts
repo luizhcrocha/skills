@@ -2,12 +2,12 @@
  * `fleet onepw` and `fleet onepw unlocked [--note TEXT]`: the machine's 1Password lock (onepw.ts) from a
  * terminal or a session. With no command it prints the state, anywhere, and changes nothing. `unlocked` is
  * the user's own word, for a terminal outside Claude Code: it clears every locked kind as the user and
- * settles at once, so each held fleet is told with no hub running.
+ * settles at once, so each held fleet is told now.
  *
  * `unlocked` is refused inside a Claude Code session: `CLAUDECODE` or `CLAUDE_CODE_SESSION_ID` in the
  * environment (as `fleet tell`), or a Claude Code process among the caller's ancestors, which unsetting the
  * two does not hide ({@link claudeAbove}). An agent does not say for the user that 1Password is unlocked:
- * there, only the button on the card clears the lock. The refusal stops an honest agent only: a command that
+ * Luiz clears the lock by running it in his own terminal. The refusal stops an honest agent only: a command that
  * also leaves its session (`setsid --fork`) has no such ancestor, and everything here runs as one Unix user.
  */
 import * as Effect from "effect/Effect";
@@ -30,23 +30,23 @@ const UNLOCKED: CommandSpec = { name: "unlocked", positionals: [], options: [opt
 const HELP = `usage: ${PROG} [-h] [unlocked [--note TEXT]]
 
 The machine's 1Password lock: a command of a fleet that needs 1Password failed because the app is locked, the
-user was asked once (the card "Unlock 1Password" on every fleet's page), and the plugin's hook holds every
+user is asked once (the card "Unlock 1Password" on every fleet's page), and the plugin's hook holds every
 fleet's commands of that kind (ssh-agent: SSH through the 1Password agent; op-desktop: secrets read through
 the 1Password app) until it is unlocked.
 
     (no command)                the state: not known to be locked, or each locked kind, since when and why, and
                                 who waits for what. Runs anywhere and changes nothing
     unlocked [--note TEXT]      the user says 1Password is unlocked, in a terminal outside Claude Code: clear
-                                every locked kind and tell each held fleet, now, with or without a hub; prints
-                                what it told. Refused inside a Claude Code session: there only the button on
-                                the card ("1Password is unlocked") clears the lock
+                                every locked kind and tell each held fleet now, which nothing else does; prints
+                                what it told. Refused inside a Claude Code session: the user runs it in his
+                                own terminal
 
 A kind also clears when a command of that kind succeeds in any session, and lapses after 2 h
 (FLEET_ONEPW_LAPSE_S). Every 15 min the hook lets one held command of a locked kind through, to test the
 lock. A fleet is told at most once in 30 min.`;
 
 /** What `unlocked` says to a Claude Code session. */
-const REFUSED = 'onepw: only the button on the card clears the lock ("1Password is unlocked", on any fleet\'s page); an agent does not say for the user that 1Password is unlocked. `fleet onepw` prints the state.\n';
+const REFUSED = "onepw: only the user clears the lock, by running `fleet onepw unlocked` in his own terminal; an agent does not say for the user that 1Password is unlocked. `fleet onepw` prints the state.\n";
 
 /** What `fleet onepw unlocked` asks of the machine it runs on. The process's own are {@link HERE}; a test
  * gives its own, since the tests themselves run under a Claude Code session and write to no socket. */

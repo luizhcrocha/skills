@@ -158,7 +158,7 @@ describe("fleet preview start", () => {
     expect([again.code, again.stderr]).toEqual([1, expect.stringContaining("preview: the preview already runs at ")]);
     preview("stop");
     expect(fleet(["serve", dir, "--stop"], env).code).toBe(0);
-    expect(preview("start", "--cmd", STUB).stderr).toContain("is not being served");
+    expect(preview("start", "--cmd", STUB).stderr).toContain("has no preview here: the preview server");
     state("set", "--workspaces", "shared");
     expect(preview("start", "--cmd", STUB).stderr).toContain("share one working copy");
   });

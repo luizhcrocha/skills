@@ -2681,7 +2681,7 @@ export function decision(ledger: Ledger, run: Run): Effect.Effect<Ledger, Refusa
 
     if (decide !== undefined && d.kind === RULE_KIND && addsRule(decide) && !ruleAdded(run.root, d, run.machine.env("HOME"))) {
       return yield* refuse(
-        `${d.ref ?? d.id} has no record that the hub added its rule: the user's settings do not hold it in autoMode.allow, or grants.jsonl holds no rule line for it with the sha256 of the rule it holds now. ` +
+        `${d.ref ?? d.id} has no record that its rule was added: the user's settings do not hold it in autoMode.allow, or grants.jsonl holds no rule line for it with the sha256 of the rule it holds now. ` +
           `Only the user's Add this rule on the fleet page adds it; wait for it (\`fleet chat ${run.root} wait ${d.id}\`), or --withdraw "why"`,
       );
     }

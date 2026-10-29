@@ -31,7 +31,7 @@ export function isKept(name: string): boolean {
 
 /** Why `given`, which names a fleet `name`, cannot: `name` is empty or one the chat keeps. */
 function keptWhy(given: string, name: string): string {
-  return name === HUB_NAME ? `'${given}' cannot name a fleet; the hub signs its own lines in a chat with it` : `'${given}' cannot name a fleet; the chat keeps ['coordinator', 'manager', 'user'] for itself`;
+  return name === HUB_NAME ? `'${given}' cannot name a fleet; the machine signs its own chat lines with it` : `'${given}' cannot name a fleet; the chat keeps ['coordinator', 'manager', 'user'] for itself`;
 }
 
 /** One fleet being served. */

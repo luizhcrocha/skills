@@ -182,7 +182,7 @@ function alone(why: Standalone): string {
   return `state: ${why.why}: numbered from this ledger alone, so a number may repeat another standalone fleet's.`;
 }
 
-/** What a fleet is told when it numbers from one registry while the hub serves it from another
+/** What a fleet is told when it numbers from one registry while it is registered in the usual one
  * (`$FLEET_HOME` or `$XDG_STATE_HOME` set for one and not the other); undefined when it is not so. */
 function elsewhere(machine: Machine, root: string): string | undefined {
   const used = machine.registry.place.home;
@@ -196,7 +196,7 @@ function elsewhere(machine: Machine, root: string): string | undefined {
 
   return (
     `state: this fleet is served from the registry at ${usual} but numbers from ${used} ($FLEET_HOME or $XDG_STATE_HOME): ` +
-    `its numbers may repeat the hub's fleets'. Unset them, or point them at ${usual}.`
+    `its numbers may repeat those of the other fleets registered at ${usual}. Unset them, or point them at ${usual}.`
   );
 }
 

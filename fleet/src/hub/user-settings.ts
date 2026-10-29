@@ -21,7 +21,7 @@ const USER_LOCK = ".settings.local.json.lock";
  * itself when nothing is there yet; or why there is none (no HOME, or a link to a file that is not there).
  */
 export function userSettingsFile(home: string | undefined): string | Ungranted {
-  if (home === undefined || !isAbsolute(home)) return new Ungranted("the hub has no HOME, so it cannot tell where the user's settings are");
+  if (home === undefined || !isAbsolute(home)) return new Ungranted("this process has no HOME, so it cannot tell where the user's settings are");
   const file = join(home, ".claude", "settings.json");
 
   try {

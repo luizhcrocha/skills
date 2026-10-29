@@ -6,7 +6,7 @@
  *   workspace `preview` beside the repo (made once, recorded in the ledger as the fleet's preview, never a
  *   worker's) whose @ is the merge of the included workers' working copies on the stack; the repo's dev
  *   server started there in the background; and the updater, which keeps the merge and its files current
- *   every `FLEET_PREVIEW_S` seconds. The hub serves it at `/f/<fleet>/preview/`. The stack is the one commit
+ *   every `FLEET_PREVIEW_S` seconds. The preview server serves it at `/f/<fleet>/preview/`. The stack is the one commit
  *   `--stack` names (for this start), else the ledger's `preview.stack`, else the default workspace's @ (or
  *   its parent when that @ is empty and undescribed).
  * - `start --per-worker WORKER [--cmd C] [--port N] [--setup C] [--root]`: a dev server in that worker's
@@ -30,7 +30,7 @@
  *
  * Root mode (`--root`, or the ledger's `preview.root`) is for an app that only runs at its root (it asks
  * for `/api/...` absolutely): the dev server is told base `/`, and the preview is given a public port
- * (`preview/ports.ts`), on which the hub serves it at the root of an origin of its own,
+ * (`preview/ports.ts`), on which the preview server serves it at the root of an origin of its own,
  * `https://<this machine's MagicDNS name>:<port>/`, with the machine's Tailscale certificate (none, no
  * port: never plain http). The `/f/<fleet>/preview/` path still leads to it too.
  */
@@ -201,10 +201,10 @@ function cameNote(came: Came): string {
   return came === "up" ? "" : came === "starting" ? ", not answering yet" : ", exited at start";
 }
 
-/** Where a dev server is reached: its base under the hub, and in root mode its public port's slot. */
+/** Where a dev server is reached: its base on the preview server, and in root mode its public port's slot. */
 interface Place {
   readonly root: string;
-  /** The hub's path for it, `/f/<fleet>/preview/` or `…/preview/<worker>/`. */
+  /** The preview server's path for it, `/f/<fleet>/preview/` or `…/preview/<worker>/`. */
   readonly base: string;
   /** In root mode: the dev server runs at `/` and gets a public port; `worker` undefined for the combined preview. */
   readonly rooted: { readonly worker: string | undefined } | undefined;
@@ -322,7 +322,7 @@ function tailnetOf(machine: Machine): Tailnet | undefined {
 }
 
 /** A root-mode dev server's public address, `https://<MagicDNS name>:<port>/` (the name the certificate is
- * for; none without Tailscale), and what the hub says of the port. Undefined when it is not in root mode. */
+ * for; none without Tailscale), and what the preview server says of the port. Undefined when it is not in root mode. */
 function publicLine(machine: Machine, server: DevServer): string | undefined {
   const port = server.public;
 
@@ -339,7 +339,7 @@ function publicUrl(machine: Machine, server: DevServer): string | undefined {
   return server.public === null || self === undefined ? undefined : `https://${self.dns}:${server.public}/`;
 }
 
-/** Where the reviewer opens a preview: its root-mode address, else `hub` (under the hub's, shared by every fleet). */
+/** Where the reviewer opens a preview: its root-mode address, else `hub` (the preview server's shared origin, the address the removed hub had). */
 function previewAt(machine: Machine, server: DevServer | null, hub: string, dir: string): PreviewAt {
   const own = server === null ? undefined : publicUrl(machine, server);
 
@@ -455,7 +455,7 @@ function startCombined(machine: Machine, root: string, raw: JsonObject, given: M
 
     const at = served(machine, root);
 
-    if (at === undefined) return yield* refuse(`${root} is not being served: the preview is reached through the hub at /f/<fleet>/preview/; \`fleet serve ${root}\` first`);
+    if (at === undefined) return yield* refuse(`${root} has no preview here: the preview server (\`fleet preview serve\`) serves the preview at /f/<fleet>/preview/, under the name \`fleet serve ${root}\` registers; run that first (a team moved to the cloud has none)`);
     const before = readRecord(root);
 
     if (before !== undefined && before.server !== null && (running(before.server) || asleep(before.server)) && runs(updaterProc(before))) {
@@ -585,7 +585,7 @@ function startPerWorker(machine: Machine, root: string, raw: JsonObject, worker:
     const out = yield* Out;
     const at = served(machine, root);
 
-    if (at === undefined) return yield* refuse(`${root} is not being served: the preview is reached through the hub; \`fleet serve ${root}\` first`);
+    if (at === undefined) return yield* refuse(`${root} has no preview here: the preview server (\`fleet preview serve\`) serves a worker's preview at /f/<fleet>/preview/<worker>/, under the name \`fleet serve ${root}\` registers; run that first (a team moved to the cloud has none)`);
     const cand = candidates(raw).find((c) => c.id === worker || c.workspace === worker);
 
     if (cand === undefined) return yield* refuse(`${worker} has no active workspace in this fleet (\`fleet ws ${root} list\`)`);

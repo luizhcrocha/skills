@@ -66,7 +66,7 @@ function words(p: Party): string {
 export function takeoverText(at: string, by: Party, from: Party): string {
   return (
     `[hub] This fleet's host changed at ${at}: ${words(by)} took it over with \`fleet serve --take-over\` from ${words(from)}, which was running. ` +
-    `The page, the chat watch and the hub's wakes are the new session's now. If you did not ask for this, say so here.`
+    `The registry entry, the chat watch and the office host's wakes are the new session's now. If you did not ask for this, say so here.`
   );
 }
 

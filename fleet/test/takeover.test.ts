@@ -59,7 +59,7 @@ describe("the record of a takeover", () => {
   test("a fixed template: who took the fleet from whom, each pid and start, and when; what the machine did not say is said so", () => {
     expect(takeoverText(AT, BY, FROM)).toBe(
       "[hub] This fleet's host changed at 2026-10-12T14:02:11+00:00: session sess-new (pid 222, started 2026-10-12T13:55:01+00:00) took it over with `fleet serve --take-over` " +
-        "from session sess-old (pid 111, started 2026-10-12T09:12:44+00:00), which was running. The page, the chat watch and the hub's wakes are the new session's now. If you did not ask for this, say so here.",
+        "from session sess-old (pid 111, started 2026-10-12T09:12:44+00:00), which was running. The registry entry, the chat watch and the office host's wakes are the new session's now. If you did not ask for this, say so here.",
     );
     expect(takeoverText(AT, { pid: 222, started: null, session: null }, FROM)).toContain("session not recorded (pid 222, started at a time the machine did not say) took it over");
   });

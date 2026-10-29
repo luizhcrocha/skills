@@ -148,7 +148,7 @@ function devLine(root: string, a: Agent, port: number | undefined): string | und
   if (preview !== undefined && server !== null && (runs(serverProc(server)) || kept(server))) {
     return (
       `Dev server: the fleet runs a preview, so start none of your own. Check your change alone on your per-worker preview ` +
-      `(\`fleet preview ${root} start --per-worker ${a.id}\`, which prints its address), and the merged work at /f/${preview.fleet}/preview/ on the hub.`
+      `(\`fleet preview ${root} start --per-worker ${a.id}\`, which prints its address), and the merged work at /f/${preview.fleet}/preview/ on the preview server.`
     );
   }
 

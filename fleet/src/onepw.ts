@@ -166,7 +166,7 @@ export interface Settled {
 }
 
 /** How a settle reaches a session whose watch is dead: the folder of the sessions' sockets, the write and
- * the machine's processes (wake.ts `deliverTo`). The hub's own are wake.ts `socksDir`, `deliver` and host.ts
+ * the machine's processes (wake.ts `deliverTo`). The CLI's own are wake.ts `socksDir`, `deliver` and host.ts
  * `PROBE`; a test gives its own. */
 export interface How {
   readonly socks: string;
@@ -418,7 +418,7 @@ function write(machine: Machine, raw: JsonObject, kept: Kept): void {
 }
 
 /**
- * Clear every locked kind as `by` (Luiz: the card's button, `fleet onepw unlocked` in a terminal), with a
+ * Clear every locked kind as `by` (Luiz: `fleet onepw unlocked` in a terminal), with a
  * note of how. Nothing is told here: {@link settle} tells the fleets. The lock it cleared, or undefined when
  * nothing was locked (then nothing is written).
  */
@@ -507,7 +507,7 @@ function byDir<R extends Waiting>(rows: readonly R[]): Map<string | undefined, R
   return groups;
 }
 
-/** Append `text` to `entry`'s chat, from the hub to its host; the notice as stored, or why it could not be. */
+/** Append `text` to `entry`'s chat, from `fleet-hub` to its host; the notice as stored, or why it could not be. */
 function post(entry: Entry, to: string, text: string, now: Date): Told | Error {
   try {
     const stored = appendLocked(entry.dir, (_known, nextId) => ({ id: nextId, at: stampOf(now), from: HUB_NAME, to: [to], text, re: null, parts: [{ text }] }));
@@ -702,7 +702,7 @@ export function cardOf(machine: Machine): JsonObject | undefined {
   };
 }
 
-/** How many fleet DIRs have rows of a kind that is over: a notice each is owed (the hub has not looked yet,
+/** How many fleet DIRs have rows of a kind that is over: a notice each is owed (no `fleet onepw unlocked` has settled since,
  * or the DIR was told less than {@link NOTICE_GAP_S} ago). */
 function owed(machine: Machine, state: State, now: Date): number {
   const lapse = lapseSeconds(machine.env);
@@ -717,7 +717,7 @@ export function owedLine(machine: Machine, now: Date = machine.now()): string | 
   const state = readState(machine, now);
   const untold = state === undefined || "broken" in state ? 0 : owed(machine, state, now);
 
-  return untold === 0 ? undefined : `a hold is over and ${String(untold)} fleet(s) are not told yet: the hub tells each within seconds, or ${spanWords(NOTICE_GAP_S)} after its last notice`;
+  return untold === 0 ? undefined : `a hold is over and ${String(untold)} fleet(s) are not told yet: each is told the next time the user clears the lock from his own terminal, once ${spanWords(NOTICE_GAP_S)} have passed since it was last told`;
 }
 
 /**

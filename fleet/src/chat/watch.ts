@@ -493,7 +493,7 @@ export function draftReminders(machine: Machine, root: string, told: Map<string,
 
     if (told.has(mark) && told.get(mark) !== false) continue;
     told.set(mark, true);
-    lines.push(`! the hub could not tell you this when it happened. ${draftLine("fleet", root, ledger, draft)}`);
+    lines.push(`! you were not told this when it happened. ${draftLine("fleet", root, ledger, draft)}`);
   }
 
   for (const { draft, minutes } of staleDrafts(machine, ledger)) {

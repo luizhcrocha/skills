@@ -96,7 +96,7 @@ describe("PreviewCertificate", () => {
 
   test("holds what the source gave, with its name, and asks again only when it nears its end", async () => {
     const { held, clock, asked } = holder([cert("first", 60), cert("second", 90)]);
-    expect(held.current()).toEqual(new NoCertificate("the hub has not asked for this machine's certificate yet"));
+    expect(held.current()).toEqual(new NoCertificate("the preview server has not asked for this machine's certificate yet"));
     await held.check();
     expect(held.current()).toMatchObject({ cert: "first-cert", key: "first-key", name: "box.example.ts.net" });
     clock.at += 45 * DAY;

@@ -6854,7 +6854,7 @@ def grant_records_tracked(hook):
     import shlex
     untrack = " ".join(shlex.quote(p) for p in tracked)
     return (f"# tstack grant records\n{root}: {' and '.join(tracked)} {'is' if len(tracked) == 1 else 'are'} tracked, "
-            "so a checkout (`jj workspace update-stale`, `jj new`) can put an older copy there. The hub and the hook keep a "
+            "so a checkout (`jj workspace update-stale`, `jj new`) can put an older copy there. The office host and the hook keep a "
             "root's grant records in ~/.claude/tstack-grants/ now and write nothing to the tree's copy; until every session "
             "runs the new hook, the hook runs no grant a take-back there ends, so a checkout there revives no grant. "
             "Tell the user; the "

@@ -41,7 +41,7 @@ const unlocked = (at: string, since: string, kinds: string): string => `[hub] 1P
 
 const lapsed = (at: string, since: string, kinds: string): string => `[hub] The 1Password hold lapsed (${at}; locked since ${since}, 2 h with no answer). Held here: ${kinds}. Retry once.`;
 
-const REFUSED = 'onepw: only the button on the card clears the lock ("1Password is unlocked", on any fleet\'s page); an agent does not say for the user that 1Password is unlocked. `fleet onepw` prints the state.\n';
+const REFUSED = "onepw: only the user clears the lock, by running `fleet onepw unlocked` in his own terminal; an agent does not say for the user that 1Password is unlocked. `fleet onepw` prints the state.\n";
 
 /** What the machine says of a session that is there, and of one that is gone. */
 const THERE: Probe = { running: () => ({ claude: true, started: "t" }), holds: () => true, startedMs: () => undefined };
@@ -380,7 +380,7 @@ describe("the notice", () => {
 
     write();
     expect(cardOf(m)).toEqual({ since: OP_SINCE, why: "a command that uses 1Password failed", again: null, waiting: [{ who: "casos", what: "reading secrets" }] });
-    expect(statusLine(m)).toBe("1Password: locked: op-desktop since 14:05 (a command that uses 1Password failed); waiting: casos (evil words)\na hold is over and 2 fleet(s) are not told yet: the hub tells each within seconds, or 30 min after its last notice");
+    expect(statusLine(m)).toBe("1Password: locked: op-desktop since 14:05 (a command that uses 1Password failed); waiting: casos (evil words)\na hold is over and 2 fleet(s) are not told yet: each is told the next time the user clears the lock from his own terminal, once 30 min have passed since it was last told");
     socket();
     probe = THERE;
     const text = unlocked("14:32", "13:50", SSH_WORDS);
@@ -480,7 +480,7 @@ describe("settle", () => {
     lock({ "ssh-agent": { ...SSH, cleared: byCommand }, "op-desktop": OP }, rows);
     expect([locked(m)?.kinds, locked(m)?.waiting.map((w) => w.what)]).toEqual([["op-desktop"], ["secretspec run", "gh pr"]]);
     expect(cardOf(m)).toEqual({ since: OP_SINCE, why: "the 1Password prompt was dismissed", again: null, waiting: [{ who: "skills", what: "reading secrets" }, { who: "casos", what: "reading secrets" }] });
-    expect(statusLine(m)).toBe("1Password: locked: op-desktop since 14:05 (the 1Password prompt was dismissed); waiting: skills (secretspec run), casos (gh pr)\na hold is over and 1 fleet(s) are not told yet: the hub tells each within seconds, or 30 min after its last notice");
+    expect(statusLine(m)).toBe("1Password: locked: op-desktop since 14:05 (the 1Password prompt was dismissed); waiting: skills (secretspec run), casos (gh pr)\na hold is over and 1 fleet(s) are not told yet: each is told the next time the user clears the lock from his own terminal, once 30 min have passed since it was last told");
     expect((await settle(m, how()))?.told.map((t) => [t.fleet, t.text])).toEqual([["skills", unlocked("14:32", "13:50", SSH_WORDS)]]);
     expect([asArray(stateNow()["waiting"]), locked(m)?.kinds]).toEqual([rows.slice(1), ["op-desktop"]]);
     at = "2026-10-12T14:40:00+00:00";
@@ -488,7 +488,7 @@ describe("settle", () => {
     expect([kindNow("ssh-agent")?.["cleared"], asObject(kindNow("op-desktop")?.["cleared"])?.["by"]]).toEqual([byCommand, "user"]);
     const text = unlocked("14:40", "14:05", OP_WORDS);
     expect((await settle(m, how()))?.told.map((t) => [t.fleet, t.text])).toEqual([["casos", text]]);
-    expect(statusLine(m)).toBe("1Password: not known to be locked\na hold is over and 1 fleet(s) are not told yet: the hub tells each within seconds, or 30 min after its last notice");
+    expect(statusLine(m)).toBe("1Password: not known to be locked\na hold is over and 1 fleet(s) are not told yet: each is told the next time the user clears the lock from his own terminal, once 30 min have passed since it was last told");
     at = "2026-10-12T15:02:10+00:00";
     expect((await settle(m, how()))?.told.map((t) => [t.fleet, t.text])).toEqual([["skills", text]]);
     expect([said(skills).length, said(casos).length, stateNow()["kinds"], stateNow()["waiting"]]).toEqual([2, 1, {}, []]);
@@ -509,7 +509,7 @@ describe("settle", () => {
       at = answered;
       expect(clear(m, "user", "answered on the page")?.again).toBe(failed);
       expect(await settle(m, how())).toBeUndefined();
-      expect([said(skills).length, statusLine(m)]).toEqual([1, "1Password: not known to be locked\na hold is over and 1 fleet(s) are not told yet: the hub tells each within seconds, or 30 min after its last notice"]);
+      expect([said(skills).length, statusLine(m)]).toEqual([1, "1Password: not known to be locked\na hold is over and 1 fleet(s) are not told yet: each is told the next time the user clears the lock from his own terminal, once 30 min have passed since it was last told"]);
     }
 
     at = "2026-10-12T15:02:09+00:00";
@@ -660,7 +660,7 @@ describe("the hub's name", () => {
 
   test("no fleet is named fleet-hub", () => {
     const root = served("skills");
-    expect(m.registry.rename(root, "Fleet Hub")).toEqual({ why: "'Fleet Hub' cannot name a fleet; the hub signs its own lines in a chat with it" });
+    expect(m.registry.rename(root, "Fleet Hub")).toEqual({ why: "'Fleet Hub' cannot name a fleet; the machine signs its own chat lines with it" });
     expect(m.registry.live().map((e) => e.id)).toEqual(["skills"]);
   });
 });
@@ -720,7 +720,7 @@ describe("fleet onepw", () => {
     expect(onepw().stdout).toBe("1Password: locked: ssh-agent since 13:50 (SSH signing through 1Password failed); nothing waits\n");
     lock({ "ssh-agent": { ...SSH, cleared: { at, by: "command", note: "jj git push" } } }, [row(skills), row(casos), row(null)]);
     const over = onepw();
-    expect(over.stdout).toBe("1Password: not known to be locked\na hold is over and 2 fleet(s) are not told yet: the hub tells each within seconds, or 30 min after its last notice\n");
+    expect(over.stdout).toBe("1Password: not known to be locked\na hold is over and 2 fleet(s) are not told yet: each is told the next time the user clears the lock from his own terminal, once 30 min have passed since it was last told\n");
     expect([over.stdout.includes("unlocked`"), said(skills), existsSync(logPath(m))]).toEqual([false, [], false]);
   });
 
@@ -768,7 +768,7 @@ describe("fleet onepw", () => {
     lock({ "ssh-agent": SSH }, [row(skills)], { told: { [skills]: "2026-10-12T14:30:00+00:00" } });
 
     expect((await cli(["unlocked"])).stdout).toBe(
-      "1Password: unlocked; no fleet was told now\na hold is over and 1 fleet(s) are not told yet: the hub tells each within seconds, or 30 min after its last notice\n",
+      "1Password: unlocked; no fleet was told now\na hold is over and 1 fleet(s) are not told yet: each is told the next time the user clears the lock from his own terminal, once 30 min have passed since it was last told\n",
     );
     expect(said(skills)).toEqual([]);
   });

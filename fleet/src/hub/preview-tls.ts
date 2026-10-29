@@ -92,11 +92,11 @@ export interface PreviewCertificateOptions {
   readonly log: (line: string) => void;
 }
 
-/** The certificate the hub holds for the public ports, renewed as it nears its end. */
+/** The certificate the preview server holds for the public ports, renewed as it nears its end. */
 export class PreviewCertificate {
   private held: Named | undefined;
   /** Why none is held: the last refusal, or what stands in for one. */
-  private reason = "the hub has not asked for this machine's certificate yet";
+  private reason = "the preview server has not asked for this machine's certificate yet";
   /** When the one held last expired unrenewed, while none has replaced it. */
   private expired: Date | undefined;
   private lastTry = Number.NEGATIVE_INFINITY;
