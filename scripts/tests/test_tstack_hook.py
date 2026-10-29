@@ -5272,6 +5272,26 @@ class LandTurnGateTest(FleetCase):
         self.assertEqual((op["record"], op["set"]["kind"], op["set"]["important"]), ({"kind": "event"}, "blocked", True))
         self.assertIn("Push gate: refused `jj git push --bookmark master`", op["set"]["text"])
 
+    def test_a_moved_fleet_whose_registry_entry_is_gone_still_waits_for_the_turn(self):
+        """The cut-over's `fleet serve --stop` removes the fleet's registry entry, so `fleet turn` cannot find it by the
+        session's process: the gate names the moved folder the session served in $FLEET_DIR."""
+        self.env["XDG_STATE_HOME"] = str(self.tmp / "state")
+        home = self.tmp / "state" / "fleet" / "p"
+        home.mkdir(parents=True)
+        (home / "state.json").write_text((self.fleet / "state.json").read_text())
+        (self.fleet / "state.json").unlink()
+        self.register(home)
+        self.manager(("l1", "current", "infra"), ("l2", "pending", "p"))
+        self.denied(self.push("jj git push --bookmark master"))  # served: found by the session's process, remembered
+        MovedFleet.move(self, home)
+        (self.registry / "p.json").unlink()
+        reason = self.denied(self.push("jj git push --bookmark master"))
+        self.assertIn("p doesn't hold the landing turn (fleet turn: p does not hold the landing turn (l1", reason)
+        [run] = MovedFleet.programs(self)
+        self.assertEqual(run["dir"], str(home))
+        self.manager(("l1", "done", "infra"), ("l2", "current", "p"))
+        self.assertSilent(self.push("jj git push --bookmark master"))
+
     def test_a_push_with_the_turn_is_allowed(self):
         self.manager(("l1", "done", "infra"), ("l2", "current", "p"))
         self.assertSilent(self.push("jj git push --bookmark master"))

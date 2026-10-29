@@ -196,6 +196,39 @@ export function movedTeam(dir: string): Entry | undefined {
   return movedEntry(resolvePath(dir));
 }
 
+/** Whether a session process a moved team's folder names still runs: the office host's wake record (`wakes.json`'s
+ * `owner`, the session that last armed the team's chat watch as `who`) or the record of a watch running now
+ * (`watch-<who>.owner.pid`), each `{session: <pid>, started}`. The process must run with the start time recorded, so a
+ * later process with its pid is not taken for it; a record without a start time proves nothing. */
+function sessionRuns(dir: string, who: string): boolean {
+  const owners = [readObject(join(dir, "wakes.json"))?.["owner"], readObject(join(dir, `watch-${who}.owner.pid`))];
+
+  return owners.some((raw) => {
+    const owner = asObject(raw);
+    const pid = asNumber(owner?.["session"]);
+    const started = asString(owner?.["started"]);
+
+    return pid !== undefined && Number.isInteger(pid) && pid > 1 && started !== undefined && startedOf(pid) === started;
+  });
+}
+
+/** The manager a machine has now ({@link Registry.presentManager}): the one present, or why the moved one found is not. */
+export interface Presence {
+  readonly manager?: Entry;
+  readonly away?: string;
+}
+
+/** Why the manager moved to the cloud at `entry` is not present, or undefined when it is: its ledger's status is
+ * running and a session of its runs ({@link sessionRuns}). No registry entry of a moved manager goes away when its
+ * session closes, so this is what stands in for one. */
+export function movedManagerAway(entry: Entry): string | undefined {
+  const status = asString(readObject(join(entry.dir, "state.json"))?.["status"]);
+
+  if (status !== "running") return `its ledger is ${status ?? "unreadable"}`;
+
+  return sessionRuns(entry.dir, "manager") ? undefined : "no session of its runs";
+}
+
 /** Team `id`'s page under the marker's `cloud`, or "" (no page) unless `cloud` is an https address with no user,
  * query or fragment: the marker sits in a folder any process of the user writes, and its page becomes a link and a
  * redirect on the hub's origin, where a `javascript:` address would run as the hub. */
@@ -469,6 +502,17 @@ export class Registry {
   /** The manager, when one is served. */
   manager(): Entry | undefined {
     return this.live().find((e) => e.role === "manager");
+  }
+
+  /** The manager this machine has now: the one served, else one moved to the cloud ({@link shown}) that is present
+   * ({@link movedManagerAway}). `away` says why a moved manager found is not. */
+  presentManager(): Presence {
+    const found = this.shown().find((e) => e.role === "manager");
+    const away = found?.moved === true ? movedManagerAway(found) : undefined;
+
+    if (away !== undefined) return { away };
+
+    return found === undefined ? {} : { manager: found };
   }
 
   /**

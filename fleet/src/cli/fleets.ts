@@ -409,10 +409,14 @@ function show(machine: Machine, fleet: string): Effect.Effect<void, Refusal, Out
 function manager(machine: Machine): Effect.Effect<void, Refusal, Out> {
   return Effect.gen(function* () {
     const out = yield* Out;
-    const found = machine.registry.manager();
+    const { manager: found, away } = machine.registry.presentManager();
 
-    if (found === undefined) return yield* fail("no manager is being served on this machine");
-    out.out(`manager  session ${found.session ?? "(not named yet)"}  ${found.url}  ${found.dir}\n`);
+    if (found === undefined) {
+      return yield* fail(away === undefined ? "no manager is being served on this machine" : `the manager moved to the cloud is not present (${away})`);
+    }
+
+    const session = found.session ?? (found.moved === true ? "(in its greeting)" : "(not named yet)");
+    out.out(`manager  session ${session}  ${found.url}  ${found.dir}\n`);
     out.out(`    what holds for every fleet: ${join(found.dir, "standing.md")}\n`);
   });
 }

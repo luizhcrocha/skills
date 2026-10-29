@@ -5184,7 +5184,8 @@ def _onto_landing(lc, push):
 def land_turn_gate(hook):
     """PreToolUse (Bash): a push to the repo's landing bookmark waits for the landing turn. The hook first works
     out what the command pushes; only a push onto a landing bookmark on the landing remote, or one it cannot
-    read, asks land-check's turn (`fleet turn`, which finds the fleet by the session's process). In a fleet
+    read, asks land-check's turn (`fleet turn`, which finds the fleet by the session's process, else by $FLEET_DIR: a
+    session with none set is given the folder of the moved fleet it serves, which no registry entry names). In a fleet
     whose machine serves a manager and that does not hold the turn, the push is denied; Luiz's approval to
     push answers whether it may land, the turn when. Outside a managed fleet, and for any other push, it says
     nothing. When the fleet CLI cannot run, the push goes through with a warning: a broken hub never blocks
@@ -5206,7 +5207,9 @@ def land_turn_gate(hook):
         return None
     cli = hook.env.get("TSTACK_FLEET_CLI") or fleet_cli()
     timeout = float(hook.env.get("TSTACK_TURN_TIMEOUT_S") or TURN_TIMEOUT_S)
-    turn = lc.landing_turn(cli, timeout=timeout)
+    moved_dir = None if hook.env.get("FLEET_DIR") else next(iter(_moved_served_dirs(hook, [])), None)
+    env = {**hook.env, "FLEET_DIR": moved_dir} if moved_dir else None
+    turn = lc.landing_turn(cli, timeout=timeout, env=env)
     if turn is not None and turn[0] == 0:
         return None
     what = (f"This push moves the landing bookmark {', '.join(sorted(landing))}" if landing
@@ -5219,7 +5222,7 @@ def land_turn_gate(hook):
     said = turn[1].removeprefix("turn: ")
     fleet = said.split(" does not hold", 1)[0] if " does not hold" in said else "this fleet"
     onto = f"onto {', '.join(sorted(landing))}" if landing else "(a push it could not read)"
-    _log_denial(hook, lc, cli, f"Push gate: refused `{_one_line(command, 120)}`: {fleet} does not hold the landing "
+    _log_denial(hook, lc, cli, moved_dir, f"Push gate: refused `{_one_line(command, 120)}`: {fleet} does not hold the landing "
                                f"turn {onto}")
     unclear_line = f" Also, {UNCLEAR}." if landing and unclear else ""
     return Deny(f"{what}, and {fleet} doesn't hold the landing turn (fleet turn: {said}). Ask the manager for it as "
@@ -5389,11 +5392,12 @@ def push_attribution(hook):
                 f"(`jj describe -r {first} -m \"<the message without it>\"`, and the same for the others), then push again.")
 
 
-def _log_denial(hook, lc, cli, text):
-    """The denial as an important `blocked` event in the fleet's ledger (land-check's find_ledger: $FLEET_DIR,
-    else the served fleet among the session's processes; else the session's own fleet folder)."""
+def _log_denial(hook, lc, cli, given, text):
+    """The denial as an important `blocked` event in the fleet's ledger (land-check's find_ledger: given, the moved
+    fleet's folder the gate named, else $FLEET_DIR, else the served fleet among the session's processes; else the
+    session's own fleet folder)."""
     import subprocess
-    found = lc.find_ledger(None)
+    found = lc.find_ledger(given)
     for d in [str(found.parent)] if found else fleet_dirs(hook)[:1]:
         worker = _refused_worker(read_ledger(d) or {}, hook.input.get("agent_id"), hook.env)
         if moved(d):

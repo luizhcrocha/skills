@@ -16,6 +16,7 @@ import { FleetNews } from "../src/chat/news.ts";
 import { asArray, asObject, parseObject, type JsonObject } from "../src/json.ts";
 import { cliLookups } from "../src/page/lookups.ts";
 import { view } from "../src/page/view.ts";
+import { startedOf } from "../src/procs.ts";
 import { baseEnv, fleet, machine, tmp, type Environment } from "./support.ts";
 
 const PAGE = "https://fleet.example.dev/skills";
@@ -125,6 +126,18 @@ describe("a moved team no server here serves", () => {
       expect(ran.code, ran.stderr).toBe(0);
       expect(ran.stdout, args.join(" ")).not.toContain("ANSWERED");
     }
+  });
+
+  test("`fleets manager` names a manager moved to the cloud while its session runs, with its cloud page", () => {
+    const dir = join(base, "fleet", "manager");
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "state.json"), JSON.stringify({ ...ledger({ decisions: [] }), project: "everything", role: "manager" }));
+    writeFileSync(join(dir, "cloud.json"), JSON.stringify({ fleet: "manager", cloud: "https://fleet.example.dev" }));
+    writeFileSync(join(dir, "wakes.json"), JSON.stringify({ wakes: [], owner: { session: process.pid, started: startedOf(process.pid) } }));
+    const ran = fleet(["fleets", "manager"], env);
+
+    expect(ran.code, ran.stderr).toBe(0);
+    expect(ran.stdout).toStartWith(`manager  session (in its greeting)  https://fleet.example.dev/manager  ${realpathSync(dir)}\n`);
   });
 
   test("a folder without cloud.json beside the registry is not a moved team", () => {
