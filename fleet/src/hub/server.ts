@@ -13,10 +13,10 @@ import { join } from "node:path";
 import { stampOf } from "../clock.ts";
 import { makePrivateDir, readText, remove, writeAtomic } from "../files.ts";
 import { asNumber, asObject, asString, dumps, parseObject } from "../json.ts";
-import { commandOf } from "../procs.ts";
 import { alive } from "../registry.ts";
 import { Hub, type HubOptions, type Rooted } from "./hub.ts";
 import { PreviewPorts } from "./preview-ports.ts";
+import { hubClaimPath, hubRecordPath, isHubProcess, runningPreviewServer } from "./preview-server.ts";
 import { previewSockets, type SocketData, type Upgrade } from "./preview-proxy.ts";
 import { servePreviewPort, type PortListener } from "./preview-serve.ts";
 import { PreviewCertificate, tailscaleCertificate, type CertificateSource } from "./preview-tls.ts";
@@ -25,6 +25,8 @@ import { tailscale } from "./tailnet.ts";
 import * as Option from "effect/Option";
 
 export { previewPortsPath, readPortStates, type PortState } from "./preview-ports.ts";
+
+export { hubRecordPath, isHubProcess } from "./preview-server.ts";
 
 /** How often the hub looks for root-mode previews to listen for, or to let go of. */
 const PREVIEW_PORTS_MS = 1000;
@@ -38,10 +40,6 @@ const CERTIFICATE_MS = 60_000;
 /** The hub's port unless told otherwise. */
 export const DEFAULT_PORT = 7420;
 
-/** Where a running hub says where it is. */
-export function hubRecordPath(home: string): string {
-  return join(home, "hub", "hub.json");
-}
 
 /** A hub's record: where it runs, and whether a supervisor (systemd, launchd) started it. */
 export interface HubRecord {
@@ -61,11 +59,6 @@ export function runningHub(home: string): HubRecord | undefined {
   if (pid === undefined || port === undefined || url === undefined || !alive(pid)) return undefined;
 
   return { pid, port, url, supervised: record?.["supervised"] === true };
-}
-
-/** Whether `pid` runs the fleet's hub: its command line is `… main.ts hub …` or `… fleet hub …`. */
-export function isHubProcess(pid: number): boolean {
-  return /(?:main\.ts|fleet)\s+hub(?:\s|$)/.test(commandOf(pid));
 }
 
 /** A running hub. */
@@ -120,9 +113,18 @@ export async function startHub(options: StartOptions, log: (line: string) => voi
 
   const servers: Server[] = [];
   const home = options.machine.registry.place.home;
+  // A preview server (`fleet preview serve`) holding the ports lets go of them once it reads this claim.
+  makePrivateDir(join(home, "hub"));
+  writeAtomic(hubClaimPath(home), `${dumps({ pid: process.pid })}\n`);
+
+  const unclaim = (): void => {
+    if (asNumber(asObject(Option.getOrUndefined(parseObject(readText(hubClaimPath(home)) ?? "")))?.["pid"]) === process.pid) remove(hubClaimPath(home));
+  };
+
   const bound = await bindLoopback(listen, home, options.supervised === true, log);
 
   if (bound instanceof Error) {
+    unclaim();
     hub.stop();
 
     return new Error(`cannot listen on 127.0.0.1:${port}: ${bound.message}`);
@@ -221,6 +223,7 @@ export async function startHub(options: StartOptions, log: (line: string) => voi
       if (https !== undefined && url.startsWith("https:")) await tailscale(options.tailscale, ["serve", `--https=${https}`, "off"]);
 
       if (asNumber(asObject(Option.getOrUndefined(parseObject(readText(hubRecordPath(home)) ?? "")))?.["pid"]) === process.pid) remove(hubRecordPath(home));
+      unclaim();
     },
   };
 }
@@ -241,7 +244,23 @@ async function bindLoopback(listen: (hostname: string) => Server, home: string, 
 
   const first = attempt();
 
-  if (!(first instanceof Error) || !supervised) return first;
+  if (!(first instanceof Error)) return first;
+
+  // A preview server lets go of the port within a second of the hub's claim.
+  if (runningPreviewServer(home) !== undefined) {
+    for (let waited = 0; waited < 5_000; waited += 200) {
+      await Bun.sleep(200);
+      const next = attempt();
+
+      if (!(next instanceof Error)) {
+        log("took the port over from the preview server");
+
+        return next;
+      }
+    }
+  }
+
+  if (!supervised) return first;
   const other = runningHub(home);
 
   if (other === undefined || other.supervised || other.pid === process.pid || !isHubProcess(other.pid)) return first;

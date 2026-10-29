@@ -23,6 +23,7 @@ import { newsCli } from "./news.ts";
 import { onepwCli } from "./onepw.ts";
 import { previewCli } from "./preview.ts";
 import { CONTROL_CLIS, controlCli } from "./hub.ts";
+import { previewServerCli, SERVER_VERBS } from "./preview-serve.ts";
 import { stateCli } from "./state.ts";
 import { tellCli } from "./tell.ts";
 import { turnCli } from "./turn.ts";
@@ -99,6 +100,8 @@ function dispatch(argv: readonly string[]): Effect.Effect<number, never, Out | W
     if (cli === "ls" || cli === "list") return yield* fleetsCli(["list", ...rest]);
 
     if (cli === "tell") return yield* tellCli(rest);
+
+    if (cli === "preview" && SERVER_VERBS.has(rest[0] ?? "")) return yield* previewServerCli(rest);
     const resolved = withFleetDir(argv, machine);
 
     if (!Array.isArray(resolved)) {

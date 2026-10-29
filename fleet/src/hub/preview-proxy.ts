@@ -79,6 +79,9 @@ export function previewTarget(record: PreviewRecord | undefined, fleet: string, 
   }
 
   const own = first === "" ? undefined : record.workers.find((w) => w.worker === name);
+
+  // With no combined preview, a path is a worker's: one with no dev server here is not found.
+  if (own === undefined && first !== "" && record.server === null) return [404, `no worker '${name}' has a preview here`];
   const server = own ?? record.server;
   const prefix = own === undefined ? `/f/${encodeURIComponent(fleet)}/preview/` : `/f/${encodeURIComponent(fleet)}/preview/${first}/`;
   const rest = own === undefined ? tail : tail.slice(first.length + 1);
