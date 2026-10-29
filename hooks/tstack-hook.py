@@ -724,9 +724,13 @@ class Unapplied(RuntimeError):
     """The fleet ran the hook's program and did not apply an op of it (refused, or a clash)."""
 
 
+class Unsure(RuntimeError):
+    """fleet-run sent the program and no answer came back, nor for its resend: it may have landed."""
+
+
 def fleet_run(hook, d, program):
     """Run a program against the moved fleet at d. Its outcome, completed or queued (a card waits for the link);
-    RuntimeError when the service is down or the program failed, Unapplied when the fleet did not apply an op, and
+    RuntimeError when the service is down or the program failed (Unsure when it was sent and no answer came back), Unapplied when the fleet did not apply an op, and
     subprocess.TimeoutExpired past CLI_TIMEOUT_S. That is 25 s, and the client waits 120 s for the service: the client
     is the fleet repo's (apps/client/fleet-run.ts) and reads no timeout from its environment, so the hook kills it
     first, accepted. A program the service still runs after the kill may land: the caller treats it as not told."""
@@ -736,14 +740,15 @@ def fleet_run(hook, d, program):
     env = {**hook.env, "FLEET_DIR": d, **({"FLEET_SESSION": hook.session_id} if hook.session_id else {})}
     done = subprocess.run([cli], input=program, capture_output=True, text=True, env=env,
                           cwd=d, check=False, timeout=CLI_TIMEOUT_S)
-    if done.returncode == FLEET_RUN_UNKNOWN:
+    unknown = done.returncode == FLEET_RUN_UNKNOWN
+    if unknown:
         # Sent, and no answer came back: the same program again under its id runs at most once (round H).
         sent = _json_object(done.stdout)
         if isinstance(sent.get("id"), str) and re.fullmatch(r"[0-9A-HJKMNP-TV-Z]{26}", sent["id"]):
             done = subprocess.run([cli, "--id", sent["id"]], input=program, capture_output=True, text=True, env=env,
                                   cwd=d, check=False, timeout=CLI_TIMEOUT_S)
     if done.returncode not in (0, FLEET_RUN_QUEUED):
-        raise RuntimeError(f"{cli} exited {done.returncode}: {(done.stderr or done.stdout).strip()[:500]}")
+        raise (Unsure if unknown else RuntimeError)(f"{cli} exited {done.returncode}: {(done.stderr or done.stdout).strip()[:500]}")
     try:
         outcome = json.loads(done.stdout)
     except ValueError:
@@ -1965,17 +1970,20 @@ def _noted_caller(hook, agent_id):
     return "main" if hook.env.get("FLEET_WORKER") else None
 
 
-def _owe_note(hook, r, d, draft_id, told, no_card=None):
+def _owe_note(hook, r, d, draft_id, told, no_card=None, kind=None):
     """Remember the note for the caller whose call was refused: one file per draft, so two refusals at once (the
     event runs async) both stay owed. `told` is whether the CLI reached the host with its line. `no_card` is why a
-    moved fleet's hook opened no card: the host's main thread, which hears no line of the CLI there, is owed its
-    note too (_own_note), so it never tells the user a card is on the page that is not."""
+    moved fleet's hook has no card it knows is open, and `kind` which case that is (_own_note): the host's main
+    thread, which hears no line of the CLI there, is owed its note too, so it never tells the user a card is on the
+    page that is not. A queued card is the host's note alone: the worker's says nothing of cards."""
     caller = _noted_caller(hook, r.agent_id)
     own = caller is None and no_card is not None
     if own:
         caller = "main"
-    if not caller or not hook.session_id:
+    if not caller or not hook.session_id or (kind == "queued" and not own):
         return
+    if own and kind == "call" and _card_shape(r):
+        kind = "shape"
     folder = _refusal_notes(hook)
     try:
         folder.mkdir(parents=True, exist_ok=True)
@@ -1983,8 +1991,8 @@ def _owe_note(hook, r, d, draft_id, told, no_card=None):
         tmp = path.with_name(f".{path.name}.{os.getpid()}")
         tmp.write_text(json.dumps({"at": fleet_now(hook.env), "tool": r.tool, "reason": _one_line(r.reason, 120),
                                    "id": draft_id, "host": fleet_role(read_ledger(d)), "told": bool(told),
-                                   **({"own": True, "why": _one_line(no_card, 300), "shape": _card_shape(r)}
-                                      if own else {})}))
+                                   **({"own": True, "kind": kind or "hook", "why": _one_line(no_card, 300),
+                                       "shape": _card_shape(r) if kind == "shape" else None} if own else {})}))
         os.replace(tmp, path)
     except OSError as e:
         log(hook.data_dir, f"{hook.event} fleet_permission_denied: the note for the refused worker cannot be kept ({e})")
@@ -1998,13 +2006,19 @@ CARD_SHAPE_RULE = ("A card opens only for a call an exact allow rule holds and a
                    "backslash or $(…), each script run by its absolute path (`bash /abs/x.sh`, an output redirect "
                    "allowed), no wrapper (env, timeout, sudo) or assignment before it. Reshape the call so and run it "
                    "as a Bash call of its own, or the user runs it in the terminal.")
-# The programs a pipe at a call's end may feed and still be dropped from it: they only shape the output it shows.
-OUTPUT_FILTERS = ("head", "tail", "grep", "cat", "wc", "sort", "uniq", "cut", "tr", "sed", "awk", "column", "jq")
+# The commands a pipe at a call's end may feed and still be dropped from it, whole: each reads all of its input and
+# writes only its output, so the call without them runs no less and loses only the output's shape. Not `head`, `grep
+# -q`/`-m`/`-l` (an early exit cuts the writer short), nor `sort -o`, `sed`, `awk`, `tee`, `uniq IN OUT` (they can
+# write a file or run a program), nor a file operand (the filter would not read the pipe).
+_FILTER_WORD = r"[A-Za-z0-9_.:=@%+,/][A-Za-z0-9_.:=@%+,/-]*"  # a pattern or a set: never a flag
+OUTPUT_FILTERS = re.compile(rf"tail(?: -n ?\+?[0-9]+| -[0-9]+)?|wc(?: -[lwcm]+)?|cat(?: -[nbsAvET]+)?"
+                            rf"|grep(?: -[EFivnwxcohP]+)* {_FILTER_WORD}|cut(?: -[dfc] ?[^ -][^ ]*)+"
+                            rf"|tr(?: -[dsc]+)?(?: {_FILTER_WORD}){{1,2}}")
 
 
 def _unpiped(call):
-    """The call before its pipe when every command it pipes into is an output filter (OUTPUT_FILTERS, with no
-    quote, redirect, substitution or other command in its words), else None: `bash /abs/x.sh 2>&1 | tail -4` is
+    """The call before its pipe when every command it pipes into is a whole OUTPUT_FILTERS command (no quote,
+    redirect, substitution, comment or other command in its words), else None: `bash /abs/x.sh 2>&1 | tail -4` is
     `bash /abs/x.sh 2>&1`, whose output the result shows whole."""
     segments, quote, start = [], "", 0
     for at, c in enumerate(call):
@@ -2019,8 +2033,7 @@ def _unpiped(call):
     if len(segments) < 2 or quote:
         return None
     for tail in segments[1:]:
-        words = tail.split()
-        if not words or words[0] not in OUTPUT_FILTERS or re.search(r"[;&()<>`$'\"\\]", tail):
+        if re.search(r"[;&()<>`$'\"\\#]", tail) or not OUTPUT_FILTERS.fullmatch(" ".join(tail.split())):
             return None
     return segments[0].strip()
 
@@ -2036,21 +2049,44 @@ def _card_shape(r):
     return head
 
 
+CARD_OPEN_CHECK = ("A card is open only when the fleet's state.json has a `decisions` row of kind `permission` whose "
+                   "`refusal.call` is this exact call, with status `open`: check that before you tell the user of one.")
+# What the host does about a refused call the hook knows no open card for, by why (_owe_note's `kind`).
+OWN_NEXT = {
+    "call": CARD_SHAPE_RULE,
+    "credential": "It may carry a credential, so no card holds it: the user runs it in the terminal, or it is not run.",
+    "tool": "No allow rule matches this tool's call, so no card holds it: the user allows it in the terminal, or it is "
+            "not run.",
+    "spawn": "A spawn gets a card when its input is a JSON object of at most 120 KiB (SPAWN_CARD_MAX_BYTES): shorten "
+             "its prompt and start it again.",
+    "fleet": "The call itself is one a card holds: run the same call again, unchanged, once the fleet takes programs, "
+             "and the hook opens its card; or the user runs it in the terminal.",
+}
+
+
 def _own_note(note):
-    """The note for the host's own call that a moved fleet's hook opened no card for: none, why, and the call that
-    gets one (_card_shape), or the shape every card's call takes, or the terminal."""
+    """The note for the host's own refused call that a moved fleet's hook knows no open card for: why, and what to
+    do by its kind. A known absence says nothing is on the page, and gives the call that gets a card (_card_shape),
+    the shape every card's call takes, a rerun, or the terminal; an unknown fate (no answer, a queued card, the hook
+    failing) gives the check that says whether a card is open."""
     tool = _one_line(note.get("tool") or "tool", 80)
+    kind = note.get("kind")
+    why = note.get("why") or "no reason was kept"
+    refused = f"Fleet: auto mode refused your {tool} call ({_one_line(note.get('reason') or '', 120)})"
+    if kind == "queued":
+        return (f"{refused}, and the plugin's hook opened its permission card, which the fleet queued: {why}. It "
+                f"shows on the page once the fleet's link is back. {CARD_OPEN_CHECK}")
+    if kind in ("unsure", "hook"):
+        return (f"{refused}, and the plugin's hook may have opened a permission card or may not: {why}. "
+                f"{CARD_OPEN_CHECK} If there is none, run the same call again, unchanged, once.")
     shape = note.get("shape")
-    if isinstance(shape, str) and shape:
+    if kind == "shape" and isinstance(shape, str) and shape:
         then = (f"A card opens for `{shape}`: run that as a Bash call of its own, and when auto mode refuses it, the "
                 "hook opens its card with the files it runs.")
-    elif tool == "Bash" and "credential" not in (note.get("why") or ""):
-        then = CARD_SHAPE_RULE
     else:
-        then = "No form of this call gets a card: the user allows it in the terminal, or it is not run."
-    return (f"Fleet: auto mode refused your {tool} call ({_one_line(note.get('reason') or '', 120)}), and the plugin's "
-            f"hook opened no permission card for it: {note.get('why') or 'no reason was kept'}. Nothing is on the page "
-            f"for the user to allow, so do not tell them a card is there. {then}")
+        then = OWN_NEXT.get(kind, OWN_NEXT["call"])
+    return (f"{refused}, and the plugin's hook opened no permission card for it: {why}. Nothing is on the page for "
+            f"the user to allow, so do not tell them a card is there. {then}")
 
 
 def _refusal_note(notes):
@@ -2102,7 +2138,7 @@ def fleet_refusal_note(hook):
         except (OSError, ValueError):
             continue
         if isinstance(note, dict) and isinstance(note.get("at"), (int, float)) \
-                and fleet_now(hook.env) - note["at"] < REFUSAL_NOTE_S:
+                and (note.get("own") or fleet_now(hook.env) - note["at"] < REFUSAL_NOTE_S):
             notes.append(note)
     try:
         folder.rmdir()
@@ -2193,24 +2229,36 @@ def _open_refusal_program(hook, d, r, ledger, worker, refusal_id):
     host = fleet_role(ledger)
     if _statuses(ledger, "decisions").get(refusal_id) == "open":
         return
-    no_card = None
+    no_card = kind = card = None
     try:
         card = refusal_card_program(refusal_id, r, worker, host)
         if card is not None:
             try:
-                fleet_run(hook, d, card)
-                return
+                outcome = fleet_run(hook, d, card)
             except Unapplied as e:
                 log(hook.data_dir, f"{hook.event} fleet_permission_denied: {refusal_id}'s card was not applied, so the "
                                    f"host is told with a blocked event: {e}")
-                no_card = "the fleet did not apply its card"
-        no_card = no_card or _why_no_card(r)
+                no_card, kind = "the fleet did not apply its card", "fleet"
+            except (Unsure, subprocess.TimeoutExpired) as e:
+                no_card, kind = f"the fleet gave no answer for it ({_one_line(str(e), 160)})", "unsure"
+                raise
+            else:
+                if isinstance(outcome, dict) and outcome.get("status") == "queued":
+                    _owe_note(hook, r, d, refusal_id, told=False, no_card="the fleet's link is down", kind="queued")
+                return
+        if no_card is None:
+            no_card, kind = _why_no_card(r), _no_card_kind(r)
         fleet_run(hook, d, blocked_program(refusal_blocked_text(refusal_id, r, worker, host, card is not None), worker))
     except (RuntimeError, subprocess.TimeoutExpired, OSError) as e:
-        _owe_note(hook, r, d, refusal_id, told=False,
-                  no_card=no_card or f"the fleet could not take the refusal ({_one_line(str(e), 160)})")
+        if no_card is None:
+            no_card, kind = f"the fleet could not take the refusal ({_one_line(str(e), 160)})", "fleet"
+        _owe_note(hook, r, d, refusal_id, told=False, no_card=no_card, kind=kind)
         raise
-    _owe_note(hook, r, d, refusal_id, told=False, no_card=no_card)
+    except Exception as e:  # a bug of the hook's own: the host still hears of the refusal, and the log gets the trace
+        _owe_note(hook, r, d, refusal_id, told=False, no_card=no_card or f"the hook failed ({type(e).__name__})",
+                  kind=kind or "hook")
+        raise
+    _owe_note(hook, r, d, refusal_id, told=False, no_card=no_card, kind=kind)
 
 
 CARD_CALL_MAX = 2000  # the CLI's MAX_CALL_CHARS (fleet/src/ledger/permission.ts): a longer call is no rule a grant holds
@@ -2789,6 +2837,15 @@ def _why_no_card(r):
         return (f"Claude Code matches no allow rule of a {_one_line(r.tool, 60)} call's input, so a card's grant would "
                 "never let it through: the user allows it in the terminal")
     return why_no_rule("Bash", r.call) or why_no_asks([r.call])
+
+
+def _no_card_kind(r):
+    """Which case of _why_no_card a call no card holds is, for the host's note (OWN_NEXT)."""
+    if _carries_secret(r):
+        return "credential"
+    if r.spawn:
+        return "spawn"
+    return "call" if r.tool == "Bash" else "tool"
 
 
 def refusal_card_program(refusal_id, r, worker, host):
@@ -6533,6 +6590,7 @@ HANDLERS = {
     "PostToolUse": [fleet_heartbeat, fleet_grant_sweep, fleet_refusal_forgotten, fleet_refusal_note, fleet_chat_nudge, onepw_watch],
     "PostToolUseFailure": [fleet_heartbeat, fleet_grant_sweep, onepw_watch],
     "PermissionDenied": [fleet_permission_denied],
+    "UserPromptSubmit": [fleet_refusal_note],
     "SubagentStart": [fleet_heartbeat],
     "SubagentStop": [fleet_heartbeat],
 }
@@ -6558,6 +6616,7 @@ EMIT = {
     "Stop": _context,
     "PreCompact": lambda event, text: text,
     "PostToolUse": _context,
+    "UserPromptSubmit": _context,
 }
 
 

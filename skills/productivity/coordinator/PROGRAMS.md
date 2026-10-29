@@ -138,9 +138,14 @@ opens. It refuses there too a call no page ask can hold (whyNoAsk, DASHBOARD.md'
 /abs/x.sh`, a script by a relative path), a program given by its path (`/abs/deploy.sh`), a wrapper (`env`,
 `timeout`, `sudo`), an assignment that changes what runs (`PATH=`, `BASH_ENV=`), inline code (`node -e`), and any
 program a page ask does not know. Open a script call from the machine: run it as a Bash call of its own, and when
-auto mode refuses it, the hook opens its card with the files it runs. A refused call it opens no card for (a pipe,
-which no exact rule clears, or anything above) comes back beside your next tool call: no card, why, and the call
-that gets one (`bash /abs/x.sh 2>&1` for `bash /abs/x.sh 2>&1 | tail -4`). Tell the user of a card only once it is open.
+auto mode refuses it, the hook opens its card with the files it runs. When the hook knows no open card for your
+refused call (a pipe, which no exact rule clears, anything above, a fleet that refused or never answered the card,
+a queued card), it leaves you a note: why, and the call that gets one (`bash /abs/x.sh 2>&1` for `bash /abs/x.sh
+2>&1 | tail -4`), the same call again, or the terminal. The hook runs in the background, so the note comes beside a
+later tool call or with the next prompt, never with the refusal. Before you tell the user a card is there, read the
+fleet's `state.json`: a card is open only when a `decisions` row of kind `permission` has your exact call as
+`refusal.call` and status `open`. A session serving several moved fleets gets one note per fleet for one refusal,
+and one fleet's card can be open while another's note says none is: the row is what counts.
 
 An event, and a note kept for the next session:
 

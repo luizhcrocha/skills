@@ -58,6 +58,13 @@
         ]
       }
     ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          { "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/tstack-hook\" UserPromptSubmit", "timeout": 5 }
+        ]
+      }
+    ],
     "SubagentStart": [
       {
         "hooks": [
