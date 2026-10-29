@@ -2,8 +2,7 @@
  * What this machine serves, and whose it is (Python's `served.py`): every port `tailscale serve`
  * exposes but the fleets' own pages, with the process listening behind it, its directory and command,
  * and the fleet whose session started it (by its parents, else by the first transcript that wrote its
- * address). Looking takes about a second, so the hub looks in the background and the page is sent the
- * last look.
+ * address). Looking takes about a second.
  */
 import { existsSync } from "node:fs";
 import { join } from "node:path";
@@ -164,39 +163,4 @@ export async function discover(machine: Machine): Promise<Found[]> {
   }
 
   return found;
-}
-
-/** How often the hub looks again. */
-export const SERVED_S = 30;
-
-/** The last look, refreshed in the background once it is older than {@link SERVED_S}. */
-export class Served {
-  private value: Found[] = [];
-  private at = 0;
-  private busy = false;
-  private readonly machine: Machine;
-
-  constructor(machine: Machine) {
-    this.machine = machine;
-  }
-
-  /** The last look; starts the next when it is stale. */
-  latest(): readonly Found[] {
-    if (!this.busy && performance.now() - this.at >= SERVED_S * 1000) {
-      this.busy = true;
-      discover(this.machine)
-        .then((value) => {
-          this.value = value;
-        })
-        .catch(() => {
-          // a failed look leaves the last one: the page keeps serving
-        })
-        .finally(() => {
-          this.at = performance.now();
-          this.busy = false;
-        });
-    }
-
-    return this.value;
-  }
 }

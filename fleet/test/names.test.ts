@@ -5,7 +5,6 @@ import { describe, expect, test } from "bun:test";
 import { withFleetDir } from "../src/cli/run.ts";
 import { machineOf } from "../src/world.ts";
 import { aliasesAfter, dropsNumber, fleetName, unnumbered } from "../src/registry.ts";
-import { isHubProcess } from "../src/hub/preview-server.ts";
 
 describe("a fleet's name from its session's", () => {
   test("the number Claude Code puts before a restarted session goes", () => {
@@ -25,12 +24,6 @@ describe("a fleet's name from its session's", () => {
     expect(aliasesAfter({ aliases: ["ui-coordinator"] }, "x", "ui-coordinator")).toEqual(["x"]);
     expect(aliasesAfter({}, "billing", "invoices")).toEqual(["billing"]);
     expect(aliasesAfter({ aliases: ["billing"] }, "billing", "billing")).toEqual([]);
-  });
-});
-
-describe("a hub process", () => {
-  test("this test runner is not one", () => {
-    expect(isHubProcess(process.pid)).toBe(false);
   });
 });
 

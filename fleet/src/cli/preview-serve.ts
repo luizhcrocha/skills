@@ -1,7 +1,7 @@
 /**
- * `fleet preview serve [--port N] [--https PORT] [--share-port N]`: the workers' previews served without the hub
- * (`hub/preview-server.ts`), at the hub's port and paths; it stands by while a hub runs. Runs until SIGTERM or
- * SIGINT, as `fleet hub` does. With it, the public side for shared previews on loopback (`hub/preview-share.ts`).
+ * `fleet preview serve [--port N] [--https PORT] [--share-port N]`: the workers' previews (`hub/preview-server.ts`),
+ * at the port and paths the hub had, so its links keep working. Runs until SIGTERM or SIGINT. With it, the public
+ * side for shared previews on loopback (`hub/preview-share.ts`).
  *
  * `fleet preview share <fleet> [<worker>] [--for 24h] [--password-file F]` shares one preview publicly and prints
  * its link and password once; `fleet preview unshare <fleet> [<worker>]` ends it; `fleet preview shares` lists them.

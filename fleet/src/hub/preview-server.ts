@@ -2,12 +2,9 @@
  * `fleet preview serve`: the workers' previews without the hub. It serves only the preview path
  * (`previews.ts`): `/f/<fleet>/preview/…` on the hub's port, on loopback and this machine's tailnet address
  * (never another interface), `tailscale serve` https in front as the hub has it, and each root-mode preview at
- * the root of its own TLS port (`preview-ports.ts`). Same URLs and ports as the hub, so a link given while the
- * hub ran keeps working, and the keeper's `.seen` stamp is written the same way. No page, ledger or chat.
- *
- * The hub and this server take turns on those ports: while a hub runs (`hub/hub.json`) or is starting
- * (`hub/claim.json`), this server holds nothing and looks again every second; once the hub is gone it takes
- * the ports. A hub that starts finds them held and waits for this server to let go (`server.ts`).
+ * the root of its own TLS port (`preview-ports.ts`). Same URLs and ports as the hub had, so a link given while
+ * the hub ran keeps working, and the keeper's `.seen` stamp is written the same way. No page, ledger or chat.
+ * A port it cannot bind is tried again every tick.
  */
 import { join } from "node:path";
 
@@ -15,7 +12,6 @@ import * as Option from "effect/Option";
 
 import { makePrivateDir, readText, remove, writeAtomic } from "../files.ts";
 import { asNumber, asObject, dumps, parseObject } from "../json.ts";
-import { commandOf } from "../procs.ts";
 import { alive, type Entry } from "../registry.ts";
 import type { Machine } from "../world.ts";
 import { viewerOf } from "./policy.ts";
@@ -30,24 +26,9 @@ import { readTailnet, tailscale, type Tailnet } from "./tailnet.ts";
 /** The port the previews are served on unless told otherwise: the one the hub had, so its links keep working. */
 export const DEFAULT_PORT = 7420;
 
-/** Where a running hub says where it is. */
-export function hubRecordPath(home: string): string {
-  return join(home, "hub", "hub.json");
-}
-
-/** Where a hub that is starting says so, before it binds: the preview server lets go of the ports for it. */
-export function hubClaimPath(home: string): string {
-  return join(home, "hub", "claim.json");
-}
-
 /** Where a running preview server says where it is. */
 export function previewServerPath(home: string): string {
   return join(home, "hub", "preview-server.json");
-}
-
-/** Whether `pid` runs the fleet's hub: its command line is `… main.ts hub …` or `… fleet hub …`. */
-export function isHubProcess(pid: number): boolean {
-  return /(?:main\.ts|fleet)\s+hub(?:\s|$)/.test(commandOf(pid));
 }
 
 /** The live pid another process wrote at `path`, if any. */
@@ -55,16 +36,6 @@ function pidAt(path: string): number | undefined {
   const pid = asNumber(asObject(Option.getOrUndefined(parseObject(readText(path) ?? "")))?.["pid"]);
 
   return pid !== undefined && pid !== process.pid && alive(pid) ? pid : undefined;
-}
-
-/** Whether a hub runs or is starting on this machine: the preview server then stands by. A pid that is alive but no
- * hub's (a hub that died, its pid reused) holds nothing. */
-export function hubHolds(home: string): boolean {
-  return [hubRecordPath(home), hubClaimPath(home)].some((path) => {
-    const pid = pidAt(path);
-
-    return pid !== undefined && isHubProcess(pid);
-  });
 }
 
 /** The pid of the preview server that runs on this machine, if one does. */
@@ -82,17 +53,15 @@ export interface PreviewServerOptions {
   readonly https: number | undefined;
   /** Where the root-mode ports' certificate comes from; `tailscale cert` unless told otherwise. */
   readonly certificate?: CertificateSource;
-  /** Whether a hub holds the ports now (tests); else {@link hubHolds}. */
-  readonly hubRuns?: () => boolean;
   /** The loopback port of the public side, for shared previews (`preview-share.ts`, behind Tailscale Funnel); none when undefined. */
   readonly sharePort?: number;
-  /** How often it looks whether to take or let go of the ports, and syncs the root-mode ones (ms). */
+  /** How often it binds what it could not yet, and syncs the root-mode ports (ms). */
   readonly tickMs?: number;
 }
 
 /** A running preview server. */
 export interface PreviewServing {
-  /** Whether it holds the ports now (no hub runs). */
+  /** Whether it holds the ports now. */
   readonly holding: () => boolean;
   readonly stop: () => Promise<void>;
 }
@@ -142,7 +111,7 @@ class PreviewServer {
       name = undefined;
     }
 
-    const notHere = jsonResponse(404, { error: "the preview server serves only /f/<fleet>/preview/; the hub (`fleet hub`) serves the rest" });
+    const notHere = jsonResponse(404, { error: "the preview server serves only /f/<fleet>/preview/; the pages are the cloud's" });
 
     if (name === undefined || m === null) return notHere;
     const entries = this.options.machine.registry.shown();
@@ -159,12 +128,11 @@ class PreviewServer {
   }
 }
 
-/** Start the preview server. It binds at once unless a hub holds the ports, and from then on takes turns with the hub. */
+/** Start the preview server: it binds at once, and again each tick for what it could not bind. */
 export async function startPreviewServer(options: PreviewServerOptions, log: (line: string) => void): Promise<PreviewServing | Error> {
   const home = options.machine.registry.place.home;
   const server = new PreviewServer(options);
   server.tailnet = await readTailnet(options.tailscale);
-  const hubRuns = options.hubRuns ?? (() => hubHolds(home));
   const port = options.port;
 
   const listen = (hostname: string): Server =>
@@ -187,7 +155,7 @@ export async function startPreviewServer(options: PreviewServerOptions, log: (li
   await certificate.check();
   const recertify = setInterval(() => void certificate.check(), 60_000);
 
-  /** What it holds while no hub runs. */
+  /** What it holds. */
   let held: { readonly servers: Map<string, Server>; readonly rooted: PreviewPorts; https: boolean } | undefined;
   let refused = "";
 
@@ -209,8 +177,7 @@ export async function startPreviewServer(options: PreviewServerOptions, log: (li
     }
   };
 
-  // `tailscale serve` off first, while it still holds the port: a hub binds only once the port is free, and serves
-  // https only after that, so this never turns off the hub's.
+  // `tailscale serve` off first, while it still holds the port.
   const release = async (): Promise<void> => {
     if (held === undefined) return;
     const was = held;
@@ -275,8 +242,7 @@ export async function startPreviewServer(options: PreviewServerOptions, log: (li
     busy = true;
 
     try {
-      if (hubRuns()) await release();
-      else await take();
+      await take();
     } finally {
       busy = false;
     }
@@ -285,8 +251,8 @@ export async function startPreviewServer(options: PreviewServerOptions, log: (li
   makePrivateDir(join(home, "hub"));
   writeAtomic(previewServerPath(home), `${dumps({ pid: process.pid, port, https: options.https ?? null }, { indent: 2 })}\n`);
   await tick();
-  // The public side is apart from the private one: its own port, on loopback only (Funnel forwards to it), held
-  // whether or not a hub runs, and it answers only a share's link and its signed-in browsers.
+  // The public side is apart from the private one: its own port, on loopback only (Funnel forwards to it), and it
+  // answers only a share's link and its signed-in browsers.
   const shares = new PublicShares({ home, now: () => Date.now(), log, host: () => (server.tailnet === undefined ? undefined : `${server.tailnet.self.dns}:${String(FUNNEL_PORT)}`) });
   let publicSide: Server | undefined;
 

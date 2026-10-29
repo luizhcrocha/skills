@@ -23,8 +23,8 @@ import { readRecord, type PreviewRecord } from "./record.ts";
 /** The public ports' range unless `FLEET_PREVIEW_PORTS` says otherwise. */
 export const DEFAULT_PORTS: readonly [number, number] = [7500, 7599];
 
-/** The hub's own ports, never given: its http port and the https one `tailscale serve` gives it. */
-const HUB_PORTS = [7420, 7443];
+/** The preview server's default ports, never given: its http port and the https one `tailscale serve` gives it. */
+const SERVED_PORTS = [7420, 7443];
 
 /** The range `FLEET_PREVIEW_PORTS` names, the default without it; why not when it is no range. */
 export function portRange(env: (name: string) => string | undefined): readonly [number, number] | PreviewError {
@@ -70,9 +70,9 @@ function claimed(machine: Machine, root: string, slot: Slot): Set<number> {
   return ports;
 }
 
-/** The ports the running hub listens on, from its record. */
-function hubPorts(machine: Machine): number[] {
-  const record = asObject(Option.getOrUndefined(parseObject(readText(`${machine.registry.place.home}/hub/hub.json`) ?? "")));
+/** The ports the preview server listens on, from its record (`fleet preview serve`). */
+function servedPorts(machine: Machine): number[] {
+  const record = asObject(Option.getOrUndefined(parseObject(readText(`${machine.registry.place.home}/hub/preview-server.json`) ?? "")));
 
   return [asNumber(record?.["port"]), asNumber(record?.["https"])].flatMap((p) => (p === undefined ? [] : [p]));
 }
@@ -104,7 +104,7 @@ export function allocate(machine: Machine, root: string, slot: Slot, net: Tailne
   if (before !== null && before >= lo && before <= hi) return before;
   const taken = claimed(machine, root, slot);
 
-  for (const p of [...HUB_PORTS, ...hubPorts(machine)]) taken.add(p);
+  for (const p of [...SERVED_PORTS, ...servedPorts(machine)]) taken.add(p);
 
   for (const e of exposedOf(tailscaleSync(tailscaleBin(machine.env), ["serve", "status", "--json"]))) taken.add(e.port);
   const ip = net?.self.ip;

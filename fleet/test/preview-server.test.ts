@@ -2,7 +2,7 @@
  * `fleet preview serve`: the preview path alone, at the hub's port and paths, so previews outlive the hub.
  * `/f/<fleet>/preview/…` reaches a stand-in dev server, a WebSocket is piped, a service worker's script off a
  * preview's path is the kill switch, each request stamps `DIR/preview/<w>.seen` for the keeper, and nothing
- * else of the hub (its page, ledger, chat) is served. While a hub holds the port the server stands by.
+ * else of the hub (its page, ledger, chat) is served.
  */
 import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -12,7 +12,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { recordJson, type DevServer, type PreviewRecord } from "../src/preview/record.ts";
 import { seenPath } from "../src/preview/sleep.ts";
 import { startedAt } from "../src/preview/tracked.ts";
-import { hubClaimPath, hubRecordPath, previewServerPath, startPreviewServer, type PreviewServerOptions, type PreviewServing } from "../src/hub/preview-server.ts";
+import { startPreviewServer, type PreviewServerOptions, type PreviewServing } from "../src/hub/preview-server.ts";
 import { baseEnv, fleet, machine, tmp, type Environment } from "./support.ts";
 
 let base: string;
@@ -24,9 +24,6 @@ let env: Environment;
 let serving: PreviewServing | undefined;
 
 let port: number;
-
-/** Whether the server should stand by (a hub holds the port). */
-let hubRuns = false;
 
 const stubs: ReturnType<typeof Bun.serve>[] = [];
 
@@ -139,8 +136,7 @@ beforeEach(async () => {
   expect(fleet(["state", dir, "init", "--project", "shop", "--goal", "g", "--no-render"], env).code).toBe(0);
   expect(fleet(["serve", dir, "--pid", String(process.pid)], env).code).toBe(0);
   port = freePort();
-  hubRuns = false;
-  const started = await startPreviewServer({ port, machine: machine(env), tailscale: join(base, "no-tailscale"), https: undefined, hubRuns: () => hubRuns, tickMs: 20 }, () => {});
+  const started = await startPreviewServer({ port, machine: machine(env), tailscale: join(base, "no-tailscale"), https: undefined, tickMs: 20 }, () => {});
 
   if (started instanceof Error) throw started;
   serving = started;
@@ -151,39 +147,15 @@ afterEach(async () => {
   await serving?.stop();
 
   for (const s of stubs.splice(0)) void s.stop(true);
-
-  for (const p of procs.splice(0)) {
-    p.kill("SIGKILL");
-    await p.exited;
-  }
 });
 
-const procs: Bun.Subprocess[] = [];
-
-/** A process whose command line is `argv`'s, that sleeps: a live pid, a hub's to `isHubProcess` or not. */
-function sleeper(...argv: string[]): number {
-  const proc = Bun.spawn(["python3", "-c", "import time; time.sleep(60)", ...argv], { stdout: "ignore", stderr: "ignore", stdin: "ignore" });
-  procs.push(proc);
-
-  return proc.pid;
-}
-
-/** Stop the default server and start one with `more` instead, the real `hubHolds` unless `more` says otherwise. */
+/** Stop the default server and start one with `more` instead. */
 async function restart(more: Partial<PreviewServerOptions>, log: (line: string) => void = () => {}): Promise<void> {
   await serving?.stop();
   const started = await startPreviewServer({ port, machine: machine(env), tailscale: join(base, "no-tailscale"), https: undefined, tickMs: 20, ...more }, log);
 
   if (started instanceof Error) throw started;
   serving = started;
-}
-
-/** What the preview server answers at `/`, a path it does not serve: its own 404, or another server's answer. */
-async function mine(): Promise<boolean> {
-  try {
-    return ((await (await fetch(at("/"))).text()).includes("the preview server serves only"));
-  } catch {
-    return false;
-  }
 }
 
 describe("the preview server", () => {
@@ -219,13 +191,14 @@ describe("the preview server", () => {
     expect(await res.text()).toContain("registration.unregister()");
   });
 
-  test("an unknown worker, an unknown fleet and the hub's own routes answer 404", async () => {
+  test("an unknown worker, an unknown fleet and any other path answer 404", async () => {
     const own = stub("a1");
     writeRecord(dir, "shop", { workers: [{ ...devServer(own, "/f/shop/preview/a1/", dir), worker: "a1" }] });
     expect((await fetch(at("/f/shop/preview/zz/"))).status).toBe(404);
     expect((await fetch(at("/f/nobody/preview/"))).status).toBe(404);
 
     for (const path of ["/", "/f/shop/", "/f/shop/state.json", "/f/shop/chat", "/api/fleets"]) expect([path, (await fetch(at(path))).status]).toEqual([path, 404]);
+    expect(await (await fetch(at("/f/shop/chat"))).json()).toEqual({ error: "the preview server serves only /f/<fleet>/preview/; the pages are the cloud's" });
   });
 
   test("a host that is not this machine is refused", async () => {
@@ -243,39 +216,7 @@ describe("the preview server", () => {
     expect([res.status, await res.text()]).toEqual([200, "w1 GET /f/away/preview/w1/"]);
   });
 
-  test("it stands by while a hub holds the port, and takes it once the hub stops", async () => {
-    hubRuns = true;
-    expect(await until(async () => !(await answers()))).toBe(true);
-    hubRuns = false;
-    expect(await until(answers)).toBe(true);
-  });
-
-  test("a live pid that is no hub's, in hub.json or claim.json, never keeps it standing by", async () => {
-    const home = join(base, "registry");
-    mkdirSync(join(home, "hub"), { recursive: true });
-    const other = sleeper("not", "a", "hub");
-    writeFileSync(hubRecordPath(home), JSON.stringify({ pid: other, port, url: "http://x/", https: null, supervised: false }));
-    writeFileSync(hubClaimPath(home), JSON.stringify({ pid: other }));
-    await restart({});
-    await Bun.sleep(200);
-    expect([serving?.holding(), await mine()]).toEqual([true, true]);
-    writeFileSync(hubClaimPath(home), JSON.stringify({ pid: sleeper("fleet", "hub") }));
-    expect(await until(() => serving?.holding() === false)).toBe(true);
-  });
-
-  test("it says it runs before it first binds, so a hub starting then waits for it", async () => {
-    let said: boolean | undefined;
-    await restart({
-      hubRuns: () => {
-        said ??= existsSync(previewServerPath(join(base, "registry")));
-
-        return false;
-      },
-    });
-    expect(said).toBe(true);
-  });
-
-  test("it turns tailscale serve off while it still holds the port, so a hub that takes the port serves https after it", async () => {
+  test("it turns tailscale serve off on stop, while it still holds the port", async () => {
     const calls = join(base, "tailscale.calls");
     const fake = join(base, "fake-tailscale");
     writeFileSync(
@@ -292,10 +233,10 @@ esac
 `,
     );
     chmodSync(fake, 0o755);
-    await restart({ tailscale: fake, https: 9443, hubRuns: () => hubRuns, certificate: async () => new Error("no certificate here") });
+    await restart({ tailscale: fake, https: 9443, certificate: async () => new Error("no certificate here") });
     expect(await until(() => existsSync(calls))).toBe(true);
-    hubRuns = true;
-    expect(await until(() => readFileSync(calls, "utf8").split("\n").length > 2)).toBe(true);
+    await serving?.stop();
+    serving = undefined;
     expect(readFileSync(calls, "utf8")).toBe("serve\noff held\n");
   });
 
