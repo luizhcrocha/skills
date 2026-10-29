@@ -1,13 +1,11 @@
 /**
  * A fleet moved to another session with `fleet serve DIR --take-over`, said where the user and the displaced
- * session see it. The command takes the page, the chat watch and the hub's wakes from a host that still runs,
- * and any session can type it; so it is never silent:
+ * session see it. The command takes the page and the chat watch from a host that still runs, and any session
+ * can type it; so it is never silent:
  *
  * - {@link recordTakeover} writes an event in the fleet's ledger and one line in its chat, from the hub's name
  *   ({@link HUB}) to the user, a fixed template ({@link takeoverText}): who displaced whom, their pids and
  *   when each process started, and when. The line carries the same facts as a `takeover` object.
- * - {@link takeoverView} is what a hub's page shows of the last one, in the stuck band, until the host has
- *   read a message the user wrote after it.
  * - {@link displacedLine} is the one line the displaced host's watch prints before it stands down (chat/watch.ts).
  */
 import { join } from "node:path";
@@ -18,7 +16,7 @@ import { appendLocked, readChat, type Message } from "./chat/store.ts";
 import { parseInstant, stampOf } from "./clock.ts";
 import { Refusal } from "./errors.ts";
 import { readText, writeText } from "./files.ts";
-import { asNumber, asObject, asString, type Json, type JsonObject } from "./json.ts";
+import { asNumber, asObject, asString, type Json } from "./json.ts";
 import { ledgerText, parseLedger } from "./ledger/model.ts";
 import { withLedgerLock } from "./ledger/store.ts";
 import { validate } from "./ledger/validate.ts";
@@ -170,25 +168,6 @@ export function lastTakeover(root: string, messages: readonly Message[] = readCh
   }
 
   return undefined;
-}
-
-/**
- * What the page shows of the last takeover of the fleet in `root`, `{"id", "at", "by", "from"}` with each
- * side `{"pid", "started", "session"}`; undefined when there was none, and once the host has read a message
- * the user wrote after it: one at or before the host's cursor (`seen`: the last message a `--once` watch
- * exited with), or one a participant answered. Until then the user has not been heard by the new host, and
- * the page keeps saying who that is.
- */
-export function takeoverView(root: string, seen: number): JsonObject | undefined {
-  const messages = readChat(root);
-  const last = lastTakeover(root, messages);
-
-  if (last === undefined) return undefined;
-  const answered = new Set(messages.flatMap((m) => (m.from !== "user" && m.from !== HUB && asNumber(m.re) !== undefined ? [asNumber(m.re)] : [])));
-
-  if (messages.some((m) => m.from === "user" && m.id > last.id && (m.id <= seen || answered.has(m.id)))) return undefined;
-
-  return { id: last.id, at: last.at, by: { ...last.by }, from: { ...last.from } };
 }
 
 function two(n: number): string {

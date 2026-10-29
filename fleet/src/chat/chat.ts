@@ -647,11 +647,6 @@ function recipientOf(roster: Roster, name: string): string | undefined {
   return resolveWho(roster, token) ?? (stripped === "" ? undefined : resolveWho(roster, stripped));
 }
 
-/** The owner of the decision a batch of marks is on (`batchOwner`), as the hub checks a ride-along by it. */
-export function ownerOfBatch(machine: Machine, root: string, marks: JsonObject | undefined): string {
-  return batchOwner(machine, root, rosterOf(machine, root), marks);
-}
-
 /** The live fleets the manager of `root` serves, its own DIR left out. */
 function servedFleets(machine: Machine, root: string): Entry[] {
   const dir = resolvePath(root);
@@ -946,15 +941,6 @@ function composedAll(prepared: readonly Prepared[], known: readonly Message[], n
   }
 
   return out;
-}
-
-/** Why the store would refuse `prepared` now (a `--mark` or a side chat it does not hold), or undefined:
- * the hub asks before it grants anything. The write checks again under the lock. */
-export function storeRefusal(root: string, prepared: readonly Prepared[], at: string): ChatError | undefined {
-  const known = readChat(root);
-  const got = composedAll(prepared, known, known.reduce((max, m) => Math.max(max, m.id), 0) + 1, at);
-
-  return got instanceof ChatError ? got : undefined;
 }
 
 /** Append prepared messages in one write under the store's lock, in order, so a watch reads them in one
@@ -1292,7 +1278,3 @@ export function deafWarning(machine: Machine, root: string): string | undefined 
   );
 }
 
-/** The number a JSON value holds, for ids. */
-export function idOf(value: Json | undefined): number | undefined {
-  return asNumber(value);
-}

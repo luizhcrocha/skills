@@ -21,7 +21,6 @@ import { activeAt, SpendReader, type Spent } from "../transcripts.ts";
 import { readUsage } from "../usage.ts";
 import type { Machine } from "../world.ts";
 import { cardOf } from "../onepw.ts";
-import type { Orphan } from "../orphans.ts";
 import { lastError, logTail } from "../preview/devserver.ts";
 import { readRecord, serverProc, updaterProc, type DevServer } from "../preview/record.ts";
 import { runs } from "../preview/tracked.ts";
@@ -53,31 +52,6 @@ export interface Lookups {
   readonly discovered: () => readonly Found[];
   /** What the session that owns a DIR spent. */
   readonly spend: SpendReader;
-  /** The hub's: each link's last HTTP probe, with when it was checked and since when it reads so; `up` null
-   * (the view's `up: null`) while unknown. Without it, a link is up when `up` says so. */
-  readonly probe?: (urls: readonly string[]) => readonly (Probed | undefined)[];
-  /** The hub's: this machine's MagicDNS suffix, the only `*.ts.net` names a link reaches it by (`null`: none).
-   * Without it any `*.ts.net` name is this machine's tailnet, as the Python twin reads it. */
-  readonly tailnet?: () => string | null;
-  /** The hub's: the machine's orphaned test and dev processes (orphans.ts), shown on the manager's page. */
-  readonly orphans?: () => readonly Orphan[];
-  /** The hub's: what it did to wake a fleet whose host does not listen while the user's messages wait
-   * (wake.ts `deafView`); undefined for a host that listens. */
-  readonly deaf?: (entry: Entry, heard: Listening) => JsonObject | undefined;
-  /** The hub's: a fleet its last look could not read, and why (wake.ts `Wakes.blindView`); undefined while it reads. */
-  readonly blind?: (entry: Entry) => JsonObject | undefined;
-  /** The hub's: the fleet's last takeover (`fleet serve --take-over`), until the host has read a message the
-   * user wrote after it (takeover.ts `takeoverView`). */
-  readonly takeover?: (entry: Entry, heard: Listening) => JsonObject | undefined;
-}
-
-/** A link's last probe. */
-export interface Probed {
-  /** Null while unknown: never probed yet, or the probe itself failed. */
-  readonly up: boolean | null;
-  /** When it was checked, and since when it has read up (or down), as stamps. */
-  readonly checked: string;
-  readonly since: string;
 }
 
 function rows(state: JsonObject, key: string): JsonObject[] {
@@ -223,8 +197,6 @@ export function summary(machine: Machine, lookups: Lookups, entry: Entry): JsonO
     tokens: agents.reduce((sum, a) => sum + intOf(a["tokens"]), 0),
     spent: spentJson(lookups.spend.of(entry.dir, machine.config)),
     chat: { on: heard.on, seen: heard.seen, unread: heard.unread, since: heard.since },
-    // Only from a hub, and only for a host that does not listen: the twin's page and every trace have no such key.
-    ...deafKey(lookups, entry, heard),
     active: activeAt(entry.dir, machine.config, asString(entry.raw["session_id"])) ?? null,
     now_at: state["now_at"] ?? null,
     lanes,
@@ -286,11 +258,9 @@ function isFile(path: string): boolean {
 export function linksOf(machine: Machine, lookups: Lookups, state: JsonObject, root: string, prefix = ""): JsonObject[] {
   const links = rows(state, "links").filter((l) => asString(l["url"]) !== undefined);
   const urls = links.map((l) => asString(l["url"]) ?? "");
-  const suffix = lookups.tailnet?.();
-  const reach = urls.map((u) => reachOf(u, suffix));
+  const reach = urls.map((u) => reachOf(u));
   const probed = urls.filter((_, i) => reach[i] === "machine");
-  const up = lookups.probe === undefined ? lookups.up(probed) : [];
-  const seen = lookups.probe === undefined ? [] : lookups.probe(probed);
+  const up = lookups.up(probed);
   const base = filesRoot(root, machine.env);
   let n = 0;
 
@@ -311,12 +281,7 @@ export function linksOf(machine: Machine, lookups: Lookups, state: JsonObject, r
     const at = n;
     n += 1;
 
-    if (lookups.probe === undefined) return { ...l, ...shown, up: up[at] ?? false, file: null, decision_status };
-    const p = seen[at];
-
-    const stamp = (x: string | undefined): string | null => (x === undefined || x === "" ? null : x);
-
-    return { ...l, ...shown, up: p === undefined ? null : p.up, file: null, decision_status, checked: stamp(p?.checked), state_since: stamp(p?.since) };
+    return { ...l, ...shown, up: up[at] ?? false, file: null, decision_status };
   });
 }
 
@@ -329,10 +294,6 @@ export function unlisted(found: readonly Found[], links: readonly JsonObject[]):
 
 function foundJson(found: readonly Found[]): JsonObject[] {
   return found.map((x) => ({ port: x.port, url: x.url, target: x.target, pid: x.pid, cwd: x.cwd, command: x.command, fleet: x.fleet, up: x.up }));
-}
-
-function orphanJson(o: Orphan): JsonObject {
-  return { pid: o.pid, started: o.started, command: o.command, age: o.age, rss: o.rss, cwd: o.cwd, workspace: o.workspace, session: o.session, fleet: o.fleet };
 }
 
 /** What the running preview server says of a root-mode preview's public port: the https address it serves it at, or why it cannot serve it. */
@@ -404,29 +365,11 @@ export function previewView(machine: Machine, lookups: Lookups, root: string, st
   };
 }
 
-/** What only a hub says of a fleet it serves, each key only when it holds: `{deaf}` for one whose host does
- * not listen while the user's messages wait (since when, and what the hub did to wake it), `{blind}` for one
- * the hub's look cannot read, `{takeover}` for one that changed host and whose user was not heard since.
- * Nothing otherwise, and nothing without a hub. */
-function deafKey(lookups: Lookups, entry: Entry | undefined, heard: Listening): JsonObject {
-  if (entry === undefined) return {};
-
-  const said: readonly (readonly [string, JsonObject | undefined])[] = [
-    ["deaf", lookups.deaf?.(entry, heard)],
-    ["blind", lookups.blind?.(entry)],
-    ["takeover", unreadable(heard) ? undefined : lookups.takeover?.(entry, heard)],
-  ];
-
-  return Object.fromEntries(said.flatMap(([key, value]) => (value === undefined ? [] : [[key, value]])));
-}
-
 /** What a chat that cannot be read is heard as: nobody reading, nothing known to wait. */
 const UNHEARD: Listening = { on: false, seen: 0, unread: 0, since: null };
 
-const unreadable = (heard: Listening): boolean => heard === UNHEARD;
-
 /** Whether the host of `dir` reads its chat ({@link listening}); {@link UNHEARD} of a chat that cannot be
- * read, so the page of that fleet, and the manager's, still render: the hub's look says why (`blind`). */
+ * read, so the page of that fleet, and the manager's, still render. */
 function heardIn(machine: Machine, dir: string): Listening {
   try {
     return listening(machine, dir);
@@ -458,7 +401,7 @@ function ledgerView(machine: Machine, lookups: Lookups, given: JsonObject, rootG
   const root = resolvePath(rootGiven);
   let state: JsonObject = numberState(given);
   const heard = heardIn(machine, root);
-  state = { ...state, spent: spentJson(lookups.spend.of(root, machine.config)), chat: { on: heard.on, seen: heard.seen, unread: heard.unread, since: heard.since }, ...deafKey(lookups, machine.registry.find(root), heard) };
+  state = { ...state, spent: spentJson(lookups.spend.of(root, machine.config)), chat: { on: heard.on, seen: heard.seen, unread: heard.unread, since: heard.since } };
   const seen = workerActivity(root, machine.config, state);
 
   // `active` is when the worker was last seen; `beat`, only when a heartbeat says it, what it last ran.
@@ -506,11 +449,8 @@ function ledgerView(machine: Machine, lookups: Lookups, given: JsonObject, rootG
       found: foundJson(unlisted(lookups.discovered(), links)),
     };
 
-    const orphans = (lookups.orphans?.() ?? []).map(orphanJson);
-    // Each key only when there is one, so the frozen Python twin's page reads the same with none stopped or orphaned.
-    const kept = stopped.length > 0 ? { ...shown, stopped } : shown;
-
-    return orphans.length > 0 ? { ...kept, orphans } : kept;
+    // Only when there is one, so the frozen Python twin's page reads the same with none stopped.
+    return stopped.length > 0 ? { ...shown, stopped } : shown;
   }
 
   const mine = me === undefined ? [] : lookups.discovered().filter((x) => x.fleet === me.id);

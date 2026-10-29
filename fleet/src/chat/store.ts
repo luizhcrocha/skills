@@ -9,7 +9,6 @@ import { join } from "node:path";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 
-import { readBytes } from "../files.ts";
 import { asArray, asNumber, asObject, asString, dumps, parseJson, type Json, type JsonObject, type JsonOut } from "../json.ts";
 import { withExclusiveLock } from "../lock.ts";
 
@@ -233,7 +232,3 @@ export function appendAllLocked(root: string, compose: ComposeAll): Message[] | 
   }
 }
 
-/** The raw bytes of the store, or undefined. */
-export function storeBytes(root: string): Buffer | undefined {
-  return readBytes(storePath(root));
-}

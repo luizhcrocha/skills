@@ -1,29 +1,13 @@
 /**
- * Who may write to a fleet's chat through the hub, and the checks a post passes before its body is
- * read (Python's `serve_dashboard.writer_refusal`, `hello` and `post_refusal`).
+ * Who may write through the preview server (Python's `serve_dashboard.writer_refusal`).
  *
- * The hub trusts the tailnet, not headers from the network. A request from loopback comes from this
+ * It trusts the tailnet, not headers from the network. A request from loopback comes from this
  * machine (any local process could write chat.jsonl itself), and when it carries Tailscale's identity
  * headers it came through `tailscale serve`, which sets them. A request on the Tailscale address is
  * who `tailscale whois` says owns the machine it comes from. Only the login that owns this machine may
  * write; anyone else on the tailnet reads.
  */
-import { timingSafeEqual } from "node:crypto";
-import { join } from "node:path";
-
-import * as Option from "effect/Option";
-
-import { asArray, asString, parseObject } from "../json.ts";
 import { isLoopback, isTailnetIp } from "./tailnet.ts";
-
-/** Most bytes a posted message may have: the session's chat watch prints each message into an agent's
- * context, and 256 KiB (about 64k tokens) is the most one message should cost. */
-export const MAX_POST_BYTES = 256 * 1024;
-
-/** What a 413 says of a post of `bytes`: how big it is, the most it may be, and what to do instead. */
-export function tooBig(bytes: number): string {
-  return `This message is ${Math.ceil(bytes / 1024)} KiB; the most a message can be is ${MAX_POST_BYTES / 1024} KiB. Shorten it, or put the long part in a file and give its path.`;
-}
 
 /** Who sent a request. */
 export interface Viewer {
@@ -56,11 +40,6 @@ export async function viewerOf(
   return { login, local: false, peer: self !== undefined && ip.replace(/^::ffff:/, "") === self ? undefined : login };
 }
 
-/** Who a grant says gave it: `tailnet:<login>` for a peer Tailscale vouches for, else `local`. */
-export function grantor(viewer: Viewer): string {
-  return viewer.peer === undefined ? "local" : `tailnet:${viewer.peer}`;
-}
-
 /** Why `viewer` may not write, or undefined when they may. */
 export function writerRefusal(owner: string | undefined, viewer: Viewer): string | undefined {
   if (viewer.local) return undefined;
@@ -68,164 +47,6 @@ export function writerRefusal(owner: string | undefined, viewer: Viewer): string
   if (owner === undefined) return "chat is read-only on this address; open it on the machine that serves it";
 
   if ((viewer.login ?? "").toLowerCase() !== owner.toLowerCase()) return `only ${owner} can write here`;
-
-  return undefined;
-}
-
-/** The stream's first event: whether this viewer may write, who they are, and the most bytes a post may have. */
-export function hello(
-  owner: string | undefined,
-  viewer: Viewer,
-): { readonly write: boolean; readonly reason?: string; readonly you?: string; readonly max_bytes: number } {
-  const denied = writerRefusal(owner, viewer);
-  const you = viewer.login === undefined ? {} : { you: viewer.login };
-
-  return denied === undefined ? { write: true, ...you, max_bytes: MAX_POST_BYTES } : { write: false, reason: denied, ...you, max_bytes: MAX_POST_BYTES };
-}
-
-/** The hub's config, a file a person edits: `{"chat_origins": ["https://<host>:<port>", ...]}`, the pages
- * that may post to a fleet's chat from another origin. Read on each request, so an edit needs no restart. */
-export function chatOriginsPath(home: string): string {
-  return join(home, "hub", "config.json");
-}
-
-/** The origins the hub's config allows to post to a chat: each entry an exact `http(s)://host[:port]`, as a
- * browser sends it in `Origin` (lower case, no default port, no path); any other entry, and a file that is
- * not such a JSON object, allows nothing. */
-export function parseChatOrigins(text: string | undefined): ReadonlySet<string> {
-  const config = text === undefined ? undefined : Option.getOrUndefined(parseObject(text));
-  const allowed = new Set<string>();
-
-  for (const entry of asArray(config?.["chat_origins"]) ?? []) {
-    const origin = asString(entry);
-
-    if (origin === undefined || !/^https?:\/\/[^/?#@*\s]+$/.test(origin) || !URL.canParse(origin)) continue;
-
-    if (new URL(origin).origin === origin) allowed.add(origin);
-  }
-
-  return allowed;
-}
-
-/** Whether `origin` is this hub's own: http or https on a `host:port` it answers to. */
-function sameOrigin(origin: string, hosts: ReadonlySet<string>): boolean {
-  const m = /^([A-Za-z][A-Za-z0-9+.-]*):\/\/([^/?#]*)/.exec(origin);
-
-  return m !== null && (m[1] === "http" || m[1] === "https") && hosts.has((m[2] ?? "").toLowerCase());
-}
-
-/** The page a post comes from when it is not the hub's own but one `allowed` lists (the CORS origin to
- * answer it with), else undefined. */
-export function allowedOrigin(hosts: ReadonlySet<string>, allowed: ReadonlySet<string>, header: (name: string) => string | null): string | undefined {
-  const origin = header("Origin");
-
-  return origin !== null && allowed.has(origin) && !sameOrigin(origin, hosts) ? origin : undefined;
-}
-
-/** The header a Stop on the manager's page carries: the token the hub put in that page (`STOP_TOKEN_META`). */
-export const STOP_TOKEN_HEADER = "X-Fleet-Stop-Token";
-
-/** The `<meta name>` the manager's page holds the Stop token in. */
-export const STOP_TOKEN_META = "fleet-stop-token";
-
-/** The header a post that grants carries: the page token the hub put in every fleet's page (`PAGE_TOKEN_META`). */
-export const PAGE_TOKEN_HEADER = "X-Fleet-Page-Token";
-
-/** The `<meta name>` a fleet's page holds its page token in. */
-export const PAGE_TOKEN_META = "fleet-page-token";
-
-/** Why a post is not the hub's own page's, as [status, error], or undefined: its `Origin` is the hub's own, the one
- * the request was sent to (`host`), its `Sec-Fetch-Site` is `same-origin` (a request with neither, a local curl or
- * an agent's fetch, is refused), and it carries a token the hub put in that page at its top-level load
- * (one of `expected`, the current token and the one it replaced while in its grace, tokens.ts; in `tokenHeader`),
- * which a page the hub proxies (a preview) is never served. `away` and `stale` are
- * the errors for a post from elsewhere and for a missing or wrong token. */
-function ownPageRefusal(hosts: ReadonlySet<string>, host: string, expected: readonly string[], tokenHeader: string, header: (name: string) => string | null, away: string, stale: string): readonly [number, string] | undefined {
-  const origin = header("Origin");
-
-  if (origin === null || !sameOrigin(origin, hosts) || /^[a-z]+:\/\/([^/?#]*)/i.exec(origin)?.[1]?.toLowerCase() !== host.toLowerCase()) return [403, away];
-
-  if ((header("Sec-Fetch-Site") ?? "").toLowerCase() !== "same-origin") return [403, away];
-  const token = Buffer.from(header(tokenHeader) ?? "");
-  let matched = false;
-
-  // Each accepted token compared, timing-safe, whatever an earlier one gave.
-  for (const one of expected) {
-    const want = Buffer.from(one);
-    matched = (one !== "" && token.length === want.length && timingSafeEqual(token, want)) || matched;
-  }
-
-  if (!matched) return [403, stale];
-
-  return undefined;
-}
-
-/** Why a Stop on an orphaned process tree is refused, as [status, error], or undefined: on top of a post's checks
- * (`postRefusal`), it comes only from the manager's page itself (`ownPageRefusal`, with the Stop token only that page
- * is served). */
-export function stopRefusal(
-  owner: string | undefined,
-  viewer: Viewer,
-  hosts: ReadonlySet<string>,
-  host: string,
-  expected: readonly string[],
-  header: (name: string) => string | null,
-): readonly [number, string] | undefined {
-  const refused = postRefusal(owner, viewer, hosts, header);
-
-  if (refused !== undefined) return refused;
-
-  return ownPageRefusal(hosts, host, expected, STOP_TOKEN_HEADER, header, "a Stop comes only from the manager's page on this hub", "the Stop token is missing or stale: reload the manager's page");
-}
-
-/** Why an answer that grants (allow-once, allow-kind) or adds a rule (add-rule) is refused, as [status, error], or undefined: on top of the
- * post's checks, it comes only from a fleet's page on this hub, as a Stop does (`ownPageRefusal`, with the page
- * token every fleet's page is served at its top-level load; the fleet's page in the manager's frame sends the
- * manager page's). A process on this machine that posts to the hub (an agent's fetch or curl) is not the user
- * answering, and a post a peer hub passes on carries no token. */
-export function grantRefusal(hosts: ReadonlySet<string>, host: string, expected: readonly string[], header: (name: string) => string | null): readonly [number, string] | undefined {
-  return ownPageRefusal(hosts, host, expected, PAGE_TOKEN_HEADER, header, "a grant comes only from the fleet's own page on this hub: answer it there", STALE_PAGE_TOKEN);
-}
-
-/** What `grantRefusal` says of an answer from the hub's own page with a token it does not accept (a page loaded
- * before the token file was replaced, or past a rotation's grace): when the post sent a token, the hub's answer adds
- * `reload: true`, and the page offers a Reload that keeps the draft. */
-export const STALE_PAGE_TOKEN = "the page token is missing or stale: reload the fleet's page and answer again";
-
-/** Why a post is refused before its body is read, as [status, error], or undefined. `allowed` are the other
- * origins it may come from (a chat post's, from the hub's config); none for every other post. Every post that
- * acts as the user goes through it: a chat message, a decision's answer and the grant it carries
- * (`/chat`, `/chat/preview`), a name (`/name`), a preview's workers (`/preview-workers`), and a post passed
- * to a peer hub. */
-export function postRefusal(
-  owner: string | undefined,
-  viewer: Viewer,
-  hosts: ReadonlySet<string>,
-  header: (name: string) => string | null,
-  allowed: ReadonlySet<string> = new Set(),
-): readonly [number, string] | undefined {
-  const denied = writerRefusal(owner, viewer);
-
-  if (denied !== undefined) return [403, denied];
-
-  if ((header("Content-Type") ?? "").split(";")[0]?.trim().toLowerCase() !== "application/json") return [415, "send the message as application/json"];
-  const origin = header("Origin");
-
-  // A sandboxed page (an agent's file, a linked prototype) has an opaque origin and posts with `Origin: null`,
-  // which is no host this hub answers to.
-  if (origin !== null && !sameOrigin(origin, hosts) && !allowed.has(origin)) return [403, "cross-origin post refused"];
-
-  // A browser says where a post comes from: only the hub's own page (same-origin) acts as the user, besides a
-  // page `allowed` names. A post that says it is from anywhere else, an opaque origin's included, is refused.
-  const site = header("Sec-Fetch-Site");
-
-  if (site !== null && site.toLowerCase() !== "same-origin" && !(origin !== null && allowed.has(origin))) return [403, "cross-origin post refused"];
-
-  const length = header("Content-Length") ?? "0";
-
-  if (!/^\d+$/.test(length)) return [400, "bad Content-Length"];
-
-  if (Number(length) > MAX_POST_BYTES) return [413, tooBig(Number(length))];
 
   return undefined;
 }

@@ -13,7 +13,7 @@ import { readChat } from "../src/chat/store.ts";
 import { stampOf } from "../src/clock.ts";
 import { ChatError } from "../src/errors.ts";
 import type { JsonObject } from "../src/json.ts";
-import { displacedLine, HUB, lastTakeover, partyOf, recordTakeover, takeoverText, takeoverView, type Party } from "../src/takeover.ts";
+import { displacedLine, HUB, lastTakeover, partyOf, recordTakeover, takeoverText, type Party } from "../src/takeover.ts";
 import { machineOf, type Machine } from "../src/world.ts";
 import { baseEnv, readJson, tmp, type Environment } from "./support.ts";
 
@@ -41,8 +41,6 @@ function say(sender: string, text: string, re?: number): number {
 
   return sent.id;
 }
-
-const seenAt = (id: number): void => writeFileSync(join(root, "watch-coordinator.cursor"), String(id));
 
 beforeEach(() => {
   const base = tmp("fleet-takeover-");
@@ -102,41 +100,16 @@ describe("the record of a takeover", () => {
     expect(lastTakeover(root)).toBeUndefined();
     writeFileSync(join(root, "chat.jsonl"), `${JSON.stringify({ id: 3, at: AT, from: "coordinator", to: ["user"], text: "x", re: null, takeover: { at: AT, by: BY, from: FROM } })}\n`, { flag: "a" });
     writeFileSync(join(root, "chat.jsonl"), `${JSON.stringify({ id: 4, at: AT, from: HUB, to: ["user"], text: "x", re: null, takeover: { at: "soon", by: BY, from: FROM } })}\n`, { flag: "a" });
-    expect([lastTakeover(root), takeoverView(root, 0)]).toEqual([undefined, undefined]);
+    expect(lastTakeover(root)).toBeUndefined();
   });
 });
 
-describe("what the page shows of it", () => {
-  const SHOWN: JsonObject = { id: 2, at: AT, by: { ...BY }, from: { ...FROM } };
-
-  test("from the takeover until the host has read a message the user wrote after it: the cursor passed it", () => {
-    const earlier = say("user", "status?");
-    expect(takeoverView(root, earlier)).toBeUndefined();
-    recordTakeover(m, root, BY, FROM);
-    // What the user wrote before it, read or not, changes nothing.
-    expect([takeoverView(root, 0), takeoverView(root, earlier), takeoverView(root, 2)]).toEqual([SHOWN, SHOWN, SHOWN]);
-    say("coordinator", "I am the new host");
-    expect(takeoverView(root, 3)).toEqual(SHOWN);
-    const next = say("user", "who are you?");
-    expect([takeoverView(root, next - 1), takeoverView(root, next)]).toEqual([SHOWN, undefined]);
-    seenAt(next);
-    expect(takeoverView(root, next)).toBeUndefined();
-  });
-
-  test("or a participant answered it, though no watch printed it", () => {
-    say("user", "status?");
-    recordTakeover(m, root, BY, FROM);
-    const next = say("user", "who are you?");
-    expect(takeoverView(root, 0)).toEqual(SHOWN);
-    say("coordinator", "the session you resumed", next);
-    expect(takeoverView(root, 0)).toBeUndefined();
-  });
-
-  test("the last one is the one shown", () => {
+describe("the last takeover", () => {
+  test("is the last one the chat holds", () => {
     recordTakeover(m, root, BY, FROM);
     nowMs += 60_000;
     recordTakeover(m, root, FROM, BY);
-    expect(takeoverView(root, 0)).toEqual({ id: 2, at: stampOf(new Date(nowMs)), by: { ...FROM }, from: { ...BY } });
+    expect(lastTakeover(root)).toMatchObject({ at: stampOf(new Date(nowMs)), by: { ...FROM }, from: { ...BY } });
   });
 });
 
