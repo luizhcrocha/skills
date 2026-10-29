@@ -25,8 +25,8 @@ How to read it:
 Contents: [Environment](#environment) · [state.py](#statepy-the-ledger-cli) ·
 [The ledger](#the-ledger-statejson) · [Numbers](#numbers-refs) · [Warnings](#warnings) ·
 [chat.py](#chatpy-the-chat) · [fleets.py and the registry](#fleetspy-and-the-registry) ·
-[The other scripts](#the-other-scripts) · [The hub](#the-hub-fleet-hub) · [Heartbeats](#heartbeats) ·
-[Listening hooks](#listening-hooks) · [The hub's wake](#the-hubs-wake) · [The news](#the-news-fleet-news) ·
+[The other scripts](#the-other-scripts) · [`fleet serve`](#fleet-serve-the-fleets-host) · [Heartbeats](#heartbeats) ·
+[Listening hooks](#listening-hooks) · [The wake](#the-wake) · [The news](#the-news-fleet-news) ·
 [1Password locked](#1password-locked-fleet-onepw) ·
 [Workspaces](#workspaces-fleet-ws) · [The preview](#the-preview-fleet-preview) · [The advisor](#the-advisor-fleet-advisor) · [Files by writer](#files-by-writer) ·
 [Oracle traces](#oracle-traces) · [The model](#the-model-based-test) · [Open](#open)
@@ -42,19 +42,19 @@ Contents: [Environment](#environment) · [state.py](#statepy-the-ledger-cli) ·
 | `CLAUDE_CONFIG_DIR` | spend.py | where transcripts are (`~/.claude`): `projects/<project>/<session>.jsonl`, workers under `<session>/subagents/agent-<id>.jsonl` |
 | `FLEET_DISCOVER=0` | served.py | skip discovering the machine's served ports (tests) |
 | `FLEET_CHECK_S` | chat.py | how often a manager's or coordinator's watch looks at the fleets (default 30 s) |
-| `FLEET_UNHEARD_S` | chat.py, the hub | how long the user's message waits unread before a manager's watch tells, or, while a hub runs, before the page says the host does not listen (default 120 s). The hub's wake does not wait for it (since 2026-10-13). See [The hub's wake](#the-hubs-wake) |
+| `FLEET_UNHEARD_S` | chat.py, `fleet chat watch` | how long the user's message waits unread before a manager's watch tells (default 120 s) |
 | `FLEET_UNANSWERED_S` | chat.py | how long the user's message to a fleet's host goes without a reply (`--re`) before a manager's watch tells, read or not (default 600 s) |
 | `FLEET_NUDGE_S` | chat.py | how long a message to a worker waits unanswered before the coordinator's watch tells (default 600 s, L1) |
 | `FLEET_WATCH_SETTLE` | chat.py | how long a `--once` watch waits after a new line for more before it exits (default 30 s; `--settle` wins) |
 | `FLEET_WATCH_SETTLE_USER` | chat.py | the same after the user's message to WHO (default 10 s, never more than the settle) |
 | `FLEET_WATCH_SETTLE_MAX` | chat.py | the longest a `--once` watch holds its first new line (default 120 s) |
-| `TAILSCALE` | serve_dashboard.py, `fleet hub`, `fleet serve`, `fleet served` | the tailscale binary |
-| `FLEET_HUB_PORT` | `fleet hub`, `fleet serve` | the hub's port (default 7420); `--port` wins |
+| `TAILSCALE` | serve_dashboard.py, `fleet preview serve`, `fleet serve`, `fleet served` | the tailscale binary |
+| `FLEET_HUB_PORT` | `fleet preview serve`, `fleet serve` | the preview server's port (default 7420, the port the removed hub had); `--port` wins |
 | `FLEET_DIR` | the plugin's hook (`fleet_heartbeat`) | the fleet DIR a session works for when its scratchpad holds none: a worker launched as its own Claude Code process. See [Heartbeats](#heartbeats) |
 | `FLEET_WORKER` | the plugin's hook | the worker id such a process is; written into its heartbeat. A session with it is a worker: the listening hooks leave it alone |
 | `FLEET_PREVIEW_S` | `fleet preview`'s updater | how often it looks at the workers' working copies (default 3 s) |
 | `FLEET_PREVIEW_WAIT_S` | `fleet preview start` | how long it waits for a dev server to answer before saying it does not yet (default 30 s) |
-| `FLEET_PREVIEW_IDLE_S` | `fleet preview start`, the keeper, the hub | how long a dev server may go with no request before it sleeps (default 1800 s; `0` turns sleep off) |
+| `FLEET_PREVIEW_IDLE_S` | `fleet preview start`, the keeper, the preview server | how long a dev server may go with no request before it sleeps (default 1800 s; `0` turns sleep off) |
 | `FLEET_PREVIEW_AWAKE` | `fleet preview start` | the dev servers that never sleep: public ports, worker ids, `combined` (default `7501`) |
 | `FLEET_PREVIEW_SCOPE` | `fleet preview start`, the keeper | `0`: the preview's processes run without systemd user scopes of their own, stopped by their tree (the tests set it) |
 | `FLEET_MEMINFO` | `fleet fleets gate take`, `gate run` | the file read for MemAvailable (and the MemTotal a floor's share is of) in place of `/proc/meminfo`; one that is not there leaves the gate its budget alone (the tests and the oracle set it). See the gate under [fleets.py and the registry](#fleetspy-and-the-registry) |
@@ -63,11 +63,16 @@ Contents: [Environment](#environment) · [state.py](#statepy-the-ledger-cli) ·
 | `FLEET_GATE_STOP_GRACE_S` | `fleet fleets gate run` | the seconds a stopped command has between SIGTERM and SIGKILL, and the scope's TimeoutStopSec and its margin in RuntimeMaxSec (default 5 s; the tests set it) |
 | `FLEET_REFUSAL_REMIND_S` | the plugin's hook (`fleet_listen_guard`) | how long the Stop guard stays quiet about a refused chat watch after it said so, before it blocks with the command again (default 1800 s). See [Listening hooks](#listening-hooks) |
 | `FLEET_NUDGE_MIN` | the plugin's hook (`fleet_chat_nudge`) | how long the user's message waits unread, or an answer unrecorded, before the session is told mid-turn (default 3 minutes). See [Listening hooks](#listening-hooks) |
-| `FLEET_CC_SOCKS` | the hub | the folder of Claude Code's session sockets, `<pid>.sock` each, that the hub's wake writes to (default `$XDG_RUNTIME_DIR/cc-socks`; the tests set a folder of their own, so no test reaches a real session). See [The hub's wake](#the-hubs-wake) |
-| `FLEET_ONEPW_LAPSE_S` | the plugin's hook (`onepw_watch`, `onepw_hold`), the hub, `fleet onepw` | how long a kind of 1Password lock holds with no answer before it lapses (default 7200 s; unset, empty or no number is the default; 0 or less means nothing ever holds). See [1Password locked](#1password-locked-fleet-onepw) |
+| `FLEET_CC_SOCKS` | src/wake.ts `deliverTo` (the 1Password notice, the `[hub]` line to a host) | the folder of Claude Code's session sockets, `<pid>.sock` each, that a line to a session is written to (default `$XDG_RUNTIME_DIR/cc-socks`; the tests set a folder of their own, so no test reaches a real session). See [The wake](#the-wake) |
+| `FLEET_ONEPW_LAPSE_S` | the plugin's hook (`onepw_watch`, `onepw_hold`), `fleet onepw` | how long a kind of 1Password lock holds with no answer before it lapses (default 7200 s; unset, empty or no number is the default; 0 or less means nothing ever holds). See [1Password locked](#1password-locked-fleet-onepw) |
 
 A DIR at `…/<project>/<session>/scratchpad/<name>` names a session transcript; any other DIR has
 none, and every figure read from a transcript (spend, worker tokens, liveness) is absent.
+
+`[hub]` and `fleet-hub` are the name the machine's own chat lines carry: a takeover, a 1Password notice, a
+refusal draft, a wake, a worker left out of the preview. They are facts about the machine, never a command and
+never Luiz. No hub process writes them now (the local hub is removed: the pages are the cloud's, written by the
+office host); the name stays because chats, the hook and the page read it, and the quoted lines below keep it.
 
 ## state.py: the ledger CLI
 
@@ -88,14 +93,12 @@ given. Every ID argument also takes the row's number (D3, L2, R1) where rows hav
    way, and so are `ws DIR add`, `split`, `trash NAME` and `prune --apply`, every `preview DIR` command but `status`,
    `render DIR/state.json` (it stamps the ledger), and any other writer through `ws`'s `save` (the workspace
    hook's report); the chat's readers, `ws list`, a dry-run `ws prune` and `preview status` stay. The host service exports that folder's ledger from the cloud.
-   A moved team stays in the machine's view after `fleet serve --stop` takes it off the hub: every folder beside the
+   A moved team stays in the machine's view after `fleet serve --stop` takes it out of the registry: every folder beside the
    registry home (`~/.local/state/fleet/<team>`, the home's sibling `fleet`) that holds `cloud.json` is listed after
    the served fleets by `fleets list` (`(coordinator, <status>, moved to the cloud)`), `fleets waiting`, `fleets show`,
    `fleets decision`, the manager's page and the manager's `watch --fleets`, read from the exported `state.json` and
-   `chat.jsonl`. Its page is `<cloud>/<fleet>` (cloud.json's `cloud` and `fleet`). The hub sends a top-level load of
-   `/f/<fleet>/…` (`Sec-Fetch-Dest: document`) there (302; the browser keeps its `#decision/<fleet>/<card>`); any other
-   read (a page's fetch, a frame, a client sending no `Sec-Fetch-Dest`) gets 409 `{error, moved: true, cloud}`, so no
-   fetch or frame lands on the cloud's login. The manager's page shows such a team's card as a link to it on the cloud
+   `chat.jsonl`. Its page is `<cloud>/<fleet>` (cloud.json's `cloud` and `fleet`). No process of tstack
+   serves `/f/<fleet>/…` now: the preview server answers 404 outside `/f/<fleet>/preview/`. The manager's page shows such a team's card as a link to it on the cloud
    page, never a frame, and fetches none of its files. Every write to it stays refused.
 4. `DIR` is created (mkdir -p), even when the command then fails (open-17).
 5. `state.json` is read. Missing, with any command but `init`: refused, `no state.json in DIR; run \`init\` first`.
@@ -200,7 +203,7 @@ renames it. Milestones are never removed.
   `subagents/agent-<task_id>.jsonl`, while it is live and once more after (*pinned by test_state
   MeasuredTest; out of the oracle, which has no transcripts*).
 - **Names.** A worker is called, first found of: the name the user gave on the page (`name_by:
-  "user"`, the hub's `POST /f/<fleet>/name`); the coordinator's `--name` (`"coordinator"`); what its
+  "user"`; nothing in tstack writes it now, the cloud's page does); the coordinator's `--name` (`"coordinator"`); what its
   session calls it (`"session"`): its subagent's `subagents/agent-<task_id>.meta.json`, `name` (the Agent
   tool's) else `description`, beside the transcript of DIR's scratchpad's session, else of the fleet's
   registered `session_id` (a fleet served outside a scratchpad, a respawned session); its id (`name_by`
@@ -212,8 +215,7 @@ renames it. Milestones are never removed.
   Nothing automatic replaces a user's or a coordinator's name (*TypeScript only, out of the oracle,
   which has no subagent files; pinned by fleet/test/naming.test.ts*).
 - **The lock.** `fleet state` reads, changes and writes `state.json` (and renders) under an exclusive
-  `flock` of `DIR/state.json` itself, which the hub's rename takes too, so neither loses the other's
-  change; `init`, with no ledger yet, takes none. `state.json` is written in place, so the lock
+  `flock` of `DIR/state.json` itself; `init`, with no ledger yet, takes none. `state.json` is written in place, so the lock
   outlives each write and no lock file joins DIR (*TypeScript only; Python's state.py takes none*).
   `fleet ws` and `fleet preview` write the ledger without it.
 
@@ -603,7 +605,7 @@ of add, list, revoke`). `list` prints one line per approval (as `show` does, bel
   page's "ok, as recommended (X)" as the question's recommendation, and a trailing "(as recommended)" is
   dropped; anything after it is a qualifier and refuses (`manager/G5:Q2 was answered '(b) no': only a plain
   yes (yes, approve, sim, ok) gives a standing approval; ask the user again for a plain yes or no, one rule
-  to a question`). Then the user's own words, from that fleet's chat (only the hub writes as the user; a
+  to a question`). Then the user's own words, from that fleet's chat (only the page writes as the user, in the cloud; a
   coordinator's or the manager's relay is not one): for a question, the last `Q<n>: ...` line (with the
   lines under it that are no question's) of a user message tagged with the grilling, else a user message
   whose `re` is a message naming that question alone, its `at` not older than the question's `asked` (its
@@ -669,25 +671,17 @@ protótipo, is a prototype; else `page` and a `file:` address read as doc and th
 A link's **reach**: `machine` when its scheme is http(s) and its host is this machine or its tailnet
 (`localhost`, `*.localhost`, 127/8, `::1`, `0.0.0.0`, `*.ts.net`, 100.64/10), `file` for `file://`, else
 `external` (never probed). The TypeScript fleet reads the host as fetch will (WHATWG `new URL`: `0127.0.0.1`
-is 87.0.0.1, so elsewhere), and an address with userinfo (`user@`) or a backslash is `external`. In the hub,
-`*.ts.net` is only this machine's own tailnet suffix (`MagicDNSSuffix` from `tailscale status --json`, else
-its name without the first label), read once at its start; none read, no `*.ts.net` name is this machine's.
-The CLI's render and the Python twin take any `*.ts.net`.
+is 87.0.0.1, so elsewhere), and an address with userinfo (`user@`) or a backslash is `external`. Every caller
+in tstack takes any `*.ts.net` (`reachOf` can narrow it to a tailnet suffix, and none passes one now).
 
 **In the view** (`fleets.view`, the page's state), each link carries, beside its row and `fleet`: `kind` as
 read, `reach`, `up`, `file` and `decision_status` (the status of the decision it serves, found by id then
-number, or null). `up`: a `machine` link's TCP probe of 127.0.0.1 at its port (the hub's: below); a `file`
-link's file is there; an `external` link's is false. `file`: for a `file` link under the fleet's files root
-with no dot part, the hub path `files/<path, its parts URI-encoded>`, prefixed `f/<fleet>/` on the manager's
-page for another fleet's; else null. The hub's view replaces a `machine` link's probe with an HTTP one and
-adds `checked` and `state_since` (stamps, null until its first probe ends): a HEAD of the address (a GET of
-`bytes=0-0` on 405 or 501), 3 s, redirects never followed, no credentials, a loopback address's certificate
-not checked; up unless it fails, times out, or answers 502, 503 or 504 (`tailscale serve` before a stopped
-server). `up` is null (unknown) until its first probe ends, and when the probe itself fails (throws or
-rejects). Each address's answer is held 60 s of the hub's clock and probed again in the background, at most
-512 addresses held (the least recently asked dropped first); `state_since` is when it last turned up, down or
-unknown. The page counts a link inactive when it is done, its decision is decided or withdrawn, a `machine`
-link is down, or a `file` link's file is gone; an unknown one stays active and its row says "checking…". One
+number, or null). `up`: a `machine` link's TCP probe of 127.0.0.1 at its port (300 ms, `src/page/probe.ts`; false when it
+cannot run); a `file` link's file is there; an `external` link's is false. `file`: for a `file` link under the
+fleet's files root with no dot part, the path `files/<path, its parts URI-encoded>`, prefixed with the
+page's prefix for another fleet's; else null. Nothing in tstack holds a probe's answer or serves that path:
+the link has no `checked`, no `state_since` and no unknown `up` here. The page counts a link inactive when it is
+done, its decision is decided or withdrawn, a `machine` link is down, or a `file` link's file is gone. One
 that serves an open decision or says `for` waits on the user.
 
 **show**: prints the ledger and the command cheat sheet; writes nothing. Pinned lines:
@@ -874,8 +868,8 @@ ledger holds; the machine issues no one-digit number, so only rows from before i
 way. With its fleet said before it ("pipeline's L1") a short one is a link everywhere.
 
 Never linked, whatever they name: Luiz's own words (a chat message from the user, his answer in a decision's
-history), a quote (words taken from elsewhere, shown as they were), a line of the hub's (one that opens with
-`[hub]`), and the chat's message ids (`#N`).
+history), a quote (words taken from elsewhere, shown as they were), a `[hub]` line (one the machine wrote, from
+`fleet-hub`), and the chat's message ids (`#N`).
 
 On the manager's page the link opens the row in the fleet that wrote the words (`#decision/<fleet>/<number>-<slug>`, `ledger/card-address.ts`;
 `#link-<fleet>/<id>`), found in what the view already carries of each fleet (`coordinators[].index`, `links`);
@@ -1011,7 +1005,7 @@ prints one line per event, fleet by fleet in registry order, its messages before
   `<fleet> <ref> held: <title>(: <first line of held, when it is text>)`. A decision opened for the
   manager is not news (the coordinator writes to the manager's session).
 
-Nothing else of a fleet is (no worker's message, no reply of its coordinator, no message the hub delivered
+Nothing else of a fleet is (no worker's message, no reply of its coordinator, no message delivered
 from the manager's page: `via` the manager). A *first line* is the
 text's first line that has text, one-lined as a message is, spaces trimmed, cut at 200 characters, with
 ` …` when the text goes on. Where each decision stands is `open:<asks>`, `held` or its status; a decision
@@ -1062,8 +1056,8 @@ marks: {
 }
 ```
 
-- `images` (optional, TypeScript only): the images pasted with the mark's words, as a message's `images` are
-  ([Images in the chat](#images-in-the-chat-typescript-only)): at most 8 `attachments/<hash>.<png|jpg|webp|gif>`
+- `images` (optional, TypeScript only): the images pasted with the mark's words, as a message's `images` are:
+  at most 8 `attachments/<hash>.<png|jpg|webp|gif>`
   paths (`mark <n>.images is a list of at most 8 attachments/<hash>.<png|jpg|webp|gif> paths` otherwise), each
   a stored image of that fleet (the message's 400 otherwise). An empty list is dropped.
 
@@ -1123,15 +1117,15 @@ the Delivery maps that `side` to its copy's id in the fleet's chat, and the Cour
 thread as for any side chat. A reply (`re`) to such an opener, from the moment it is stored, as to any message
 in a side chat, joins the thread (`side` = the opener's id) unless it names its own, and is owned as the
 thread is on the manager's page; so a `--mark` answer stays in the page thread.
-`fleet/src/chat/chat.ts`'s `marksOf` and `marksAlone` are the one check (the hub's 400, `append`).
+`fleet/src/chat/chat.ts`'s `marksOf` and `marksAlone` are the one check (`append` refuses a batch that fails it).
 
 **Routing** reuses `address`: a batch goes to the decision's owner plus whoever its text cites (the page
 writes each mark's @-cites into the batch's Markdown), and to no one else. On a fleet's page the owner is
 the host, so `1 mark, @a1 too` goes to `coordinator, a1` (any other message of the user's with a mention
 goes to the mentions only). On the manager's page the owner is the live fleet its `marks.at` names
 (`#decision/<fleet>/<id>`, `quotedFleet`), else the manager (its own decision, or a fleet no longer
-served): `decision/<fleet>/<id>` goes to that fleet only, never the manager unless cited. The hub's
-Delivery copies `marks` into the fleet's chat with its `at` rewritten as a quote's is (`#decision/<id>`,
+served): `decision/<fleet>/<id>` goes to that fleet only, never the manager unless cited. The
+Delivery (the page's server, in the cloud) copies `marks` into the fleet's chat with its `at` rewritten as a quote's is (`#decision/<id>`,
 the fleet's own page). A comment reaches the owner plus the agents it cites, and the page sends one batch per
 recipient and decision (the owner's holds every comment; a cited agent's, the comments citing it), each
 naming its one agent in `marks.to` (a name as a mention resolves it, ≤ 200 characters). With `to` the batch
@@ -1150,16 +1144,14 @@ fleet's page (its batch cases are TypeScript's: `test_chat.py` skips a case with
 **Ride-along.** The answer to a decision (`POST chat` with `decision`) may carry `batch: {text, marks}`,
 the decision's pending marks, `marks.decision.id` the answered decision (by id, or the id of the ref
 answered) and `marks.at.hash` its own address on this page (`#decision/<id>`; else `the batch's place <hash>
-is not the answered decision's own, #decision/<id>`). The hub checks it as a batch post (`marksOf`, `marksAlone`, `address`) before it grants or
-stores anything, and refuses with 400 and stores nothing (`batch is {text, marks}: ...`, `the batch's marks
+is not the answered decision's own, #decision/<id>`). The batch is checked as a batch post (`marksOf`, `marksAlone`, `address`) before anything is
+stored, and a failing one is refused and stores nothing (`batch is {text, marks}: ...`, `the batch's marks
 are on decision <id>, not on <decision>, the one answered`, `a batch rides along with an answer to its
-decision only`). Then it writes the batch and the answer in one write under the chat's lock, batch first
-(`appendAll`), so one wake of a `--once` watch prints both. What the store would refuse (a side chat it
-does not hold) is asked before the grant too (`storeRefusal`), and checked again under the lock: a refusal
-there stores neither message and delivers nothing (the Delivery runs only once both compose), so the 400
-never follows a stored batch and the page keeps its comments pending. The 201 is the answer as stored, plus `batch`:
-the batch as stored. The page's exit post (`fetch` with `keepalive`, same origin) passes `postRefusal`
-as any post does.
+decision only`). Then the batch and the answer are written in one write under the chat's lock, batch first
+(`appendAll`), so one wake of a `--once` watch prints both. A refusal under the lock (a side chat the store
+does not hold) stores neither message and delivers nothing (the Delivery runs only once both compose), so
+the page keeps its comments pending. The answer as stored is returned with `batch`, the batch as stored.
+tstack serves no post: the page's server in the cloud takes it and calls this code's checks.
 
 **Answers.** The coordinator answers marks with `say --as coordinator --re <batch> --mark N[,N...] TEXT`:
 the message gains `mark: [N, ...]`. `--mark` needs `--re` to a message with `marks`, and each N must be
@@ -1240,7 +1232,7 @@ press let go after 250 ms and before then does neither; Shift+click and the card
 Its hover card (the hold on a phone) is the only send status: what waits, how many comments to each agent
 ("4 to perf, 2 to skills"), when it goes by itself, and the last send with its reason; a send leaves at
 most a brief toast ("Sent: 4 to perf, 2 to skills (you left the page)."), which counts only what went: what
-the hub stored, with what an answer took along, or, for a page leaving, what it handed the browser. The inbox (a full
+was stored, with what an answer took along, or, for a page leaving, what it handed the browser. The inbox (a full
 sheet on a phone, filling the visual viewport above the keyboard, the page behind locked and out of sight; Esc closes it) lists the page's main thread first (a side chat per decision page, held
 with the decision's owner, named in words: its opener is a message of Luiz's quoting the decision's title
 at `{hash, anchor: "dv-page"}`, found by that place; empty with a hint before any message), then a thread
@@ -1305,7 +1297,7 @@ stored before the answer in one write; the cited agents' batches and the convers
 while they total 60 KB or less, the rest as plain fetches. A send clears what it carried only once it is
 stored (or a keepalive post is handed to the browser); one that fails keeps everything and tries again
 after another quiet period. What waits is kept per viewer in the browser's localStorage under the 1.9.33
-drafts key (`fleet-marks:<fleet>:<decision id>`, `<fleet>` the fleet's ledger identity: the hub's id for
+drafts key (`fleet-marks:<fleet>:<decision id>`, `<fleet>` the fleet's ledger identity: the id the page's server gives
 it, else its `/f/<fleet>/`, else `project:<project>`; `{items, msgs}`, 1.9.33's list of drafts read as
 pending marks; read and written in try/catch). On the manager's page a fleet's decision it no longer lists
 (decided) is read from the fleet's own `state.json`, so its comments work there too.
@@ -1355,18 +1347,18 @@ navy shape, quoted in both themes) and `test/bodytext.test.ts`.
 
 **The body runs no script.** Defence in depth for the rule above: the frame's document (`frameDoc`) opens
 its head with a Content-Security-Policy `<meta>`, before its `<base>`: `default-src 'none'; script-src
-'nonce-<N>'; style-src 'unsafe-inline' https://fonts.googleapis.com; img-src data: blob: <hub>; font-src
-data: https://fonts.gstatic.com <hub>; object-src 'none'; base-uri <the frame's base URL>; form-action
-'none'` (`fleet/page/src/body-policy.ts`), N 16 random bytes drawn on each render, `<hub>` the page's
+'nonce-<N>'; style-src 'unsafe-inline' https://fonts.googleapis.com; img-src data: blob: <origin>; font-src
+data: https://fonts.gstatic.com <origin>; object-src 'none'; base-uri <the frame's base URL>; form-action
+'none'` (`fleet/page/src/body-policy.ts`), N 16 random bytes drawn on each render, `<origin>` the page's
 origin. Only the fleet's own script carries the nonce (sizing, the tables' cards, the marks:
 markframe.ts); the body's `<script>`, its inline handlers (`onclick=`, `onerror=`, an SVG's `onload=`),
 its `javascript:` links, its frames, objects and forms do nothing, and a `<script` tag the body leaves
 open to swallow the nonce is refused by the browser (an attribute holding `<script` is never nonceable).
 `base-uri` names the frame's own base rather than `'none'`, which would refuse it and with it every
-relative picture. Styles, the page's fonts, inline SVG, and pictures from `data:`, `blob:` or the hub
+relative picture. Styles, the page's fonts, inline SVG, and pictures from `data:`, `blob:` or the page's origin
 still show. Nor does the body take the frame anywhere: before it goes in (`bodyDoc`, `safebody.ts`) it is
 cut to an allowlist by DOMPurify (pinned in the page's package.json), which knows the parser's mutation
-tricks: text, tables, code, lists, headings, details, pictures from `data:` or the hub, the show-me SVG
+tricks: text, tables, code, lists, headings, details, pictures from `data:` or the page's origin, the show-me SVG
 elements, classes and styles stay; `<script>`, `<meta>` (a refresh, which no policy stops), `<base>`,
 `<form>`, `<noscript>`, `<math>`, `<template>`, frames, objects, embeds, every `on*` handler and
 `javascript:` address go, and every link, HTML or SVG (whose `<a>` ignores the `<base>`'s target), opens a
@@ -1383,10 +1375,11 @@ carries a token drawn per render, kept in a script's text (no style reaches it);
 message from the frame only from the decision's current frame and with that token, and once the frame
 leaves the document it was given (the fleet's script posts `annotGone` on `pagehide`; a second load
 says the same) the page takes nothing from it and sends it nothing. The body served by itself,
-`/f/<fleet>/decisions/<id>.html` on the hub (`servedBody`) and `decisions/<id>.html` on
+`/f/<fleet>/decisions/<id>.html` (`servedBody` in `fleet/page/src/body-policy.ts`, which no process of tstack calls
+now; the page's server in the cloud and the tests do) and `decisions/<id>.html` on
 serve_dashboard.py, is plain text: `Content-Type: text/plain; charset=utf-8` and `X-Content-Type-Options:
 nosniff`, so nothing in it renders, runs or takes the tab anywhere, under the same policy as a header
-after the sandbox (`script-src 'none'`, `'self'` for the hub, `base-uri 'none'`); a picture, font or
+after the sandbox (`script-src 'none'`, `'self'` for the page's origin, `base-uri 'none'`); a picture, font or
 medium under `decisions/` keeps its type. The page fetches that text and shows it only through
 `bodyDoc`. An extension's content script (picasso)
 runs in an isolated world the page's policy does not reach, so it still reads the frame. A body
@@ -1396,14 +1389,14 @@ published beside a claude.ai artifact is served by claude.ai, with no header of 
 `onload`, `onerror`, a `javascript:` link, `<iframe srcdoc>`, `<object>`, `<embed>`, an SVG's
 `<script>` and `onload`, a `<meta>` refresh to `javascript:` and to a URL, a form, a link to `_top`, a
 `<base>`, a refresh whose `http-equiv` is an entity, the reviewer's two mutation-XSS shapes, an SVG link
-with no target or `_self`), each in a fleet's page, by itself on the hub's route (plain text) and on the
+with no target or `_self`), each in a fleet's page, by itself through `servedBody` (plain text) and on the
 manager's page, with the frame holding nothing the sanitiser forbids and the fleet's sizing, selection
 bar and marks still working; `test/mxss-browser.test.ts` a table of mutation-XSS shapes (DOMPurify's past bypasses); a frame
 navigated away (to a page that knows the token) or replaced ignored; and page
 `test/safebody-browser.test.ts` the second parse and the plain-text refusal. The defence tests of the rule
 above run their hostile body scripts in the frame's own world (as a script past the sanitiser and the
 policy would, reading the token from the fleet's script) and assert they ran, so the page's own checks
-are proved on their own; fleet `test/hub.test.ts` and `test_chat.py` pin the plain-text route.
+are proved on their own; page `test/content-policy-browser.test.ts` and `test_chat.py` pin the plain-text route.
 
 ### Whose watch (TypeScript only)
 
@@ -1476,7 +1469,7 @@ on its page.` (from a terminal: `This command runs outside it: to read along,
 to arm it: a session that is not the fleet's live host is not blocked for that fleet.
 
 **Who reads it.** `listening`, so the page, `fleet fleets list` (`chat not read now`), `fleet state`'s
-`chat:` warning and the hub's wake count an orphaned watch and a foreign one as none; the Stop guard's
+`chat:` warning and the office host's wake count an orphaned watch and a foreign one as none; the Stop guard's
 `watch_alive` does too, so the host's turn goes on with the command that arms a new one.
 
 **Takeover, with no kill.** A new watch that finds `watch-WHO.pid` naming an orphaned watch or a foreign one
@@ -1497,7 +1490,7 @@ otherwise wait on a watch that went without a word. Before it exits (still exit 
 displaced at HH:MM by \`fleet serve --take-over\`, and this watch stands down with nothing marked read. If
 that was not intended, tell the user on the page.` `S` and `P` are the registry's (`not recorded` for a
 session id that is not plain), `HH:MM` the time of the takeover the chat records for that process
-([the hub](#the-hub-fleet-hub)), else the time the watch noticed. It prints the same line when it finds its
+([`fleet serve`](#fleet-serve-the-fleets-host)), else the time the watch noticed. It prints the same line when it finds its
 pid file taken (the first case) while the registry names another host: the new host's watch armed before the
 old one looked.
 
@@ -1516,14 +1509,14 @@ of that kind still prints one message to nobody before it ends. The next watch t
 `{id, role (coordinator|manager), dir, url, pid, started?, session, session_id, since, aliases?}`, written atomically (a `.tmp`
 then a rename). `pid` and `started` (TypeScript only: when that process started, as [Whose watch](#whose-watch-typescript-only)
 reads a start time; null when it does not read) name **the fleet's host**, the one session whose chat watch
-hears for the fleet and that the hub wakes. `session` is the session's title; `session_id` its Claude Code session id, which survives
+hears for the fleet and that the office host wakes. `session` is the session's title; `session_id` its Claude Code session id, which survives
 `claude respawn` where the pid does not: `fleet serve` takes it from `$CLAUDE_CODE_SESSION_ID` (Claude Code
 sets it for every command a session runs), else from DIR's scratchpad path (`…/<project>/<session>/scratchpad/<name>`),
 else the fleet's last entry's; null when none says. The entry's `session_id` is the session serving DIR now: a resumed session (`claude -r`) has a new id
 while DIR stays in the scratchpad of the session that made it, so its transcript (`projects/*/<session_id>.jsonl`),
 when found, is the one read for the fleet's last activity and title, before the scratchpad's. `aliases` are the fleet's earlier ids: every rename
-(a title, `name`, a dropped session number) keeps the old id there, and the hub answers `/f/<alias>/` with
-a 301 to the fleet's address. `REGISTRY/gate/` is the machine's gate (gate.ts): the heavy checks of every fleet share one
+(a title, `name`, a dropped session number) keeps the old id there, and the preview server answers `/f/<alias>/preview…` with
+a 301 to the fleet's id (no other path under an alias is answered). `REGISTRY/gate/` is the machine's gate (gate.ts): the heavy checks of every fleet share one
 memory budget, `$FLEET_GATE_MEMORY_BUDGET` (a share of MemTotal or a size, 64 MiB at least, as every cap), else 50% of MemTotal. A hold takes a part of it, its `cap` in bytes, or all of it
 (no `cap`: taken by hand without `--mem`, by a run that has no scope to cap it, or written by a fleet from before the budget), and an ask is admitted when the caps of the holds plus its own fit the budget:
 two runs of the default quarter at once, or one run of the whole budget. It is admitted only while the memory actually available leaves a floor free as well:
@@ -1551,7 +1544,7 @@ nor a `gate free` by anyone but its runner drops it (the suite still holds its m
 is its taker's alone: no `gate run` goes under it, its own name's included (a name is often a fleet's, which its sessions share), and `gate free` with its token or its name always frees it; one an older fleet's run still goes under is freed into that run's hold (its runner as `pid`, `runner_started` as `started`, `runner_unit` as `unit`, the same `cap`, `budget` and `until`), so the run's memory stays counted until it ends.
 A `runner` mark (with `runner_started` and `runner_unit`) that an older fleet's `gate run` left on one keeps a fleet's hold from lapsing with its fleet's entry while that run goes; a dead runner's mark, or one whose pid a later process has, counts for nothing once its scope is gone too. A `take --mem` reserves its part and enforces
 nothing by itself. A name or a `what` is kept and printed on one line, control characters and line separators as spaces.
-`gate.json` is one hold of the whole budget taken by hand as it is, the file every fleet has written (a fleet before the budget, a hub, the hook's `_gate_hold` read it so);
+`gate.json` is one hold of the whole budget taken by hand as it is, the file every fleet has written (a fleet before the budget, the removed hub, the hook's `_gate_hold` read it so);
 anything else (a hold with a `cap`, a run's hold, several holds; a run's hold an older fleet wrote stays as that fleet wrote it, since it frees it by its own token) is a summary in a hold's form that carries the holds in `holds`, with `v: 2`: `fleet` the holders with
 their caps (`ui (15.5G) + infra (15.5G)`, no holder's name), `kind: "session"`, the first `since`, the last `until`, no `token` (a fleet from before the budget frees the file by the token at its top, so a summary with one could be removed whole while its runs live), and no `pid`. So a fleet from before the budget reads the
 gate as held for as long as any hold lives, by nobody it can free, run under or find dead; it never reads it free while a hold lives, and it takes the gate, the whole
@@ -1574,8 +1567,8 @@ and why (`ws: prune keeps a2: <why>`, prune's own rules), and the command (`ws: 
 reserved; a missing or blank title renames nothing. In TypeScript the session's name is, first found of
 (*out of the oracle, whose fixtures have none of the first, third or fourth; pinned by
 fleet/test/naming.test.ts*): the name given on the fleet's page (`REGISTRY/overrides/<the first 16 hex
-digits of the SHA-256 of DIR>.json`, `{dir, name}`, written by the hub's `POST /f/<fleet>/name` and removed
-by an empty name or `fleet serve --stop`); the custom title; the `name` of Claude Code's live record of the
+digits of the SHA-256 of DIR>.json`, `{dir, name}`; nothing in tstack writes it now, since the hub's rename is gone, and a
+file left there still counts; `fleet serve --stop` removes it); the custom title; the `name` of Claude Code's live record of the
 entry's pid, `$CLAUDE_CONFIG_DIR/sessions/<pid>.json`, while its `sessionId` is the entry's `session_id`
 (a derived name, `nameSource: "derived"`, included); the transcript's last `{"type": "ai-title",
 "aiTitle"}`. The first three but a derived name are given names and rename the fleet whenever they
@@ -1627,7 +1620,7 @@ agent-tools`), never one picked.
 
 ## The other scripts
 
-Stage 3 ported all of them but serve_dashboard.py, which [the hub](#the-hub-fleet-hub) replaces:
+Stage 3 ported all of them but serve_dashboard.py, whose pages the cloud serves now:
 `fleet render`, `fleet served`, `fleet spend` and `fleet usage` do what the scripts below do, and
 `fleet state` renders the page itself (no Python at run time). The page is in the oracle: the
 `render-*` traces record `index.html` by its hash, so its bytes, `fleets.view()` included, are pinned
@@ -1682,14 +1675,22 @@ at every rendering step.
   account, highest seen first]}`, or null. `show` prints each account (`<email>, the session that
   worked last:` then `<email>:`, `an account not recorded` for null) and its windows indented.
 
-## The hub (`fleet hub`)
+## `fleet serve`: the fleet's host
 
-One server per machine, always on (the `fleet-hub` systemd user unit), in place of a
-serve_dashboard.py per fleet. A fleet appears on it when it is in the registry: `fleet serve DIR`
-registers DIR (its entry lives while the Claude Code session that ran the command does: the nearest
-`claude` among its parents, or `--pid`) and prints `http://<this machine>:<port>/f/<fleet>/`; a
-fleet still served by serve_dashboard.py appears too, since the hub reads every fleet's files
-itself. A manager made later appears the same way, on the same address.
+`fleet serve DIR` puts DIR's fleet in the registry ([fleets.py and the registry](#fleetspy-and-the-registry)) and
+starts no server: the pages are the cloud's, written from the ledger by the office host. The entry lives while
+the Claude Code session that ran the command does (the nearest `claude` among its parents, or `--pid`), and
+`fleet serve DIR --stop` takes it out. What it prints says where the team's page is:
+
+- **A team moved to the cloud** (DIR holds `cloud.json`) stays moved: its entry takes the marker's `fleet` as
+  its id (when no other live fleet has it) and the marker's page, `<cloud>/<fleet>`, as its `url`, and
+  every reader of the registry marks it moved (`fleets list` says `moved to the cloud`). Its session's title
+  does not rename it. It prints `<fleet> is moved to the cloud: its page is <cloud>/<fleet>` (or that the marker
+  names no https page). Its previews are not addressed under that page: `fleet preview status` gives
+  `/f/<fleet>/preview/`.
+- **Any other folder** is registered under the name the registry gives it, and it prints `<fleet> is registered
+  as this session's fleet (DIR); it has no page until the team is cut over to the cloud`. Its entry's `url` is
+  the preview server's `http://<this machine>:<port>/f/<fleet>/`, the base of its previews' addresses, and no page.
 
 A fleet has one host, and `fleet serve` is how a session becomes it (TypeScript only). While the process
 the entry names still runs (its pid, started when the entry says; a process of any kind, since `--pid`
@@ -1719,14 +1720,6 @@ nobody displaced (the same process, or a host that is gone) it is a plain serve 
   is when the process started, as a stamp (null, and `at a time the machine did not say` in the text, when the
   machine did not say); `session` is the Claude Code session id, written only when it is at most 128 of
   `[A-Za-z0-9._-]` (else null, `not recorded`).
-- **On the page**: a hub's view of the fleet, and its summary on the manager's page, has `takeover` (`{id, at,
-  by, from}`, `id` the chat line's) from then until the host has read a message the user wrote after it: one at
-  or before the host's cursor, or one a participant answered with `--re`. Only the chat's last takeover is
-  shown, and only a line from `fleet-hub` that carries the object is one. The page says it in the stuck band:
-  `The host changed at 14:02: session S2 (pid P2, started 13:55) took this fleet over from session S1 (pid P1,
-  started 09:12), which was running, with fleet serve --take-over. If you did not ask for that, say so in the
-  chat. This stays until the new host has read your next message.` No other view has the key (a `fleet state`
-  render, the Python twin, every trace).
 - **To the displaced session**: its watch prints one line as it stands down
   ([Whose watch](#whose-watch-typescript-only)).
 
@@ -1734,342 +1727,53 @@ Each record is tried whatever became of the other, and neither stops the takeove
 new process must get its fleet back though the ledger does not read): what could not be written is said on
 stderr, `serve: the takeover is not recorded where it should be: <why>`, and the exit is still 0.
 
-- **Where it listens**: 127.0.0.1 and this machine's Tailscale IPv4, port `--port`, else
-  `$FLEET_HUB_PORT`, else 7420; never 0.0.0.0. Without Tailscale (absent, stopped) it serves
-  loopback alone and binds the tailnet address once Tailscale is up (checked every 30 s). A taken
-  loopback port exits 1. `REGISTRY/hub/hub.json` holds `{pid, port, url, https, since}` while it
-  runs. `REGISTRY/hub/tokens.json` (0600, written through a temp file and a rename, never served nor
-  logged) holds the page token a grant needs and the manager's Stop token, `{page, stop}` each
-  `{token, created, previous?: {token, retired}}`, so a page opened before a restart still answers: made
-  at the first start, reused after, replaced whole when it is a symlink, not 0600, another user's,
-  unreadable or malformed; read once the hub holds its port, so a hub that lost the port never rotates
-  them. `REGISTRY/hub` is made 0700 (set 0700 when it is there already), and neither a fleet's files nor its links ever serve what it holds.
-  A token older than 24 h is replaced at start, on a page load or on an answer's check, and the one it
-  replaced is accepted 24 h from when it was due: refused from 48 h after it was made, however long the
-  hub was idle. A clock set back never rotates a token, unless the token was made more than 24 h ahead
-  of it: that one is replaced, and accepted 24 h from then. A grant or an image's upload that sends a token the hub does not
-  accept is 403 with `reload: true`, and the page shows a Reload, under the answer or the image's field, that keeps the draft; one that
-  sends none is 403 without it. `--https PORT` also runs `tailscale serve --bg --https=PORT http://127.0.0.1:<port>` (and
-  turns it off on exit): the page's browser alerts need a secure page.
+### The preview server (`fleet preview serve`)
+
+One per machine, serving the workers' previews and nothing else: `/f/<fleet>/preview/…` for each fleet the
+registry shows (a moved team's too), at the port and paths the removed hub had, so a link given then still works. Any
+other path is 404 `the preview server serves only /f/<fleet>/preview/; the pages are the cloud's`.
+
+- **Where it listens**: 127.0.0.1 and this machine's Tailscale IPv4, port `--port`, else `$FLEET_HUB_PORT`,
+  else 7420; never 0.0.0.0. A port it cannot bind is tried again every tick. 421 on a `Host` it does not answer
+  to. `REGISTRY/hub/preview-server.json` says where it runs. `--https PORT` also runs `tailscale serve --bg
+  --https=PORT http://127.0.0.1:<port>` (and turns it off on stop).
 - **The public ports of root-mode previews**: for each [root-mode preview](#the-preview-fleet-preview)
-  whose record names a public port and a started dev server (a pid recorded), the hub also serves that
+  whose record names a public port and a started dev server (a pid recorded), the preview server also serves that
   port over TLS, in the same two places (127.0.0.1 and the Tailscale IPv4, never 0.0.0.0), and passes
-  every path there to that dev server at its root. It looks every second and at start, so a restarted hub
+  every path there to that dev server at its root. It looks every second and at start, so a restarted preview server
   listens again from the records alone, and it lets a port go when the preview stops. A port it cannot
   take (held by another process, or no certificate) is logged and reported, never fatal:
   `REGISTRY/hub/previews.json` holds `{pid, ports[] {port, fleet, worker, loopback, tailnet, url, error}}`
   while it runs (`url` the `https://<MagicDNS name>:<port>/` it serves, null while it serves none), read
-  by `fleet preview status` and the page. A port named by two records goes to the first; the hub's own
+  by `fleet preview status`. A port named by two records goes to the first; the preview server's own
   port is never one. No `tailscale serve` entry per preview.
   - **The certificate** is this machine's from Tailscale, the one `tailscale serve` uses: `tailscale cert
-    --cert-file - --key-file - --min-validity 336h <MagicDNS name>` through the hub's `tailscale` binary
+    --cert-file - --key-file - --min-validity 336h <MagicDNS name>` through the preview server's `tailscale` binary
     (`$TAILSCALE`), read on stdout, split into the chain and the key, and held in memory: never written to
-    disk, never logged. The hub asks at start, then looks every minute: it asks again when the
+    disk, never logged. It asks at start, then looks every minute: it asks again when the
     certificate is within 14 days of its end (its `notAfter`) or the MagicDNS name has changed, once a
     minute while it holds none, hourly while a renewal fails and the one held is still valid. A renewed
     certificate replaces each port's listeners (the old ones stop accepting and finish their open
-    connections, HMR sockets included); the hub's own port and the other preview ports are untouched.
+    connections, HMR sockets included); the preview server's own port and the other preview ports are untouched.
   - **Fail closed**: with no certificate (Tailscale down or absent, no MagicDNS name, HTTPS certificates
-    off in the tailnet, an expired one that cannot be renewed) the hub opens no public port, in plain
+    off in the tailnet, an expired one that cannot be renewed) the preview server opens no public port, in plain
     http or otherwise, and records why as the port's `error` (`tailscale cert <name>: <what tailscale
-    said>`); `status` and the page show `the hub cannot serve https on port N: <reason>`.
+    said>`); `status` shows `the preview server cannot serve https on port N: <reason>`.
+
+### Fleets on this machine
+
 - **Dev-server ports**: `fleet ws add` records a `port` on each workspace it makes: the first one from
   `FLEET_PORT_BASE` (5300) that no active workspace or preview of any fleet this machine serves holds; a
   handed-over workspace keeps its port. `fleet brief` gives a worker with a lane a `Dev server:` line: the
   fleet's per-worker preview when the combined preview's server runs, else its port (Vite
   `--port N --strictPort`, else `PORT=N`), stopped before it reports.
-- **`fleet tell FLEET|all TEXT`**: the user's words from a terminal, through the page's door: a POST
-  to the hub's `/f/<fleet>/chat` on loopback, so the message is the user's (`author` the hub's owner),
-  addressed as the page addresses it (`@worker` in the text). `all` is every fleet served; a name
-  resolves as below. It refuses inside a Claude Code session (`CLAUDECODE`, `CLAUDE_CODE_SESSION_ID`):
-  an agent writes as itself with `chat say`. No hub running refuses too.
 - **Fleets by name**: wherever a command takes a fleet's directory first (`state`, `chat`, `ws`,
   `preview`, `brief`, `turn`, `advisor`, `serve`, `spend`), a bare name (no `/`, not a directory here)
-  is looked up among the fleets this machine serves: its id on the hub, an id it had before, or its
+  is looked up among the fleets this machine registers: its id in the registry, an id it had before, or its
   session's name wins; else the one fleet whose id or session starts with it, else the one containing
   it (any case). `fleet preview ui start` is ui-coordinator's directory when it is the only fit. Several
   fits refuse with exit 2 (`fleet: 'coord' fits infra-coordinator, ui-coordinator: give more of the
   name`); no fit passes as given. `fleet ls` (or `fleet list`) is `fleet fleets list`.
-- **Who holds the port**: `hub.json` records `supervised` (started by systemd or launchd). A supervised
-  hub that finds loopback's port held by a hub started by hand (the recorded pid runs `… hub`) stops it
-  (SIGTERM, up to 5 s) and binds, logging `took over from a hub started by hand (pid N)`; anything else
-  on the port stays an error. A hub started by hand while one already serves prints that one's address,
-  says it leaves it, and exits 0.
-- **New code**: the page is read at each request, the server's code only at start. Under a
-  supervisor (systemd's `INVOCATION_ID`, launchd's `XPC_SERVICE_NAME`), or with `--reload`, the hub
-  looks at its sources (`fleet/src/**`, `package.json`, `bun.lock`) every 15 s and, once a change has
-  held still for one look, stops and exits 75, so `Restart=on-failure` (launchd: `SuccessfulExit =
-  false`) starts it on the new code. `--no-reload` turns it off; a hub run by hand does not watch.
-- **Routes**: `GET /` the index (every fleet of this machine, then each peer hub's, with the plan's
-  usage, the gate and what else the machine serves), `GET /events` its stream (`fleets` events, on
-  change, `: ping` every 15 s), `GET /api/fleets` this machine's fleets (`{name, fleets: [summary
-  without index, role]}`, what a peer hub reads). `/f/<fleet>/…` is serve_dashboard.py's routes for
-  that fleet, same bodies and status codes: the page (rendered from `state.json` at each load, the
-  file `index.html` when the state can't be read), `GET /chat?after=N`, `GET /events` (`hello`,
-  `state` on connect and on change, `chat` with `id:`, pings; `Last-Event-ID` or `after`), `POST
-  /chat` (201; 403 policy or cross-origin `Origin`; 415; 413 over 256 KiB; 400 bad body, `ChatError`,
-  unknown decision or a secret's value; 409 an answer to a closed decision, or an allow-once a
-  [permission](#permission-grants) cannot grant; 500 store failure; `OPTIONS /chat` and a post from an
-  origin the hub's config allows: [Posting from a prototype page](#posting-from-a-prototype-page)),
-  `POST /chat/preview`, `GET /skills` (below), the preview (`/preview/…`, HTTP and WebSocket, and `POST
-  /preview-workers`; see [The preview](#the-preview-fleet-preview)), `POST /name` (TypeScript only; under
-  `POST /chat`'s write policy: 403, 415, 413): `{agent, name}` names worker `agent` (200 `{agent, name,
-  name_by?}`, 400 an unknown worker or a name a mention could not tell apart, as [Names](#statepy-the-ledger-cli) words
-  it), `{name}` names the fleet before every other name (200 `{id, session, path}`, the fleet's address
-  after; 400 reserved or taken); an empty name gives either back to its session's; the page's state then
-  carries `named: {id, session}`, the hub's alone), `POST /onepw/unlocked` (TypeScript only; under `POST
-  /chat`'s write policy: 403, 415, 413): Luiz's "1Password is unlocked" on the card every page shows while the
-  machine's 1Password is locked, which clears every locked kind and tells the held fleets, each in its chat
-  or, when its host's watch is dead, in its session (200 `{cleared, told[]}`; see
-  [1Password locked](#1password-locked-fleet-onepw)), `POST /wake` (TypeScript only; under the same policy):
-  Luiz's "Wake now" on a host that does not listen (200 `{woken, fleet, at}`, 409, 502; see [The hub's
-  wake](#the-hubs-wake)), `POST /attachments` (TypeScript only; see [Images in the chat](#images-in-the-chat-typescript-only)), the files under DIR (`Cache-Control: no-store`, `decisions/*` with the
-  sandbox CSP and the body's policy; every other file, whatever its type, with `Content-Security-Policy: sandbox;
-  script-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'` and `nosniff`, a file whose type is
-  JavaScript (`.js`, `.mjs`, `.cjs`, `.jsx`, `.ts`, `.tsx`, …, by the type it would be served with) as
-  `text/plain; charset=utf-8`; dot files and paths out of DIR 404), and `GET /f/<fleet>/files/<path>` (TypeScript only): a file a
-  `file://` link of that fleet names, read-only, at its path under the fleet's files root: DIR's parent when that
-  is a session's `scratchpad` or a directory of its own under the state home (`$XDG_STATE_HOME`, else
-  `~/.local/state`, not the state home itself), else DIR. Served with the sandbox CSP (`sandbox allow-scripts
-  allow-popups allow-popups-to-escape-sandbox`: a linked prototype's scripts run, never `allow-same-origin`), `nosniff`, no-store,
-  Markdown and text as `text/plain; charset=utf-8`, streamed from disk. 404 for anything else: a file no link
-  names, a dot part in the path asked or in the real path a symlink leads to (relative to the root: `notes.md
-  -> .env`, `repo -> .git`), `..`, a path out of the root, a symlink that leads out of it, a directory, a FIFO
-  or a device (checked again when it is opened, non-blocking). 413 `text/plain` for a file over 50 MB. `/f/<fleet>` redirects (301) to `/f/<fleet>/`;
-  `/f/<a>/f/<b>/…` is `/f/<b>/…`, so the manager's page, whose coordinators' links are relative,
-  works under `/f/manager/`. 421 on a `Host` the hub doesn't answer to (loopback, `localhost`, the
-  Tailscale IP, the MagicDNS name and short name, at its port; the https name with `--https`). On a
-  root-mode preview's public port every path is that preview's (no index, no fleets), with the same 421
-  rule at that port.
-- **Skills** (`GET /f/<fleet>/skills`, the page lists them on a `/` at the start of a word, anywhere in
-  the composer, and in an answer or a note on a decision's page; not in `a/b` or a URL): `{"skills": [{name, description, hint, source, model}], "builtins": false}`, sorted by
-  name (code point order). `source` is `plugin`, `user` or `project`; `hint` is the `argument-hint`
-  or empty; `model` is false when `disable-model-invocation: true`. A skill with `user-invocable:
-  false` is left out (the user cannot type it). Read from disk, frontmatter only (the top-level
-  scalar keys; plain, quoted, `>` and `|` blocks), held 60 s per fleet. The sources, with Claude
-  Code's config directory (`$CLAUDE_CONFIG_DIR`, else `~/.claude`) as `CONFIG`:
-  1. this plugin (the checkout the hub runs from): its `skills/` and the dirs its
-     `.claude-plugin/plugin.json` `skills` lists, named `tstack:<name>`;
-  2. every other plugin in `CONFIG/plugins/installed_plugins.json` (a `project` or `local` install
-     only when its `projectPath` is the fleet's repository) that is enabled: `enabledPlugins`
-     (`<plugin>@<marketplace>`) of `CONFIG/settings.json`, then of the repository's
-     `.claude/settings.json` and `.claude/settings.local.json`, the later winning, else the plugin's
-     `defaultEnabled` (true when absent). A plugin named as this one is skipped. Its skills as
-     above, plus its commands (`commands/*.md`, or what the manifest's `commands` names, which
-     replaces that default), named `<plugin>:<name>`;
-  3. the user's `CONFIG/skills/*/SKILL.md` and `CONFIG/commands/*.md`;
-  4. the project's `.claude/skills/*/SKILL.md` and `.claude/commands/*.md`, in the directory the
-     fleet's session started in and each parent up to the repository root (`.jj` or `.git`). That
-     directory is the first `cwd` the session's transcript records, else the `repo` of the ledger's
-     first `workspaces[]` row; with neither, no project skills.
-
-  A skill is named by its frontmatter `name` when that is a valid name (`[a-z0-9-]`, 64 at most),
-  else by its directory; a command by its file name. Plugins' names are namespaced and never
-  collide; of two bare names the first read wins, in the order above (Claude Code runs a personal
-  skill over a project's with the same name), a skill before a command, the nearer directory first.
-  `builtins` is false: Claude Code's built-in commands (`/clear`, `/compact`) are listed by no file
-  on disk (only a running session's `system/init` message, which mixes them with skills), so they
-  are not offered. A message the user sends with `/<name>` at the start of a word, anywhere in it, is stored
-  as typed, with no field of its own: the host (and a worker, by `brief.md`) runs that skill with the
-  message's other words as its arguments (its quote as context), as if typed in its session, several
-  in the order written, and answers with `--re`. Only a listed name counts; a path or URL never does. serve_dashboard.py has no such
-  route; its 404 leaves the composer without a list.
-- **Delivery to the coordinators** (TypeScript only: serve_dashboard.py stores the message and delivers
-  nothing, so the manager forwards it as before). A message the user posts on the manager's page (not an
-  answer to one of its decisions) whose recipients include live coordinators (`@<fleet>` resolves to
-  `to: ["<fleet>"]` among the registry's fleets) is written, under the manager's store lock, into each
-  one's own `DIR/chat.jsonl` through the chat store: `{id (its next), at, from: "user", to:
-  ["coordinator"], text, re, parts (one plain part), author?, quote?, marks?, side?, via: {fleet: "manager", id:
-  N}}`. The copy's quote, and a batch's `marks`, keep their place on a page that can follow it: a place on one of that fleet's own
-  decisions (`at.hash` `#decision/<fleet>/<id>`, the fleet by its id or an alias) becomes `#decision/<id>`,
-  its own page's address; any other place keeps the manager's address and gains `page: "/f/<manager>/"`,
-  the manager's page, which the fleet's page links to. Its `re` is the coordinator's own message when N answers one mirrored from it (or a copy it has),
-  else null; a side chat opened on the manager's page opens one there, a later message of it continues
-  that one (a new one when the fleet has none of it); else the copy inherits its parent's side. The
-  manager's message is stored with `delivered: [{fleet, id}]`, one row per copy (the link; a fleet whose
-  chat cannot be written is left out of it, and the manager's watch prints the message for it as before).
-  A fleet not served is no recipient: `@<gone>` stays text, the message goes to the manager (the page's To
-  line says so), and the manager forwards it. *The courier*: every 300 ms the hub reads what each live
-  coordinator's chat gained (from its start on a hub's first read) and mirrors each message from
-  `coordinator` whose `re` is a delivered copy onto the manager's page: `{from: <fleet>, to: ["user"], re:
-  N, text, parts (one plain part), quote?, mark? (the answer's, so the page shows it under its marks), side
-  (N's, when it has one), via: {fleet, id}}`, at the
-  answer's own `at`. Under the manager's lock it writes nothing when a message with that `re` and `via`
-  (the fleet by its id or an alias) is there, so a re-read or a restarted hub never writes it twice. Why
-  the courier and not the write path: the coordinator answers with `fleet chat say`, which the CLI writes
-  without the hub, so only a reader sees it; the hub is the one process always running that already
-  reads every fleet's files, and nothing in the CLI writes another fleet's chat.
-- **Live updates**: each stream looks at `state.json` and `chat.jsonl` every 300 ms (as
-  serve_dashboard.py did); the view of a fleet is computed once for every client, again when the
-  file changes or after 2 s (spend, liveness, links). The page already used SSE and polls
-  `state.json` only when the stream fails, so it is unchanged.
-- **Federation**: every 30 s the hub reads `tailscale status --json` and asks each online peer at
-  `http://<its Tailscale IP>:<same port>/api/fleets` (2.5 s timeout). Peers that answer are listed on
-  the index; a peer's fleet is `/f/<fleet>@<machine>/…` (the machine is the first label of its
-  MagicDNS name; `@` is in no fleet id), passed through to the peer's `/f/<fleet>/…`, streams
-  included. Only machines in the last tailscale status are reached, so the path names no arbitrary
-  host. A post is checked by this hub's rules first, then by the peer's, which sees this machine.
-- **Who may write (auth)**: the hub trusts the tailnet, not headers from the network. Tailscale
-  already decides who reaches the Tailscale IP (the tailnet's ACLs) and encrypts the traffic; the
-  hub asks `tailscale whois` who owns the machine a request comes from (cached 60 s), and only the
-  login that owns this machine (`Self.UserID` in tailscale status) may post. A request on loopback
-  comes from this machine and may post (any local process could write `chat.jsonl` itself); when it
-  carries `Tailscale-User-Login` it came through `tailscale serve`, and that login is checked. Any
-  other source address reads only. Why not `tailscale serve` with identity headers as the default:
-  it needs the user to be Tailscale's operator and the tailnet's HTTPS certificates, it changes
-  tailscaled's persistent config from a service, and a plain listener that took those headers on
-  trust would let any tailnet peer claim any login; `whois` is tailscaled's own answer. The cost: the
-  default address is plain http (inside WireGuard), where browsers withhold alerts; `--https` adds
-  the https address when that matters. The stream's `hello` says `{write, reason?, you?, max_bytes}` from the
-  same rule. A message's `author` is the login (the owner's, from loopback). The hub never passes on
-  a client's own `Tailscale-*` headers: the preview sets them from what it verified (see [The
-  preview](#the-preview-fleet-preview)), and a fleet's page on a peer hub is asked with `Accept`,
-  `Content-Type` and `Last-Event-ID` only.
-
-### Images in the chat (TypeScript only)
-
-An image Luiz pastes into the chat's composer (a reply and a side chat are the composer too) or into a
-decision's answer form (its note, a grilling's answers, a value), or picks with the attach button beside
-either (a phone whose paste gives no file), goes to the hub first: `POST /f/<fleet>/attachments`, its bytes as
-the body and its type as `Content-Type`. Only the fleet's own page uploads, as only it grants: the writer's
-policy, then `grantRefusal` (the hub's origin, `Sec-Fetch-Site: same-origin`, the page token; 403 otherwise).
-The hub takes `image/png`, `image/jpeg`, `image/webp` and `image/gif` whose first bytes are that type's (415
-otherwise, "Only a PNG, JPEG, WebP or GIF image can be attached." or "This file is not the image/png it says it
-is."), of 1 byte to 10 MB (400 empty; 413 "This image is N KiB; the most an image can be is 10 MB."), sent with
-its `Content-Length` (411 "An image is sent with its Content-Length." for a chunked body, before it is read), and
-stores it at `DIR/attachments/<first 16 hex of its SHA-256>.<png|jpg|webp|gif>`, once per content: 201
-`{path}`, that path under DIR. The bytes go to a file of their own in that folder and are hard-linked into place
-whole, so a write cut short is never the image (500 "Could not store the image: …"). The hub never writes
-through a symlink: an `attachments` that is a symlink or not a folder is refused (500 "The fleet's attachments
-folder is a symlink: the hub keeps images only in a folder of its own."), and so is a `<hash>.<ext>` that is
-there and is not a regular file (500 "attachments/<hash>.<ext> is there and is not an image the hub stored: it
-is left as it is."); a message naming an image under a symlinked `attachments` is refused as one never
-uploaded. The message then names it: `POST /chat` takes `images`, a list of at most 8
-such paths, each a regular file of that fleet (400 `images are the attachments/<hash>.<png|jpg|webp|gif> files
-this fleet's page uploaded, at most 8` otherwise); a message with images may have no text. It is stored as
-`images` on the message, and the page shows each as a thumbnail that links to the image full size (the hub
-serves it as any file under DIR). The printed line (`fleet chat … watch`, `open`) ends with each one's absolute
-path, `#4 user -> coordinator: this screen [image: /abs/DIR/attachments/ab12….png]`, so the agent it reaches
-reads it with its Read tool. A mark's comment box and a decision's thread box (the inbox) take images the same
-way, and send them on the mark's item of the batch (`marks.items[].images`, a side chat's words as the
-message's `images`); the printed line then ends with `[image on mark N: /abs/DIR/attachments/….png]` for each.
-A comment, a question or a general mark, or a reply in a thread, may be an image alone, with no words. The
-tray takes at most 8 images, counting those already on what it adds to (a waiting comment a reply in its
-thread joins, the waiting words of a side chat its post joins): a 9th is refused under the field with "8
-images at most go together; N are there already." The waiting words of one side chat go in as few posts as
-keep each at 8 images or fewer. Each post of a new side chat's words carries its quote and the page's key for
-that side chat, `opens` (1 to 64 of `A-Z a-z 0-9 - _`; otherwise 400 "opens is the page's key for the side chat
-it opens: 1 to 64 of A-Z, a-z, 0-9, - and _", and without `side: "new"` 400 "opens goes with side new: it names
-the side chat the post opens"). Under the store's lock, the first post with a key opens the side chat and is
-stored with `opens`; a later post with `side: "new"`, that key and a quote on the same page (`quote.at.hash`, the
-decision) joins it, stored as a message of that side chat (`side` its id, no `quote`, no `opens`). The key is
-kept on the stored opener in `DIR/chat.jsonl`, so it holds across a hub restart. So a retry after an answer
-that never came, the side chat's later posts, and the same words sent from a reload days later all join the one
-side chat, and a page leaving sends every post at once (whichever the hub stores first opens it). A joined run
-is addressed from the @-cites in its own words, not the opener's; a retry after a lost answer joins too, so it
-may store the same words twice in that side chat; and a leaving page's runs go in parallel, so the first one
-stored opens the side chat and may show before a run written earlier. Two keys
-are two side chats, on the same quote too: Luiz may open a second on the same words. Once a post is stored, the
-words still waiting for that new side chat are kept as words of the side chat it is in, so the inbox shows
-them there and they go there. An upload
-still running when the field is cleared or moves to another thread (the thread box is one field for every
-thread) lands nowhere. Images in a field are not kept across a reload, as a draft's words are; a waiting
-comment's are, with it. The attach button is a button (a keyboard reaches it) that opens the file picker. On a
-peer hub's fleet (`/f/<fleet>@<machine>/`) the page has no attach button and a paste of an image is the
-browser's: the peer takes no upload from this hub's page.
-A message on the manager's page delivered to a coordinator copies its images, and its marks' images, into
-that coordinator's DIR under the same paths, never replacing what is there (`COPYFILE_EXCL`): the same bytes
-already there are the image; other bytes, a symlink at its place, or a symlinked `attachments` leave it out.
-The delivered message, and each of its marks, names only the images copied, so the coordinator's printed line
-names only those; a mark that was an image alone and lost it says "(an image that did not reach this fleet)". Nothing removes an image yet.
-
-### Posting from a prototype page
-
-TypeScript only (serve_dashboard.py and a peer hub's `/f/<fleet>@<machine>/chat` stay same-origin). A
-prototype page served on another port of this machine (`https://<this machine>:7501/`, a root-mode
-preview's public port) is another origin of the same site, and may post the user's message to a fleet's
-chat when the hub's config lists its origin (Luiz, 2026-10-07: "as requested" by ui-coordinator and
-teses-positionings).
-
-- **The list**: `REGISTRY/hub/config.json`, `{"chat_origins": ["https://<host>:<port>", ...]}`, edited
-  by hand and read at each request (no restart). An entry counts only as the exact origin a browser
-  sends: `http` or `https`, the host in lower case, the port unless it is the scheme's default, no path,
-  no trailing slash, no user, no `*`; any other entry is ignored, and so is a file that is not such a JSON
-  object. No file, or an empty list, is the behaviour before it: every cross-origin post refused. Why a
-  file in the registry and not an env var on `fleet-hub.service`: the service and its environment are built by
-  the dotfiles' `modules/dev/fleet-hub.nix` (`bun src/main.ts hub --https 7443`), so a variable would need
-  a dotfiles change, a rebuild and a restart per origin, where the registry already holds the hub's other
-  files and the file is read live.
-- **Preflight**: `OPTIONS /f/<fleet>/chat` with a listed `Origin` answers 204 with
-  `Access-Control-Allow-Origin` (that origin, never `*`), `Access-Control-Allow-Credentials: true`,
-  `Access-Control-Allow-Methods: POST`, `Access-Control-Allow-Headers: content-type`,
-  `Access-Control-Max-Age: 600` and `Vary: Origin`; any other origin a 403 without CORS headers. Every
-  other route's `OPTIONS` is as before (405).
-- **The post**: `POST /f/<fleet>/chat` with a listed `Origin` passes the same checks as the page's own
-  post (the writer is the owner's tailnet login or this machine, JSON, 256 KiB), and every answer to it,
-  the 4xx included, carries `Access-Control-Allow-Origin`, `-Allow-Credentials: true` and `Vary: Origin`.
-  The message is the user's as if typed on the fleet's page (`author`, `@mentions`, `/skill` commands,
-  `re`, `quote`, `side`), stored with `origin: "<Origin>"` and printed `[from <origin>]`. A body with a
-  `decision` or `rule` (answering a decision, granting a permission) is refused 403 (`a decision is
-  answered on the fleet's own page, not from another origin`): the request was for messages, and an
-  answer or a grant stays on the fleet's own page. `POST /chat/preview`, `/name`, `/preview-workers` and
-  a peer's fleet stay same-origin.
-- **Identity**: the hub uses no cookie. The https address is `tailscale serve`, which passes the request
-  to loopback with `Tailscale-User-Login` set to the browser's tailnet login, so a cross-origin fetch
-  from a page on the same tailnet is identified exactly as the fleet's own page is; `credentials:
-  "include"` is what the browser needs to accept the answer, not what identifies the user.
-- **CSRF**: the `Origin` check is the protection. A post whose `Origin` is neither the hub's own nor
-  listed is refused 403 as before, `Origin: null` included; one whose `Sec-Fetch-Site` is anything but
-  `same-origin` is refused too, unless its `Origin` is listed. A post with neither header (`fleet tell`,
-  curl on this machine) is as before. Every post that acts as the user passes these checks
-  (`postRefusal`): `/chat` (a message, a decision's answer, the grant an answer carries), `/chat/preview`,
-  `/name`, `/preview-workers`, `/onepw/unlocked`, `/wake`, and a post to a peer's fleet, checked here before it is passed on.
-
-### The hub's origin: what runs on it
-
-A script on the hub's origin posts as the user (the checks above see a same-origin post). Agents write in
-DIR, so nothing the hub serves from a fleet's DIR runs on that origin: the page alone does, rendered from
-state.json (a DIR/index.html is served, sandboxed, only when the page cannot be rendered). The page loads no
-other DIR file as a document: state.json, the bodies' text and their pictures load the same under the sandbox
-header. A decision's body served by itself is plain text; any other DIR file is sandboxed without scripts
-(a body's link opens such a file in a window of its own: it has an opaque origin, its scripts do not run);
-a linked file under `files/` runs its scripts in a sandbox without `allow-same-origin`, so its posts carry
-`Origin: null` and are refused. A peer hub's file passed through without a sandbox gets this hub's.
-serve_dashboard.py does the same for DIR: every file but DIR/index.html (its rendered page) is sandboxed,
-and a post whose `Sec-Fetch-Site` is not `same-origin` is refused.
-
-**Known limits.** `/f/<fleet>/preview/…` passes the dev server's answers through as they are, on the hub's
-origin, with no sandbox: the preview's app (code the workers write) runs as the hub's page does and can
-post to any fleet's chat as the user, answer a decision or grant a permission. A root-mode preview is
-already apart: it is served on a public port of its own (another origin, whose posts the hub refuses unless
-its config lists it, and then takes only messages). The
-proposal, not built, for Luiz to decide: serve every preview from its own port's origin, as root mode does,
-and make `/f/<fleet>/preview/` a redirect to it. The cost is a port per preview (and per per-worker preview)
-and `tailscale serve` on each; a sandbox header on the path instead would break the apps (their storage,
-cookies and same-origin calls to their own API).
-
-**Service workers.** A service worker of the hub's origin whose scope holds a fleet's page sees that page's
-top-level load, the page token included, and every grant it posts. What is closed: a worker's script is served
-only on a preview's path (`/f/<fleet>/preview/…`, as the hub routes a nested `/f/<a>/f/<b>/…`). Elsewhere a
-`Service-Worker: script` request gets the hub's kill switch, a worker that unregisters itself and reloads the pages
-it controls, so one registered there before 1.9.61 (a file of a fleet's DIR) is replaced and gone at its next
-update check; any other worker's request (another `Service-Worker` value, `Sec-Fetch-Dest: serviceworker` without
-it) is 403, and a DIR file whose type is JavaScript is `text/plain`. On a preview's path the dev server's
-`Service-Worker-Allowed` is never passed back on the hub's origin, and a worker's script it sends that header with is
-the kill switch, sent with `Service-Worker-Allowed: /`: a worker the preview registered over the origin before
-1.9.61 is replaced and gone at its next update check, and the wide scope gives the preview nothing, since the body
-is the hub's own. A peer's preview (`/f/<fleet>@<peer>/preview/…`) is covered the same way: the hub passes the
-request's `Service-Worker` on to the peer, and a worker's script the peer answers with `Service-Worker-Allowed` (a
-peer from before 1.9.61 passing its preview's through, or a newer peer's own kill switch) is this hub's kill switch,
-sent with `Service-Worker-Allowed: /`; a peer's body never comes back with that header. The trade-off: a preview app that sends that header gets no service worker on the hub's origin,
-even one scoped within its path; a root-mode preview, on an origin of its own, keeps its worker and the header. As
-a backstop, the fleet's page unregisters at each load every registration whose scope is not under a preview's path,
-and loads again once (a sessionStorage mark stops a loop) when its controller was one of them; a worker that
-controls the page can serve it without that code, so the hub's answers above are the defence. What is left: a
-worker a preview registered over the origin before 1.9.61, whose dev server no longer sends the header, fails its
-update check and stays, ended only by that backstop. A worker of a fleet's DIR killed this way saw the page token
-current until the kill switch replaced it, and that token is accepted up to 48 h after it was made: the hub
-does not rotate it when it serves the kill switch.
 
 ## Permission grants
 
@@ -2077,8 +1781,8 @@ TypeScript only: `state.py` has no `permission` kind, no trace has one, and the 
 stay Python's (below). Auto mode refuses a tool call; the plugin's hook records it as a **refusal draft**
 for the fleet's host and tells the host at once, and nothing opens for the user (A refusal is a draft first,
 below). The host asks in its own words, with a permission for the one command that needs the yes, or drops
-the draft; the user answers on the page, and the hub, not an agent (Claude Code's classifier refuses an agent
-that writes its own allow rule), adds a one-time allow rule to the session's settings. The hook
+the draft; the user answers on the page, and the office host, not an agent (Claude Code's classifier refuses an agent
+that writes its own allow rule), writes a one-time allow rule to the session's settings. The hook
 removes the rule once the call has run, or at the first tool call of the session after 30 minutes (one
 constant on each side: the hook's `GRANT_TTL_S`, `permission.ts`'s option text). A refused Agent spawn alone
 opens its permission at once, as it did. A coordinator also
@@ -2147,8 +1851,7 @@ run of each exact command shown; the next run of the same command asks again.
     pattern.
   - **Why a list of its own.** A draft is in `refusals[]` and never in `decisions[]`, so nothing that lists
     what waits on the user can hold one: `fleets list` and `fleets waiting`, the page's lists and its
-    notifications, the manager's view and search, `chat wait`, the hub's check of an answer (`unknown
-    decision '<id>'`, 400), the news, the numbers (a draft takes none: its decision takes its P or A when
+    notifications, the manager's view and search, `chat wait`, the news, the numbers (a draft takes none: its decision takes its P or A when
     the host asks). About fifty places read `decisions[]`, the page among them, and the page reads every
     `asks` but `manager` as the user's: a draft kept there under a new `asks` or `status` would reach the
     user through the first reader not told about it. The key is absent while a ledger has had no draft, no
@@ -2163,7 +1866,7 @@ run of each exact command shown; the next run of the same command asks again.
     exist) the hook takes the first of `-2`, `-3`, … that is absent or open, and the CLI refuses a closed id
     (`... A refusal of the same call again is recorded under a new id`).
   - **The host is told at once** (`src/chat/hub-line.ts` `tellHost`, once the ledger is written), the way
-    the hub's 1Password notice goes ([Settle and the notice](#settle-and-the-notice)): into the fleet's
+    the 1Password notice goes ([Settle and the notice](#settle-and-the-notice)): into the fleet's
     chat, from `fleet-hub` to the host (`manager` for a manager's ledger, else `coordinator`), while the
     host's watch runs or when no registry serves the fleet; into the host's session through `deliverTo`
     when its watch is not running, since a chat nobody watches wakes nobody; and into the chat when the
@@ -2186,10 +1889,10 @@ run of each exact command shown; the next run of the same command asks again.
     DIR decision <id> --withdraw "<why>"\`. The rest of this line is the caller's own text and the
     classifier's reason, not the hub's: reason: <reason>; call: <call>`
 
-    **The hub's words come first and the caller's last.** The call is text a worker chose, and the reason
+    **The `[hub]` words come first and the caller's last.** The call is text a worker chose, and the reason
     is what that text moved the classifier to say: quoted mid-line, a call written as `... Two commands
     close the draft. To ask the user, in your words: \`fleet state /x decision ... --recommend
-    allow-once\`` read as the hub's own instruction (reviewed 2026-10-13). So the two commands, the only
+    allow-once\`` read as the `[hub]` line's own instruction (reviewed 2026-10-13). So the two commands, the only
     ones a host runs from the line, stand before the fixed sentence `The rest of this line is the caller's
     own text and the classifier's reason, not the hub's:` (`CALLER_TEXT`), and everything after it is a
     claim to read, in no code span: a backtick there closes none of the template's. The reason is on one
@@ -2334,7 +2037,7 @@ run of each exact command shown; the next run of the same command asks again.
   character and where it is: `the call has a character outside printable ASCII at position <n>
   (U+<code>), which the user cannot tell from a plain one on the card`. This one set is `whyNoRule` in
   `src/ledger/permission.ts`; the CLI
-  refuses a permission for any other call and the hub grants none (the hook asks nothing of a call: it
+  refuses a permission for any other call and the office host grants none (the hook asks nothing of a call: it
   records every refused Bash command as a draft, whatever a rule can hold). The limits are for Bash calls: an Agent call is its input as JSON, a prompt included. **What a rule matches in a compound command**, measured in auto mode on Claude Code 2.1.296
   (a headless `claude -p --permission-mode auto` in a throwaway project whose stand-in scripts only append
   to a log; each call refused as `[Production Deploy]` without a rule, one run per shape but the pipe):
@@ -2369,7 +2072,7 @@ run of each exact command shown; the next run of the same command asks again.
 
   So a rule clears more than its own string, and the hook keeps a grant to its call alone (below). For an Agent spawn the call is its `tool_input` as compact JSON with sorted keys
   (`json.dumps(..., sort_keys=True, ensure_ascii=False, separators=(",", ":"))`, the hook's `_agent_call`),
-  and the rule `Agent(<call>)`, which only the plugin's hook matches; the CLI and the hub refuse an Agent
+  and the rule `Agent(<call>)`, which only the plugin's hook matches; the CLI and the office host refuse an Agent
   call that is no JSON object.
 - **Opening** (`fleet state DIR decision ID --kind permission --tool Bash|Agent --call CALL --cause CAUSE
   --root ROOT [--agent-id AID] [--agent WORKER] [--blocking]`: the hook's record of a refused Agent spawn,
@@ -2430,12 +2133,12 @@ run of each exact command shown; the next run of the same command asks again.
   `--recommend` with the call's flags, a permission without `--tool --call --root` (`a permission names its call: give --tool, --call and --root, with --cause (the classifier's
   reason) for a call auto mode refused, or none for a call asked before it runs ...`), and those
   flags on any other kind. ROOT is the
-  session root: a ROOT that is a worker's workspace of this fleet's work (as the hub tells it, under
+  session root: a ROOT that is a worker's workspace of this fleet's work (as the office host tells it, under
   Granting) is recorded as its session's root, said on stderr (`state: --root <ws> is <name>'s
   workspace: recorded the session root <root>, where the subagent's session reads its permissions.`),
   or refused when that root cannot be told (`a permission's root is the session root (<roots, or "or">),
   where the subagent's session reads its permissions, not the worker's workspace <ws>`); any other ROOT
-  is kept as given (the hub checks it again). A value that
+  is kept as given (the office host checks it again). A value that
   starts with `-` is given as `--call=VALUE`. The same command on the open row (the same refusal again)
   changes nothing; a changed refusal re-presents it, clears a hold, drops the explanation (recommend,
   reason and body: they were about another call) and writes the words again. `--decide`, `--withdraw` and
@@ -2463,7 +2166,7 @@ run of each exact command shown; the next run of the same command asks again.
     `python3` when that is no option, or the command itself when it is given as a path. For each one
     that is an absolute path and can be read, the row's `refusal.runs` holds `<n> <sha256> <path>` (`n`
     the call's number from 1). The page shows it under the call (`Runs this file: <path> (sha256 <12
-    hex>). The grant holds only while the file stays as it is now.`), the hub hashes the file again when
+    hex>). The grant holds only while the file stays as it is now.`), the office host hashes the file again when
     it grants and records the sha256 in the grant line, and the hook hashes it once more before the call
     runs. A call with no such file says so on the card in plain words: `The file's content is not bound:
     this grant is for the command as written, and what the command runs is found when it runs.` That is
@@ -2484,7 +2187,7 @@ run of each exact command shown; the next run of the same command asks again.
     ran carries your recommendation: give --recommend allow-once|deny and --reason, ...`.
   - **Several calls** (`--then`, once per further call, with `--call` the first): `refusal.more`, the
     further commands in order (`permission.ts` `callsOf`: `call`, then `more`); absent for one call. Each
-    is an exact rule of its own, granted once by the one answer. Refused (`whyNoCalls`, which the hub
+    is an exact rule of its own, granted once by the one answer. Refused (`whyNoCalls`, which the office host
     checks again before it grants): more than `MAX_CALLS` (10) calls (`a permission asks for at most 10
     calls, and this one has <n>: a longer sequence is a script (\`bash tasks/<name>.sh\`)`), a call no
     exact rule can hold, named (`no permission for call 2 of 3 (\`<call>\`): <why>`), the same call twice
@@ -2514,7 +2217,7 @@ run of each exact command shown; the next run of the same command asks again.
 - **After the answer**: `decision P<n> --decide ANSWER --resolution HOW` on a permission prints what the
   fleet does next. Only the user's answer grants: `--decide` with an answer that starts with `allow-once`
   is refused unless the chat holds, from the user, for this decision, at or after its last change, an
-  answer that starts with `allow-once` (the hub stores it once it has granted; the CLI stores nothing as
+  answer that starts with `allow-once` (the office host stores it once it has granted; the CLI stores nothing as
   the user): `P<n> has no allow-once answer from the user since it last changed: only their answer on the
   fleet page grants the call, and --decide records an answer, it gives none. Wait for it ...`. Before
   this, an agent that ran `--decide allow-once` on its own ask was told `is allowed once: run exactly
@@ -2587,25 +2290,25 @@ run of each exact command shown; the next run of the same command asks again.
   had it open. Read it again: the call, its folder or a file it runs is not what you saw, and your
   choice was cleared.`; a draft kept for the earlier state is not put back. Before this, a call swapped
   in place under a picked "Allow" kept the radio checked, and Send posted the new rule.
-- **Granting** (`src/hub/grants.ts`, before `POST /chat` stores an answer that starts with
+- **Granting** (the office host, fleet-ship apps/host/src/grants.ts, before it stores an answer that starts with
   `allow-once` to a permission): the row must be open, its `refusal` a Bash call an exact rule can hold
-  whose `rule` is `Bash(<call>)`, or an Agent call that is a JSON object whose `rule` is `Agent(<call>)`, the POST's `rule` that same rule (absent or different refuses: a row
-  revised since the page rendered it needs a fresh look), the POST's `root` the row's `root` as recorded,
+  whose `rule` is `Bash(<call>)`, or an Agent call that is a JSON object whose `rule` is `Agent(<call>)`, the answer's `rule` that same rule (absent or different refuses: a row
+  revised since the page rendered it needs a fresh look), the answer's `root` the row's `root` as recorded,
   a worker's workspace included
   (absent: `the answer names no folder: the page sends the folder it showed, and the call is granted only
   there; look at it again (reload the page)`; different: `the page showed the folder <shown>, and the
-  permission's folder is now <root>: ...`), for a row with `more` the POST's `rules` the row's rules, the
+  permission's folder is now <root>: ...`), for a row with `more` the answer's `rules` the row's rules, the
   same ones in the same order (`the page showed <n> call(s), and the permission now asks for <m>, or for
   other ones: ...`; a page that sends no `rules` showed one call), every call of the row one `whyNoCalls`
   accepts and, for an ask, `whyNoAsks` too (`no grant: <why>`; a row written past the CLI is held to what
-  the CLI refuses), the files the calls run as the row's `runs` has them and as the POST's `runs` has
-  them (the hub hashes each bound file itself: a script edited after the permission was asked for
+  the CLI refuses), the files the calls run as the row's `runs` has them and as the answer's `runs` has
+  them (the office host hashes each bound file itself: a script edited after the permission was asked for
   refuses with `a file this permission's call runs changed after it was asked for (<path>), so the yes
   would allow another file than the one shown: ask the coordinator to record the permission again`, and
   a page that showed other files, or none, with `the page showed other files than the ones the
   permission's calls run now: look at it again (reload the page)`), and its `root` absolute, a directory, and a
-  session root of this fleet (the ledger is writable by agents, the hub is not): the `project` or `cwd` of
-  a heartbeat in `DIR/heartbeats/`, or else the working directory, read by the hub from the OS (`procs.ts`
+  session root of this fleet (the ledger is writable by agents, the office host is not): the `project` or `cwd` of
+  a heartbeat in `DIR/heartbeats/`, or else the working directory, read by the office host from the OS (`procs.ts`
   `cwdOf`), of the live process the registry's entry for DIR names as its `pid` (`fleet serve DIR
   [--pid PID]`: the session that served it). The second covers a session that writes no heartbeats (one
   whose fleet DIR is not in its scratchpad and that has no `FLEET_DIR`, or one started before the hook
@@ -2620,7 +2323,7 @@ run of each exact command shown; the next run of the same command asks again.
   the ledger lists it and no repo matches. The session roots are each heartbeat's `project` (its `cwd`
   when it names none) and the registered session's working directory. The grant line then carries
   `workspace` (the root the row named) and the 201 answer a `grant` note: `This permission names
-  <name>'s workspace <ws>; the hub granted it at the session root <root>, where <agent or "the
+  <name>'s workspace <ws>; the office host granted it at the session root <root>, where <agent or "the
   worker">'s session reads its permissions.` This moves a grant only to a root the check above already
   trusts, so a forged `workspaces[]` row widens nothing. Several session roots none of which holds the
   workspace alone refuse: `This permission names <name>'s workspace <ws>, and none of this fleet's
@@ -2648,9 +2351,8 @@ run of each exact command shown; the next run of the same command asks again.
   (a failed append puts both back); last, the earlier grant of a rule granted anew goes on the root's record of
   take-backs, `why: superseded`. What a crash leaves at each step: after the record, an entry whose rule is not
   in its file, which grants nothing (a rule held already is bounded by the newer entry); after the settings, a
-  grant on record with no line, which the hook finds on its session root's record and the hub through the
-  fleet's heartbeats (hub.test.ts: a hub that dies at the line's append, its rollback and its lock's release
-  undone with it, and restarts takes the rule back at 31 minutes); after the line, an earlier grant not marked superseded, which the newest entry of its rule
+  grant on record with no line, which the hook finds on its session root's record and the office host through the
+  fleet's heartbeats; after the line, an earlier grant not marked superseded, which the newest entry of its rule
   supersedes all the same. No step leaves a rule that nothing bounds (measured on 83448844, which wrote the
   settings first: a crash before the record left the rule with neither entry nor line). The line:
   `{"op":"grant",decision,ref,rule,agent_id,file,at,by,reload,rev,n,of[,runs][,workspace]}` (one line per rule
@@ -2660,8 +2362,8 @@ run of each exact command shown; the next run of the same command asks again.
   (null: the session's main thread; kept for the record, the removal no longer reads it), `by` being `tailnet:<login>` for a
   tailnet peer that is not this machine (`tailscale whois`), else `local` (loopback, whatever header it
   carries, or this machine's own tailnet address); then the answer is stored. A rule already in `permissions.allow` that no standing grant on the root's record (or, from before the record, no grant line of this fleet) names for that file is
-  someone's own: the hub records no grant of it, so the hook never removes it (of several rules the
-  others are granted; with none to add the hub writes nothing), and the
+  someone's own: the office host records no grant of it, so the hook never removes it (of several rules the
+  others are granted; with none to add the office host writes nothing), and the
   answer is stored as usual. One an earlier grant left there (its call cancelled, its 30 minutes not
   over) is granted anew: the settings stay as they are and the new entry is the grant the hook counts,
   in its own turn and for its own 30 minutes. **One grant for each state of a permission**: an answer
@@ -2678,13 +2380,13 @@ run of each exact command shown; the next run of the same command asks again.
   (measured on 83448844: any exact rule in the file was allowed, so with its line deleted and the hub
   restarted the spawn was allowed for good). It needs no fleet DIR, and it allows that input for any caller,
   as a settings rule does; the sweep below ends the grant.
-- **Which grants stand** (hook and hub alike): **the root's record of issued grants says which grants
+- **Which grants stand** (hook and office host alike): **the root's record of issued grants says which grants
   exist, and `grants.jsonl` is the log.** The newest entry of each file and rule in `issued` of
   the root's `tstack-grants-issued.json` is that rule's grant (an earlier one is superseded, ended
   or not), and it stands for as long as the rule is in that file's `permissions.allow` and the grant is not on
   the root's record of take-backs, whether or not a line names it. Its `at` (the 30 minutes), `runs` (the files
   it binds), `n` (its turn in its list) and `ref` come from that entry, never from a line. The hook reads the
-  record of its session's root and of each root a line names; the hub that of each root a line, a heartbeat of
+  record of its session's root and of each root a line names; the office host that of each root a line, a heartbeat of
   the fleet or its own memory names. A record holds the grants of its own root alone: an entry counts only when
   the realpath of its `file` is in the `.claude/` of the record's root, and the hook reads its session root's
   record first, so no entry of a root a line names replaces one of the session's (review 2 of this record: a
@@ -2695,7 +2397,7 @@ run of each exact command shown; the next run of the same command asks again.
   ran again, and `A; A` passed, and a restarted hub never took the rule back). A line of a file and rule
   with no entry on record (a forged one, one from before the record existed, or any line of a root whose
   record cannot be read or does not parse) grants nothing: it is expired at once, the hook refuses its call
-  (`this call's grant is on no record of the hub's grants (...): a line in grants.jsonl alone grants
+  (`this call's grant is on no record of the office host's grants (...): a line in grants.jsonl alone grants
   nothing, so its rule is taken back`, a fixed text: it quotes no `ref` or decision of the line's, which
   whoever wrote the line chose), and either sweep takes its rule back with a take-back marked
   `line: true`, which ends that line alone: nothing was issued (review 3 of this record: the take-back of such
@@ -2704,7 +2406,7 @@ run of each exact command shown; the next run of the same command asks again.
   good). A grant file, whether a line, an
   entry or a heartbeat names it, is one only when its folder is its own realpath and neither the file,
   `.claude/hooks` nor a record in it is a symlink; else nothing there is read, taken back or written, and
-  the hub grants nothing into a session root where that fails (review 3: a symlinked `.claude/hooks` sent a
+  the office host grants nothing into a session root where that fails (review 3: a symlinked `.claude/hooks` sent a
   take-back to another root's record, and Node's `join` reads `<link>/..` by its text where the filesystem
   follows the link). Without this, a copy of a bound
   grant's line with no `runs` and an `at` an hour on let an edited script run on the rule and held the rule
@@ -2716,7 +2418,7 @@ run of each exact command shown; the next run of the same command asks again.
   `file` the grant file, `granted` the grant's `at`, `rev` its permission's revision, `line: true` for the
   take-back of a line on no record of issued grants, `at` the take-back's, `why` one of `used`, `revoked`,
   `expired` or `superseded`; newest last, the newest 4096 kept), written by whichever sweep
-  took the rule back, and by the hub for a grant superseded. A grant there is named by its file, decision,
+  took the rule back, and by the office host for a grant superseded. A grant there is named by its file, decision,
   rule, `granted` and `rev`: the file, so a take-back ends only its own file's grant; `at` is to the second,
   and two answers of one decision under two revisions in one second are two grants (without the `rev`,
   superseding the first ended the second as it was born, and its rule stayed). An entry with no `file` or no
@@ -2760,13 +2462,13 @@ run of each exact command shown; the next run of the same command asks again.
   written only for a recorded grant, keyed by its own file's realpath, so landing on another record ends
   nothing there and landing nowhere leaves the grant bounded or its rule gone (swapping a component of the
   real root's path needs a write outside `.claude/`); and a root whose `.claude/hooks` the owner made a
-  symlink keeps the rules granted there before the deploy, unbounded, since neither the hook nor the hub
+  symlink keeps the rules granted there before the deploy, unbounded, since neither the hook nor the office host
   reads, takes back or writes anything there (`grantFile`), so its earlier grants are removed by hand. The
-  deploy: the hub restarts with the release, and a session on the old hook keeps it until it restarts.
+  deploy: the office host restarts with the release, and a session on the old hook keeps it until it restarts.
 - **Where the records live**: both records of a root are in `<home>/.claude/tstack-grants/<hash>/`, `<hash>`
-  the SHA-256 of the UTF-8 bytes of the root's real path, as lowercase hex; `fleet/src/hub/grant-records.ts`
-  is the one place this is written down, with why there and the one-time import, and
-  `fleet/test/grant-records.cases.json` the cases the hub, the hook and the office host must read alike.
+  the SHA-256 of the UTF-8 bytes of the root's real path, as lowercase hex; the hook
+  (`_records_dir`) and the office host compute it, and `fleet/test/grant-records.cases.json` holds the cases
+  both must read alike (the office host keeps its own copy; change them together).
   They sat in the root's `.claude/hooks/` until 2026-10-21, when in a root that jj tracked them in a
   `jj workspace update-stale` put an older copy over them and the hook took back a grant the user had
   allowed. Not in `$XDG_STATE_HOME`: no protected path covers it, and an agent that could edit the record
@@ -2778,7 +2480,7 @@ run of each exact command shown; the next run of the same command asks again.
   folder with `mkdir` and links each copy in, never renaming a whole folder; with the lock not had in 2 s, or no
   `.claude`, there is no record for now). **The transition** (temporary: dropped at step grant-dual-drop, once every
   fleet reports a restart): a session started before the move runs the old hook, which reads only
-  `<root>/.claude/hooks/`. Nothing of this release writes there: the hub, the hook and the host write a root's
+  `<root>/.claude/hooks/`. Nothing of this release writes there: the hook and the office host write a root's
   records in its folder alone. Node has no rename relative to an open folder, so a `.claude/hooks` swapped for a
   symlink between a check and the rename could replace the folder's record of issued grants or write into another
   root's tree. So an old-hook session finds no grant issued since the release and refuses it (`on no record of the
@@ -2788,7 +2490,7 @@ run of each exact command shown; the next run of the same command asks again.
   take-backs. The hook lets no grant run that the folder's record of take-backs or
   the tree's ends, the tree's being where an old-hook session writes its own; but a take-back on the tree's alone
   makes a rule still in its file the owner's, which no sweep takes, only while that rule is in none of the root's
-  grant files, read under the settings lock (the hub and the host count it so too): the old hook takes the rule out
+  grant files, read under the settings lock (the office host counts it so too): the old hook takes the rule out
   first, and a take-back forged there of a grant whose rule stands would make that rule lasting. The union only ever
   ends a grant: a checkout that rolls the tree's copy back takes no take-back out of the folder's. Only an old-hook session writes
   the tree's copy; the
@@ -2819,7 +2521,7 @@ run of each exact command shown; the next run of the same command asks again.
     after an idle spell); when an earlier call of its list still stands (`this is call 3 of the list the
     user allowed (P1), and call 1 has not run: ...`; a list is a sequence, and a call's turn is its `n` on
     the record of issued grants); when a file it binds (its `runs` on that record) no longer hashes to what
-    the hub recorded, cannot be read, or its record does not read (the grant and what is left of its list
+    the office host recorded, cannot be read, or its record does not read (the grant and what is left of its list
     are then taken back, `why: revoked`); and when another call took the grant first.
   - **Taking** a grant is how one yes stays one run when two callers reach PreToolUse before either
     call has finished: the hook creates `DIR/grants.taken/<32 hex of sha256(decision, rule, file, at)>`
@@ -2835,7 +2537,7 @@ run of each exact command shown; the next run of the same command asks again.
     or is larger than 8 MB (no record of grants is; a 300 MB one answered in 0.1 s), every exact Bash
     rule (no `*`) in `<session root>/.claude/settings.local.json` is taken for a one-time grant: a longer
     command that holds one is denied, and the denial names the file that cannot be read. The exact call
-    is left to the permission check, and the hub's timer (below) bounds how long its rule stands.
+    is left to the permission check, and the office host's timer (below) bounds how long its rule stands.
 - **Removal** (the plugin's hook, PostToolUse and PostToolUseFailure, for Bash, Monitor and Agent): a
   standing grant is `used` when the call that just ran is its rule's call (for Agent, the spawn's input
   as the rule names it), whoever in the fleet's sessions ran it: the rule let any caller of the session
@@ -2860,14 +2562,14 @@ run of each exact command shown; the next run of the same command asks again.
   grant's `grants.taken` file. It rewrites only an absolute `<root>/.claude/settings.local.json` or
   `<root>/.claude/tstack-grants.json` that is a grant file (above), checked again under the lock. Two hooks sweeping at
   once are kept apart by a `flock` on `grants.jsonl`, so a grant is closed once. A `grants.jsonl` that
-  cannot be read is logged and left to the hub.
-- **The hub ends a grant itself** (`expireGrants`, at start and every 15 s): a grant 30 minutes old or
+  cannot be read is logged and left to the office host.
+- **The office host ends a grant itself** (at start and every 15 s): a grant 30 minutes old or
   more by the `at` on its root's record of issued grants, or on no such record, whose rule is still in its file, and that is not on the root's record of take-backs, is taken
   back under the settings lock, put on that record (`why: expired`), with a `remove` line
   (`why: expired`, `by: hub`). It reads the records of the roots that the lines and heartbeats of every
-  fleet the registry names (served or not, so a restarted hub takes up what an earlier one granted) and its
+  fleet the registry names (served or not, so a restarted office host takes up what an earlier one granted) and its
   own memory of what this process granted name. A root none of them names (its lines deleted, no heartbeat,
-  the hub restarted) is ended by the hook: it reads its session root's record at each call, so the call is
+  the office host restarted) is ended by the hook: it reads its session root's record at each call, so the call is
   refused and the rule taken back at the first Bash, Monitor or Agent call after the 30 minutes, in any session
   of that root that works for a fleet, and at the first Bash or Monitor call in a session of no fleet (its
   PreToolUse, `_alone_without_fleet`: with no fleet there is no sweep, and an Agent rule left in
@@ -2879,30 +2581,26 @@ run of each exact command shown; the next run of the same command asks again.
   This is what ends
   a grant whose session made no call after it, runs in the same folder without this fleet, or had its
   record of grants edited or deleted; the hook's sweep ran only when a session of the fleet made a tool
-  call. With no hub running, the hook's sweep is all there is.
-- **The settings lock**: hub and hook both make the directory `<dir of the file>/.settings.local.json.lock`
+  call. With no office host running, the hook's sweep is all there is.
+- **The settings lock**: the office host and the hook both make the directory `<dir of the file>/.settings.local.json.lock`
   (an atomic `mkdir`, which Bun and Python both have; Bun has no `flock`) around the read-modify-write of
   the settings file, retry for up to 2 s, and take over a lock older than 10 s (a crashed holder's). A
   lock still held after 2 s refuses the grant (409) or leaves the removal for the next tool call.
 - **Lines**: every `grants.jsonl` line is compact JSON, one object, on both sides.
 - **What it defends**: an allow rule that lets through only the call the user saw, once, as a call of its
   own, in the sessions whose hook finds the fleet (`grant_dirs`). An agent can ask and never grant: the
-  rule is written by the hub alone, on an answer its own page posted (a post from another origin that
-  carries `decision`, `rule`, `rules`, `root` or `runs` is refused), for the calls, the folder and the files that page showed.
+  rule is written by the office host alone, on the user's answer on the page, for the calls, the folder and the
+  files that page showed.
   A row changed after the user read it (another command, one more, another folder) grants nothing; nothing
   in a body, a title or a chat line reaches the grant, which is read from `refusal` alone.
   The Agent grants file sits in `.claude`, a protected path whose writes by an agent auto mode routes to
   the classifier, as it does a write of `settings.local.json`; an agent told to write its own grant
   there was refused as `[Self-Modification]` (measured once, Claude Code 2.1.288). With that file in
   place, the real hook let the refused spawn through on its retry.
-  What it does not defend, said plainly: **the hub, the hook and every agent run as one Unix user.**
-  - A local process can POST allow-once to the hub with no `Origin` (stamped `local`, by decision):
-    the origin check stops a page of another origin, not a program on this machine.
-  - The page token stops a browser page, not a local process: one can GET the fleet's page with a forged
-    `Sec-Fetch-Dest: document` and read the token from it.
+  What it does not defend, said plainly: **the office host, the hook and every agent run as one Unix user.**
   - `grants.jsonl`, `grants.taken`, the ledger, the heartbeats and the registry (`fleet serve DIR --pid
     PID`) are files an agent can write. The root check and the row make a forged grant flagrant, not
-    impossible; the registry names a process, and the hub reads where it runs, so a forged entry grants
+    impossible; the registry names a process, and the office host reads where it runs, so a forged entry grants
     only in a directory some live process of the user's runs in. A forged `remove` line ends nothing
     while the rule stands and no take-back is on the root's record (in `.claude/`, which an agent
     cannot write), an unreadable record of grants fails closed, and a deleted or forged `grants.jsonl`
@@ -2912,7 +2610,7 @@ run of each exact command shown; the next run of the same command asks again.
     Monitor call takes back a grant past its 30 minutes (`why: expired`, on the root's record, with no line:
     it knows no fleet's log), so a root only such sessions visit keeps no rule. One within its 30 minutes it
     only refuses: a session of the fleet may still run it, in turn.
-  - A forged registry entry with a forged `op:grant` line can make the hook or the hub remove a rule
+  - A forged registry entry with a forged `op:grant` line can make the hook or the office host remove a rule
     that matches it, one added by hand in another project included: the failure is fewer allowed calls,
     never more.
   - What stops a process that edits these files, or the settings, directly is Claude Code's own refusal
@@ -3147,7 +2845,7 @@ tool call waits on it) and, inside the synchronous dispatcher, on SessionStart, 
   (no heartbeat) its transcript's mtime. The page's view sets the worker's `active` from it, adds
   `beat: {tool, event}` when a heartbeat says it (the row reads "seen 3 min ago", its title the tool),
   and the silent rule (`SILENT_S`, twenty minutes) reads the same map: a running or blocked worker not
-  seen for twenty minutes is silent on the page, in `fleets list`, the hub's index and the chat watches.
+  seen for twenty minutes is silent on the page, in `fleets list` and the chat watches.
   Python's view still reads transcripts only; with no heartbeat both agree, which is every trace.
 
 ## Listening hooks
@@ -3161,7 +2859,7 @@ folders holding a `state.json`); the role is the ledger's (`role: "manager"`, el
 hook: a broken `chat.jsonl` or ledger is skipped, an error is logged.
 
 - **The Stop guard** (`fleet_listen_guard`, Stop). The session hosts `$FLEET_DIR`, else only those of
-  its scratchpad's folders that the hub's registry (`$FLEET_HOME`, else `fleet-board` under
+  its scratchpad's folders that the machine's registry (`$FLEET_HOME`, else `fleet-board` under
   `$XDG_STATE_HOME`) has an entry for with this session's `session_id`: a ledger copied into the
   scratchpad to read is not a fleet it hosts. When a fleet the session hosts is running or blocked
   (not paused, not done) and no chat watch as its role is alive, the hook returns
@@ -3247,7 +2945,7 @@ SKILL.md, Respond; manager SKILL.md, Said once):
   a Bash `fleet chat DIR say ... --re M` whose result (not an error) shows the message written to the
   user as a reply (`#N <from> -> user...: <text> [re #M]`), M being a message `from: user` in a hosted
   fleet's `chat.jsonl`. A `fleet news post` (its `#21 <stamp> skills -> all [release, ...]` line, even
-  when its text names a say), a `fleet tell`, a state event, a say with no `--re`, and a reply to a
+  when its text names a say), a state event, a say with no `--re`, and a reply to a
   worker's message are not answers on the page. When it did, and the turn's final text
   (`last_assistant_message`, else the turn's last assistant text block) is over 2 non-empty lines or 200
   characters, the hook returns `{"decision": "block", "reason": "You answered on the page (#N). Said
@@ -3256,312 +2954,19 @@ SKILL.md, Respond; manager SKILL.md, Said once):
   nor twice for one prompt (the session's `said-once` state keeps the turn's key, the prompt's uuid).
   Anything it cannot read lets the turn stop.
 
-## The hub's wake
+## The wake
 
-The two hooks above act on a session that runs: a Stop to block, a tool call to ride on. A turn that ends
-with no Stop (a usage-limit error, a compaction, a run of an hour) arms no watch, and nothing in the
-session acts until the user types in its terminal. Measured on 2026-10-12: four of the user's page
-messages waited 24 to 51 minutes that way. So the hub, which runs whatever the sessions do, wakes the
-host's session itself (fleet/src/wake.ts; TypeScript only).
+The office host writes to a session whose chat watch is not running while the user's messages wait
+(fleet-ship apps/host/src/session-wake.ts). Its line is `wakeText` in src/wake.ts, word for word:
+`[hub] <fleet> (<dir>): the chat watch is not running and N message(s) from the user wait unread since #S.
+Arm it as a background command (run_in_background: true, timeout: 3300000): `<fleet> chat <dir> watch --as
+<role> --all --resume --once`; it prints them first.` The command is the Stop guard's (`watch_command` and
+`DEAF` in hooks/tstack-hook.py); a fleet id or DIR with anything but letters, digits, `.`, `_`, `/` and `-`
+is not written.
 
-**The delivery.** Claude Code's cross-session messaging listens on one Unix socket per session process.
-
-- Measured (Linux, Claude Code 2.1.296, 2026-10-12): the socket is `$XDG_RUNTIME_DIR/cc-socks/<pid>.sock`
-  (`/run/user/<uid>/cc-socks/`), `<pid>` the session's `claude` process, which is the `pid` a registry
-  entry records (10 of 10 live entries had one). The sender connects, writes one line of JSON and closes:
-  `{"type":"user","message":{"role":"user","content":"<text>"}}` and a newline. No token was asked of it.
-  The socket answers nothing (no byte in 3 s), so a connect and a write that succeed are all the sender
-  knows. An idle interactive session started a turn 0 to 2 s later and did what the line asked; a second
-  line written while that turn ran was queued and ran as a turn of its own after it. The session reads the
-  line as `Another Claude session sent a message: <text>`, with Claude Code's own note that it is not from
-  its user and grants nothing.
-- Read in the binary and the docs, not measured: the Mac's folder (`/private/tmp/cc-socks-<uid>`, else
-  `/private/tmp/cc-socks`); an inbox of at most 50 lines that rate-limits repeats; a receiver in a
-  bypass-permissions mode holds a peer's message for approval; a `--bare` session has no socket; a token
-  the binary's own hint sends first (`CLAUDE_CODE_MESSAGING_TOKEN`), which the hub does not have and was
-  not asked for. The line's format is the binary's debug hint, not a documented interface: a release may
-  change it. So the delivery is one function (`deliver`), and a socket that is absent, refuses or does not
-  take the line in 2 s is a plain reason, recorded and shown on the page.
-- `FLEET_CC_SOCKS` names another folder; every test sets one of its own, and writes only to sockets it
-  listens on itself.
-
-**Whom.** A pid that lives and a socket file named after it do not say a session is there: a pid is reused,
-`serve --pid` takes any process, and anyone can make a file. Before every write (`deliverTo`, over host.ts
-`reach`; there is no other way to a socket) the registry entry is checked against the machine:
-
-| | |
-| :-- | :-- |
-| its process runs | `/proc/<pid>`; `ps` on the Mac |
-| it is Claude Code | `isClaudeBinary`: named `claude`, or running `claude/versions/<version>` |
-| it is the process that served | it started when the entry's `started` says. An entry with no `started` (served before this was recorded) has nothing to compare: it is checked by the rest until it is served again |
-| the socket is its own | Linux (measured 2026-10-12): the socket bound at that path (`/proc/net/unix` gives its inode) is among the files the process has open (`/proc/<pid>/fd`); the bound path must be the socket's. Claude Code's own folder is short, so that is the whole rule there; a path too long for a socket address (108 bytes: a test's folder, a long `FLEET_CC_SOCKS`) is bound by Bun as `/proc/self/fd/<n>/<name>` with `<n>` closed after, so there the file must be a socket and the name the same, which a process listening on that name in another long folder would pass. The Mac (read in lsof's manual, not measured): `lsof -a -p <pid> -U` names it |
-
-Any of them failing is a session that is **gone**, with the reason (`its process no longer runs`, `process
-P is not Claude Code`, `another process has its pid (P)`, `it has no socket`, `the socket named after it is
-not its own`), and nothing is written. An entry made with `serve --pid` is checked the same way, so one
-that names anything but a session is never written to. When the machine does not answer (on the Mac a `ps`
-or an `lsof` that fails or times out) the session is **unknown**, not gone: nothing is written and nothing
-recorded, the page says so, and the next look asks again.
-
-**When.** The hub looks at each fleet being served, the manager's too, when it takes a message of the
-user's (`POST chat`, once the message is in the chat and in each coordinator's it was delivered to; a look
-that runs then is followed by another, since it may have passed the message's fleet already) and every
-10 s (`WAKE_MS`), which is what finds a turn that ended with no watch armed, a limit that was lifted and a
-message written with `fleet chat say`. No time is waited for: a session that is idle and deaf is woken at
-the look that finds it so, which for a message from the page is the one taken with it. Luiz, 2026-10-13:
-"makes no sense to have to wait 2m." Before, the oldest unread message had to wait `FLEET_UNHEARD_S`
-(120 s), the transcript had to be 30 s quiet and the hub looked every 30 s: 2 to 2.5 minutes for a session
-that was plainly idle. One look over ten served fleets took 76 ms (measured 2026-10-13: 57 ms of it finding
-each fleet's watch among the processes; a deaf fleet adds about 4 ms for its session), so 0.8 % of the
-hub's time at 10 s. It writes one wake when all of this holds (`mayWake`, one function of what was read:
-the watch and the unread messages, the record, the session, now):
-
-| | |
-| :-- | :-- |
-| no watch of the host runs | no live `--once` watch as the host, by its pid file and the running processes; an orphaned one is none ([Whose watch](#whose-watch-typescript-only)). This is not [`listening`](#chatpy-the-chat)'s `on`, which also counts a host as reading for 10 minutes after its watch ended or it spoke: that grace is the page's and the manager's, not the hub's. The commonest disconnection is a watch that exits on a message, a host that answers and ends its turn without arming the next, and a second message a minute later; with the grace it would be woken 10 minutes after the watch left. What the grace is for, a host busy with the message its watch just printed, the two rows on its watch and its turn below cover, and a wake that lands mid-turn costs one turn (measured) |
-| the user's messages wait | the user's messages after the host's cursor that nobody answered (`listening`'s `unread`). How long they have waited is not asked |
-| its watch did not just end | the mark a watch leaves when it ends (`watch-<role>.left`) is 5 s old or more (`HANDOVER_S`). A watch touches it when it exits and when a signal stops it; two leave none: a watch that was killed (SIGKILL), and one that stood down because it hears for nobody ([Whose watch](#whose-watch-typescript-only)), which handed nothing to anyone. A watch that exits is a background command that ended: Claude Code tells the session, and the turn that begins is not in the transcript yet. Measured (2026-10-13, Claude Code 2.1.296): the notification was written 3, 4 and 11 ms after the command's last act, and the turn's first line a median 30 ms after that. The ordinary path needs no more: a watch writes its cursor before it ends, so the message it printed is not unread; this row is for the user's next message, written in those milliseconds |
-| the fleet runs | its ledger's `status` is neither `paused` nor `done` |
-| the session is there | the checks of **Whom**, above. `unknown` waits for the next look. `gone` is looked at last: when everything else allows a wake, the hub records one that failed, with the reason, and writes nothing; so it is paced as a wake is, and the record says the hub cannot wake this fleet |
-| it is not at its usage limit | its transcript's last entry is not a usage-limit error whose limit can still be in force (below) |
-| it is not in a turn | its transcript says the turn is finished; or says neither that nor that a tool call awaits its result, and was not written for 30 s (`inTurn`; below). Mid-turn the hook's nudge tells the session, and the hub waits. A session with no transcript to read is in none, and neither is one that is gone: a dead process runs no call, whatever its transcript ends in (a session killed in the middle of a tool call leaves a `tool_use` with no result for good), so `gone` is reached and its failed wake recorded |
-| no wake waits unread | the last wake that was written was followed by a write of the transcript, or is 10 minutes old, or its session is gone (**A wake that waits**, below). Until then the line sits in the session's inbox, and a second would only queue behind it and cost a turn of its own, the user's included. A session with no transcript to read has only the backoff |
-| the backoff allows it | counted over the hub's own wakes for the oldest unread message's id: the first wake at once, the second no sooner than 10 min after the first, the third no sooner than 30 min after the second, and no fourth; and, whatever the message and whoever asked, at most 3 for one fleet in an hour, the user's "Wake now" among them. Another message becoming the oldest (the session read and went deaf again) starts a new count, under the same hour. A wake that could not be written counts as one |
-
-**A wake that waits** holds the next one (`queued`), and the hold always ends. A wake was read when the
-transcript was written after it: the transcript's mtime, cut to the millisecond, is later than the wake's
-stamp, which is to the millisecond too (`stampMsOf`; a write in the wake's own millisecond is taken for the
-earlier of the two). The two are often in one second, both ways. A wake follows a turn's close within it,
-since the hub looks when the user writes. And the turn a wake begins may end within it: measured
-2026-10-13, the whole turn was in one clock second for 8 of 140 turns that ended on a usage-limit error
-and for 7 of 13 that ended on a failed login. A stamp to the second misreads one of the two, whichever
-way a write in the wake's own second is taken: for after it, and a second wake queues behind a first that
-followed a close; for before it, and a wake whose turn ended in its own second reads as unread with no
-end (no later wake, "Wake now" refused, the manager not told).
-
-The hold ends by the first of three:
-
-| | |
-| :-- | :-- |
-| the session writes its transcript | the wake was read; or the session was at work when the line landed, and takes it when its turn ends |
-| its process is gone | the inbox died with it. Nothing holds the hub then but the backoff, and `gone` records the failed wake |
-| the wake is 10 minutes old (`UNREAD_S`, the backoff's first step) | it is taken for lost. The socket answers nothing, so a line the session dropped (its inbox's rate limit, a peer's message held for approval, a release that changed the line's format), a process that hangs and a session started again in another process without a word all look the same as a line that waits. With no end to the hold, the user's messages stayed unread and nobody was told |
-
-After the 10 minutes the backoff and the hour's cap pace what follows. For a session that never writes:
-the hub's second wake at 10 minutes, its third 30 minutes after that, then `spent`, which the page says
-and a manager's watch tells (**Said once**, below). What it can cost: if the line did wait (the user woke
-by hand a session in a long call), the next wake queues behind it, one turn, within the hour's three. A
-wake recorded before stamps had the fraction (to the second) reads as the start of its second: a write
-later in that second counts as after it, which errs to one wake too many, never to a hold.
-
-**One at a time for a fleet.** The limits above and "Wake now"'s own are read from the record, so two
-deciders that read it before either wrote would both write. Measured before this rule (2026-10-12): 20
-simultaneous `POST wake` wrote 20 lines to the socket, and the hub's look with one click wrote 2. So whatever
-decides and writes a wake for a fleet (the look's turn at that fleet, each "Wake now") reads, decides and
-writes in that fleet's turn, one after the other (`Wakes.serial`; one fleet's turn never waits for
-another's), and the wake is recorded before it is sent, as one that was written (`Wakes.reserve`): in the
-hub's memory and in `wakes.json`, so a hub that dies in the send has not forgotten it. A line that was
-written leaves the record as it is; one that was not marks the wake as failed, with why, as the backoff
-expects (a write that throws is one); when the machine did not say whether the session is there, nothing was
-tried and the wake is taken out again. Of 20 clicks at once, one is written and the other 19 are held by it.
-
-**A fleet the look cannot read.** One fleet's broken folder is that fleet's alone: the look reads each fleet
-inside its own guard and goes on with the others. Measured before this rule (2026-10-12): a `chat.jsonl` the
-hub may not read rejected the whole look, nobody was woken on the machine, and nothing was logged. What fails
-is recorded as that fleet's failed look (`Wakes.failed`, in memory): `{since, what, why}`, `what` being `chat`
-(the messages, the cursor, the watch's files) or `session` (the ledger's status, the transcript, the usage
-reading, the machine's processes), `since` when it first failed that way, `why` the machine's words on one
-line (at most 300 characters). It is logged in one line when it is news, never at every look (`hub: wake:
-<fleet> (<DIR>): the hub cannot read its chat: <why>. Nobody is woken for it until that works; the other
-fleets are looked at as before.`), and a look that reads the fleet clears it, so a fleet that breaks again is
-logged again. A chat that is there and cannot be read is checked for by itself (`access`, and that it is a
-file): the store's readers take a file they cannot stat for an empty chat, and the look would take the fleet
-for one where nothing waits. A fleet with no chat yet has nothing to read. A transcript that cannot be read
-is not this: its session reads as one with nothing in its transcript (no usage limit, no tool call awaited),
-idle by the file's mtime, and the registry lists the fleet as before (the title it last read stands). A look
-that fails as a whole (the registry does not read) wrote nothing; it is logged when its reason is new.
-
-**The session's turn** is read in its transcript, not guessed from how long it was quiet (`turnOf`, over the
-transcript's last 256 KiB; read 2026-10-13 in transcripts of Claude Code 2.1.286 to 2.1.296: the ten fleet
-hosts', and the 23 interactive sessions of the last six days). It stands in one of three ways:
-
-| | The transcript says | The hub |
-| :-- | :-- | :-- |
-| `finished` | Claude Code closed the turn: a line `"type": "system"`, `"subtype": "turn_duration"`, and no `user` or `assistant` line of the session's after it | wakes at once: the session waits for a prompt, however lately the transcript was written |
-| `call` | a `tool_use` of an `assistant` line has no `tool_result` after it | waits, however quiet the transcript: a tool call writes nothing while it runs (a build, a subagent in the foreground, a permission prompt nobody answered), and a wake written then is queued and costs a turn |
-| `open` | neither: the model has a prompt, a result or a notification to answer and has written nothing yet, or it writes; or the turn ended with no mark (an interrupt, a local command), or the end that is read holds no line of the session's | waits until the transcript was not written for 30 s (`IDLE_S`, the file's mtime), then takes it for idle |
-
-What was measured, and why each line is read as it is:
-
-- The close is written after the Stop hooks ran (`stop_hook_summary` stands before it), a median 0.1 s
-  after the assistant's last line (99 % within 2.5 s), and after an API error as well (88 of 88: a usage
-  limit, a server error, a failed login). A Stop hook that blocks writes none, and the turn goes on: so a
-  session whose Stop guard is arming the watch is in a turn, and one whose turn is closed with no watch
-  armed is deaf. In the ten hosts' transcripts the line after each of 7283 closes was a `user` line; over
-  all 23 sessions an `assistant` line followed a close once in about 9700.
-- The assistant's `stop_reason` does not say it. Every line of one message carries the message's own
-  (`tool_use` on the thinking block before a call), and `end_turn` is written before the Stop hooks ran.
-- A turn begins with a `user` line, written when it begins: a prompt, a `<task-notification>` (a background
-  command ended), or an `isMeta` line (4076 of the 7283). The model's first line came a median 3.8 s after
-  a prompt, a result or a notification (34138 of them), later than 30 s after 179 (0.5 %), later than 120 s
-  after 45; nothing of the session's is written meanwhile. So the 30 s of `open` hold a session that
-  thinks, and one that thinks longer is the 0.5 %: a wake written then is queued, and costs a turn. That
-  is not all of the exposure (**Not covered**, below).
-- A tool call: an `assistant` line carries a `tool_use` block with its `id`, and its result is a later
-  `user` line with a `tool_result` naming that id; an interrupted call is given a result too. A `user`
-  line with no result that is not `isMeta` is a prompt: it begins another turn, and what was open before
-  it does not count.
-- A compaction's summary is a `user` line (`isCompactSummary`) and no prompt: it begins no turn and ends
-  none, and the turn stands where it stood. One of the ten hosts had been compacted 55 minutes after its
-  last close, with nothing after.
-- `queue-operation` lines say nothing of the session's turn: a subagent's background command is enqueued
-  in the session's transcript too (measured).
-- A subagent's lines (`isSidechain`) are not the session's. A call written before the process that runs
-  now started (the session was closed in the middle of it and resumed) is nobody's, and does not hold the
-  wake.
-- A headless session (`entrypoint` `sdk-cli`: `claude -p`, the Agent SDK) writes no close: its turn never
-  reads as finished, and the 30 s decide. The ten hosts were interactive (`cli`) and all read `finished`
-  while idle.
-- The transcript's mtime moves without a line of the session's (6 of the 10 hosts' files were
-  written within the same 3 s with their last line 6 to 25 minutes old; by what was not found), so the 30 s of `open` can be
-  started again by such a write, and "the last wake was read" (below) can be satisfied by one. A finished
-  turn asks no mtime.
-
-What the session's child processes show is not used, and the reason is measured (Linux, Claude Code
-2.1.29x, 2026-10-12, on a session with background subagents at work): a tool call in the foreground and a
-background command are the same child of the session's process (the same `zsh -c` wrapper sourcing the
-shell snapshot, both session leaders with no terminal, stdin `/dev/null`, output to `tasks/<id>.output`),
-so nothing tells them apart; that session had three background commands running, 3 hours to 3 days old;
-and a background subagent's tool calls are children of the same process while the session's own turn has
-ended (its transcript's last entry was the assistant's closing text, 9 minutes old, while a subagent ran a
-tool call every few seconds). A rule "a running tool child means mid-turn" would never wake a host whose
-workers are at work, which is when its chat matters most.
-
-**Not covered**, and what it costs. An `open` turn is taken for idle once its transcript was quiet for 30 s,
-and a session at work is quiet that long more often than the 0.5 % above says: that figure counts only the
-wait before the model's first line. Measured 2026-10-13 over 163 transcripts: 2.3 % of turns hold a stretch
-of more than 30 s with nothing written and no call awaited, 308 such stretches, and 95 of them follow an
-`assistant` line, not a prompt or a result: the model thinks, then writes a long text or a tool call's
-input, and nothing is in the transcript until the block is whole. Since no time is waited for, the
-message's age shields nothing: a second message to a host at work on the first is exposed from its first
-second, to whichever look falls in such a stretch (before, it had to wait 120 s first). The other gap is
-a watch that left no mark (killed, or stood down) in the milliseconds before its session is told. A wake
-written in either is queued behind the turn and costs the session one turn of its own (measured: a line
-written while a turn runs runs as a turn of its own). The cap bounds it: at most 3 wakes for a fleet in
-an hour, and for one message the backoff's 10 and 30 minutes between them.
-
-**A usage-limit error**, as the transcripts of Claude Code 2.1.29x hold it (read 2026-10-12): one line with
-`"type": "assistant"`, `"isApiErrorMessage": true` and `"error": "rate_limit"` (`apiErrorStatus` 429,
-`message.model` `<synthetic>`); the session limit, the weekly limit, the monthly spend limit and "out of
-usage credits" all carry it, and a server or login error carries another `error`. It has a `timestamp`
-and, but for "out of usage credits", `quotaLimits` with `rateLimitType` (`five_hour` or `seven_day`) and
-`resetsAt` (seconds since the epoch). After it Claude Code writes lines of other types (the turn's
-duration, the bridge's state, the cost): the last entry is the last line whose `type` is `assistant` or
-`user`, read in the transcript's last 256 KiB (`usageLimitHit`).
-
-A turn that ended on that error armed no watch, so the session must be woken once the limit is over: the
-error holds the session only while its limit can still be in force (`limitInForce`, one function of the
-error, the reading and now). It holds until the first of these that applies, and after it the session is an
-idle one like any other:
-
-| | Until | From |
-| :-- | :-- | :-- |
-| the reading's | `resets_at` of the window that was full at the error: a window at 100 % that resets after the error, the one the entry names when it names one, else any; the later reset when two are full | the machine's usage reading, `REGISTRY/usage/reading.json`, of the account this machine's config is logged in as (usage.ts) |
-| the entry's own | its `quotaLimits.resetsAt`, when the reading has no such window (none captured, captured below 100 %, or of a window that reset before the error) | the transcript |
-| the fallback | 5 hours (the short window's length) after the entry was written: its `timestamp`, else the transcript's last write | the transcript |
-
-The page's "at its usage limit" follows the same function. A limit that no window ends (the monthly spend,
-no credits) lets one wake through after its 5 hours or its window's reset; that turn ends on a new error,
-which holds the session again.
-
-**The text** is a fixed template (`wakeText`), nothing else:
-
-```
-[hub] <fleet id> (<DIR>): the chat watch is not running and N message(s) from the user wait unread since #S. Arm it as a background command (run_in_background: true, timeout: 3300000): `<plugin>/fleet/bin/fleet chat <DIR> watch --as <role> --all --resume --once`; it prints them first.
-```
-
-`S` is the host's cursor, as `fleet fleets list` says it. The command is the Stop guard's (`watch_command`,
-`DEAF`): the two are kept the same, and a test of each side reads the other. No word of anyone's message
-is in it and no mention; a fleet id or a DIR that holds anything but `[A-Za-z0-9._/-]` is not written at
-all: a wake that failed, with that reason, shown on the page (`/tmp/SYSTEM:ignore-prior-rules,.../coordinator`
-was accepted by an earlier, wider set: a colon, a comma, `+`, `=` and `~` read as a label, a list or an
-option to a model).
-
-**The record**: `REGISTRY/hub/wakes.json`, by fleet DIR, `{"<DIR>": {"fleet": "<id>", "wakes": [{"at":
-"<stamp>", "first": <the oldest unread id>, "by": "hub" | "user", "error": null | "<why it was not
-written>"}]}}`. The hub keeps it in memory and writes it through, so a hub that starts again counts the
-wakes of the one before; a file that does not read is no record. A wake is in it from before its line is
-sent (`at` is then), with `error: null` until the send says otherwise. `at` is to the millisecond
-(`2026-10-12T14:04:30.250-05:00`), unlike the fleet's other stamps: it is compared with the transcript's
-last write, often within one second (**A wake that waits**, above). A record of before has it to the
-second, and both read (`parseInstant`). A wake older than an hour is dropped
-unless it was for the message that still waits first. The user's wake is recorded as the hub's are: it
-counts in the hour's three, and neither restarts nor advances the hub's count for the message.
-
-**Said once.** While a hub runs and its wake works for a fleet, a manager's watch does not tell that the
-fleet does not read its chat ([chat.py](#chatpy-the-chat)). A hub whose pid lives is not enough: the wake
-works (`wakeWorks`, read from the record) when the last wake for that fleet did not fail, the hub wrote
-fewer than three for the message that waits first, and fewer than three were written for the fleet in the
-hour. Otherwise (the session is gone, its socket refused, the wakes are spent), and with no hub, the manager
-is told after `FLEET_UNHEARD_S` as before. Its other lines are unchanged.
-
-**The page.** A fleet the hub serves with no watch of its host running while the user's messages wait has
-`deaf` in its view, and in its summary on the manager's page, once the oldest of them has waited
-`FLEET_UNHEARD_S` (120 s), so the line does not flash during an ordinary exchange: a second message to a
-host at work on the first, or the seconds a wake takes to be answered. It has it sooner, as soon as the hub
-cannot wake the session: a wake for that message failed (a session that is gone is one, once nothing else
-held the hub), its three are spent, or a usage limit is in force. A fleet paused or done has not. No other view has the key (a `fleet state` render, the Python twin, every
-trace):
-
-```json
-{"since": "2026-10-12T14:02:11-05:00", "unread": 2, "first": 369,
- "woken": ["2026-10-12T14:04:30.250-05:00"], "end": null, "why": null, "held": null, "again": null}
-```
-
-`since` is the oldest unread message's `at`, `first` its id, `woken` each wake written for it. `end` says
-where it stands, null while the hub still wakes: `gone` (the session is not there; `why` says which check
-failed), `unknown` (the machine did not say; the hub looks again), `limit` (a usage-limit error still in
-force), `failed` (the last wake could not be written; `why` says why), `spent` (three wakes of the hub and
-no answer), `queued` (the last wake was not read yet, and is less than 10 minutes old), `busy` (a tool call
-of its turn awaits its result). `held` says why "Wake now" cannot be used now, and `again` when it can at
-the latest, a stamp to the second: every hold ends with time. The page says it in the stuck band as soon as the view has it, in place of the bare "chat not
-read" line (which waits five minutes, and the 10 minutes of `listening`): `Not listening since 14:02: 2 messages wait (#369…). Woken 14:04, 14:14.`, a time of day as
-every other on the page; then, by `end`, `The session did not answer 3 wakes: at its usage limit or gone.
-Open it in a terminal.`, `The session is gone (<why>). Open it in a terminal.`, `The hub could not tell
-whether the session is there (<why>): it looks again.`, `The session is at its usage limit.
-Open it in a terminal.`, `The session could not be woken (<why>). Open it in a terminal.`, `The session has
-not read the last wake. Open it in a terminal.` or `The session is in a tool call: the hub waits for it to
-end.` On the
-manager's page each line opens with the fleet's name, a link to its page. The user's messages stay "Not
-read yet".
-
-A fleet whose last look failed has `blind` in its view, and in its summary on the manager's page, until a
-look reads it: `{"since": "2026-10-12T14:02:11-05:00", "what": "chat", "why": "EACCES: permission denied,
-access '<DIR>/chat.jsonl'"}`. The page says it in the stuck band, `The hub cannot read this fleet's chat since
-14:02 (<why>): it cannot tell whether your messages wait, and wakes nobody for it.` (`session`: `... this
-fleet's session since 14:02 (<why>): it cannot tell whether it may be woken, and wakes nobody for it.`). So
-that there is a page to say it on, the view of a fleet whose chat cannot be read still renders: its `chat` is
-`{on: false, seen: 0, unread: 0, since: null}`, it has no `deaf` and no `takeover`, and what the page's own
-reading of the session cannot read gives no `deaf` rather than an error (`GET chat` of that fleet still fails,
-500: there is no chat to give). Before, that fleet's page and the manager's answered 500. No other view has
-the key.
-
-**Wake now** is `POST /f/<fleet>/wake` with `{}`, or on the manager's page `{"fleet": "<id>"}` for a fleet
-it serves; checked as `POST /chat` is (`postRefusal`: only who may write, `application/json`, same-origin;
-403, 415, 413). It writes one wake at once, whatever the hub's backoff, the session's turn, the watch
-that just ended and the usage limit say (the user knows what the hub cannot): 200 `{woken: true, fleet, at}`. It has limits of
-its own (`nowHeld`), since each wake costs the session a turn and a click costs nothing: at most one for a
-fleet in 60 s; it counts in the hour's three with the hub's, and is refused when they are spent; and none
-while the last wake written was not read, which is 10 minutes at most (`UNREAD_S`, above). Held by one of
-them it answers 429 `{error, again}` (`again`: when it may be used at the latest; a wake that is read frees
-it sooner), nothing is written and nothing
-recorded, and the page shows the button disabled with the time left (`Wake now (in 42 s)`) or the reason.
-It does not restart the hub's count for the message, and does not advance it. Asked several times at once,
-or with the hub's look, it decides in the fleet's turn (above): one is written, the others are held by it.
-409 with nothing to wake (a
-watch of the host runs, nothing waits unread) or a session that is not there, and then nothing is recorded;
-502 when the line could not be written (recorded; the page says why); 500 when the fleet cannot be read
-(`could not wake: <why>`); 404 for a fleet the page may not name. The button is not shown for a session that is gone.
+The write itself is src/wake.ts `deliverTo`, the one way the fleet reaches a session's socket (onepw.ts,
+chat/hub-line.ts): the registry entry's process runs, is Claude Code, started when the entry says, and holds
+the socket named after it (`$XDG_RUNTIME_DIR/cc-socks/<pid>.sock`); then one line of JSON and a close.
 
 ## The news (`fleet news`)
 
@@ -3601,7 +3006,7 @@ the 1Password app. When the app is locked, each of those commands fails in every
 would open its own card for the same cause. So the machine keeps one state: the first failure of a kind
 asks Luiz once, with one card on every page; while that kind is locked, the plugin's hook denies the fleets'
 commands of that kind, but for one every 15 minutes that tests the lock, and the rest of the work goes on;
-when it ends, the hub tells each held fleet once.
+when it ends, `fleet onepw unlocked` (or the page's button) tells each held fleet once.
 TypeScript and the plugin's hook only: the Python twin has none of it, and with nothing locked no view or
 trace differs.
 
@@ -3876,7 +3281,6 @@ Top-level keys this section does not name are kept on every write.
 | `ONEPW_HOSTS_MAX` | `HOSTS_MAX` | 20 | the most hosts a kind keeps |
 | `ONEPW_WAITING_MAX` | | 50 | the most `waiting` rows: 25 fleets that wait for both kinds |
 | `ONEPW_SKEW_S` | `SKEW_S` | 60 s | how far ahead of now a `since` may be and still read (two clocks, two writers) |
-| | `ONEPW_MS` (the hub) | 5000 ms | how often the hub settles |
 
 **A broken file.** The hook and the fleet read the file the same way. It is broken on the first of these,
 in this order, and the word in the left column is the reason:
@@ -3973,7 +3377,7 @@ news line.
 
 The order is the rule. The words once began "Don't retry `<what>` before `<next>`", and a fleet summed its
 hold up as "I wait for that time" (Luiz, 2026-10-13). That is the wrong reading: the refusal itself puts the
-fleet on the waiting list (its row in `waiting`), the hub tells it when 1Password is unlocked
+fleet on the waiting list (its row in `waiting`), a settle tells it when 1Password is unlocked
 ([Settle and the notice](#settle-and-the-notice)), and `<next>` is only when the hook lets one command through to test the lock
 ([The probe window](#the-probe-window)). So who tells the fleet comes first, what not to do second, and the
 window's time last, as a fact about the hook.
@@ -4006,8 +3410,7 @@ On PostToolUseFailure nothing is returned: the event is registered asynchronous,
 output of it. The first failing session therefore gets no note, which is accepted: its next command of that
 kind is denied with the full instruction.
 
-A hub that is not running changes nothing here: the hook detects, holds and clears from the file alone.
-Only the notices wait for a settle.
+The hook detects, holds and clears from the file alone. Only the notices wait for a settle.
 
 ### How a lock ends
 
@@ -4020,7 +3423,7 @@ A lock ends in exactly three ways, each kind on its own:
 | the lapse: `FLEET_ONEPW_LAPSE_S` (2 h) after the kind's `since` with no answer | each kind by its own `since` | nothing at that moment: the kind reads as lapsed from then on, and the settle pass stamps `lapsed` when it first sees it |
 
 An agent does not say that 1Password is unlocked: `fleet onepw unlocked` is refused inside a Claude Code
-session, and the button's POST passes the checks of a post that acts as the user. Both stop an honest agent
+session, and the page's server takes the button's POST as the user's. Both stop an honest agent
 only ([The card](#the-card), [The CLI](#the-cli)). While a kind is locked, a fleet's sessions are denied
 every command that could clear it (a use that clears is always held), so a command clears from a session of
 no fleet, when it was already running as the lock was recorded, or when it took a probe window.
@@ -4047,7 +3450,7 @@ held, so without the window only Luiz's answer and the 2 h lapse would end such 
 
 | The command the window let through | What follows |
 | :-- | :-- |
-| exits 0, and is a use that clears ([What the hook does](#what-the-hook-does), Clear) | the kind is cleared, `by: "command"`, and the hub tells the held fleets |
+| exits 0, and is a use that clears ([What the hook does](#what-the-hook-does), Clear) | the kind is cleared, `by: "command"`, and a settle tells the held fleets |
 | fails with the kind's text | the lock stays, and the next window opens 15 minutes after the one it took |
 | anything else: an exit 0 that proves no read (`jj git push`, `gh`, `aws`, `secretspec`, an `ssh` with a key of its own), a failure of another cause, a command in the background, a call the permission check or the grant's gate refused after the hook let it through | nothing changes; the next window opens 15 minutes after the one it took |
 
@@ -4074,10 +3477,10 @@ A flapping lock must not flood Luiz with cards or the fleets with notices.
 ### Settle and the notice
 
 `settle(machine, {socks, send?, probe?})` (`src/onepw.ts`, asynchronous) tells the held fleets of what is
-over and prunes the state. Three callers run it: the hub, every 5 s on a timer of its own (`ONEPW_MS`; one
-pass at a time, a call while one runs gets that one, and it never throws into the server); the card's POST;
-and `fleet onepw unlocked`. A fleet is told once however many callers: the first stamps its DIR and drops
-its rows.
+over and prunes the state. In tstack `fleet onepw unlocked` is the one caller: the removed hub's timer (every 5 s) and
+the card's POST are gone with it, so a hold that ends by a command that succeeds or by lapse stays owed until
+someone settles (`fleet onepw` says so, below). A fleet is told once however many callers: the first stamps its
+DIR and drops its rows.
 
 **Phase 1**, under `onepw.lock`, synchronous:
 
@@ -4108,7 +3511,7 @@ its rows.
 | The host's chat watch (`watchLive`) | The notice goes |
 | :-- | :-- |
 | live | to the fleet's chat, in phase 1: appended to `chat.jsonl` under the store's lock, `{id, at, from: "fleet-hub", to: [<host>], text, re: null, parts}`. A `--once` chat watch as that host wakes on it as on any message to it, and prints `#<id> fleet-hub -> coordinator: [hub] ...` |
-| dead | to the session itself, in phase 2, after the lock is released: one line to its socket through `deliverTo(entry, socks, text, send, probe)` (`src/wake.ts`), the one verified way to a session's socket: it writes only when the process is the Claude Code session the registry entry names and the socket is its own ([The hub's wake](#the-hubs-wake)). `socks` is the folder of the sessions' sockets (`FLEET_CC_SOCKS`) |
+| dead | to the session itself, in phase 2, after the lock is released: one line to its socket through `deliverTo(entry, socks, text, send, probe)` (`src/wake.ts`), the one verified way to a session's socket: it writes only when the process is the Claude Code session the registry entry names and the socket is its own ([The wake](#the-wake)). `socks` is the folder of the sessions' sockets (`FLEET_CC_SOCKS`) |
 | dead, and the session did not take the line | to the fleet's chat, as a fallback |
 | live, and the chat could not be written | to the session, in phase 2 |
 
@@ -4145,8 +3548,8 @@ unlocked template is used.
 
 **`fleet-hub` is kept** (TypeScript only): no worker may have it as its id or name (`agent X cannot be
 called 'fleet-hub': that name is a chat participant`, with `user` and `coordinator`), and no fleet may be
-named it (`'<name>' cannot name a fleet; the hub signs its own lines in a chat with it`), so nobody but the
-hub writes a line from it through `chat say`.
+named it (`'<name>' cannot name a fleet; the hub signs its own lines in a chat with it`), so nobody
+but the machine's own lines (`[hub]`) is from it through `chat say`.
 
 ### The card
 
@@ -4183,42 +3586,26 @@ page of its own:
 | with `again` | `It was cleared and a command failed again <N min ago>.` |
 | a line per row | `Waiting: <who>, for <what>.` |
 | under them | `Asked <N min ago>. Every fleet holds its commands that need 1Password until then, and goes on with the rest.` |
-| the button | `1Password is unlocked` (`Telling the fleets…` while it posts); then `The fleets are told.`, or the hub's error |
+| the button | `1Password is unlocked` (`Telling the fleets…` while it posts); then `The fleets are told.`, or the server's error |
 
 A card that was cleared and reopened is the same card: the same `since`, so the same "Asked ... ago". The
 lead sentence counts it as one action that blocks work; the tab's badge and the decision lists do not. The
 button is disabled, with the reason, for a viewer who may not write.
 
-**The button** is `POST /f/<fleet>/onepw/unlocked` with `{}`, from any fleet's page (the manager's too). It
-passes the checks of the page's other posts that act as the user (`postRefusal`, the same as `/chat`,
-`/name` and `/wake`), and a refused post changes nothing:
+**The button** posts `onepw/unlocked` with `{}` from any page (`fleet/page/src/Overview.tsx`). tstack serves no
+such route now: the page's server in the cloud answers it, and the call that does the work is the one
+`fleet onepw unlocked` makes: clear every locked kind as the user (`note`: `answered on the page`), then settle. A
+viewer who may not write has the button disabled. The stream's next `state` has no `onepw`, and the card goes.
 
-| Check | Refused with |
-| :-- | :-- |
-| the viewer may write: local, or the hub's owner | 403 |
-| `Content-Type` is `application/json` | 415 |
-| `Origin`, when sent, is the hub's own (`Origin: null` is not) | 403 `cross-origin post refused` |
-| `Sec-Fetch-Site`, when sent, is `same-origin` | 403 `cross-origin post refused` |
-| `Content-Length` is a number, and at most 256 KiB; the body read is at most 256 KiB | 400, 413 |
-
-Then it clears every locked kind as the user (`note`: `answered on the page`), waits for a settle pass
-already running (that pass decided before the answer), and runs its own: 200 `{cleared, told: [{fleet, to,
-id, via}]}`, `cleared` true when a kind was locked, `via` `chat` with the notice's `id`, or `session` with
-`id` null. With nothing locked, `{cleared: false, told: []}`, or the fleets told by a hold that was over
-and not yet settled. 500 `could not record the answer: <why>` when the state could not be written. The
-stream's next `state` has no `onepw`, and the card goes.
-
-The residual: a loopback POST with no `Origin` is stamped local, and everything on the machine runs as one
-Unix user, so these checks keep honest agents and other origins out, not a process that sets out to forge
-the user. The refusal of `fleet onepw unlocked` inside a Claude Code session stops an honest agent only, in
-the same way ([The CLI](#the-cli)).
+The refusal of `fleet onepw unlocked` inside a Claude Code session stops an honest agent only: everything on the
+machine runs as one Unix user ([The CLI](#the-cli)).
 
 ### The CLI
 
 | Command | Does | Output | Exit |
 | :-- | :-- | :-- | :-- |
-| `fleet onepw` | reads the state; runs anywhere, in a session too; changes nothing | `1Password: not known to be locked`, or `1Password: locked: ssh-agent since 13:50 (<why>), op-desktop since 13:52 (<why>); waiting: skills (jj git push, secretspec run), casos (gh pr)` (`nothing waits` with no row; the rows of no fleet as `a session outside the fleets (...)`). A second line when a notice is owed: `a hold is over and N fleet(s) are not told yet: the hub tells each within seconds, or 30 min after its last notice` | 0 |
-| `fleet onepw unlocked [--note TEXT]` | outside Claude Code only: clears every locked kind as the user (`note` TEXT, else `fleet onepw unlocked`) and settles at once, with or without a hub | a line per fleet told, `told <fleet> (<host>, #<id>): <text>` or `told <fleet> (its session): <text>`; with none told, `1Password: nothing was locked` or `1Password: unlocked; no fleet was told now`; then the owed line, when one is owed | 0; 1 refused, or the settle failed; 2 a usage error |
+| `fleet onepw` | reads the state; runs anywhere, in a session too; changes nothing | `1Password: not known to be locked`, or `1Password: locked: ssh-agent since 13:50 (<why>), op-desktop since 13:52 (<why>); waiting: skills (jj git push, secretspec run), casos (gh pr)` (`nothing waits` with no row; the rows of no fleet as `a session outside the fleets (...)`). A second line when a notice is owed: `a hold is over and N fleet(s) are not told yet: the hub tells each within seconds, or 30 min after its last notice` (the code's own words; no hub runs now) | 0 |
+| `fleet onepw unlocked [--note TEXT]` | outside Claude Code only: clears every locked kind as the user (`note` TEXT, else `fleet onepw unlocked`) and settles at once | a line per fleet told, `told <fleet> (<host>, #<id>): <text>` or `told <fleet> (its session): <text>`; with none told, `1Password: nothing was locked` or `1Password: unlocked; no fleet was told now`; then the owed line, when one is owed | 0; 1 refused, or the settle failed; 2 a usage error |
 | `fleet onepw -h` | prints the usage | | 0 |
 
 In `fleet onepw`'s line a row's `what` is printed when it is one to four words of `[A-Za-z0-9_.-]`, at most
@@ -4228,7 +3615,7 @@ is `not known to be locked`.
 **`unlocked` is refused inside a Claude Code session.** It is Luiz's own word, and an agent does not say for
 him that 1Password is unlocked. A session is told by either of:
 
-- `CLAUDECODE` or `CLAUDE_CODE_SESSION_ID` set and not empty in the environment (as `fleet tell` reads it);
+- `CLAUDECODE` or `CLAUDE_CODE_SESSION_ID` set and not empty in the environment;
 - a Claude Code process among the caller's ancestors (`procs.ts`: `ancestry` from the parent, `runningOf`),
   which unsetting the two variables does not hide. An ancestor the machine could not be asked about (a failed
   `ps` on the Mac) counts as Claude Code: what cannot be shown to be a terminal outside Claude Code does not
@@ -4570,7 +3957,7 @@ not yet integrated, merged, in one live page, and optionally one worker's alone.
 
 - `fleet preview DIR start [--cmd C] [--port N] [--setup C] [--repo PATH] [--stack REVSET]`: the combined preview. Refused
   in a shared fleet (its one working copy already holds every worker's edits), for a fleet not served (the
-  preview is reached through the hub), and while it already runs.
+  preview is reached through the preview server, which answers the fleets the registry shows), and while it already runs.
   - **Workspace**: `jj workspace add <repo>-preview --name preview` at the stack, made once and recorded in
     `workspaces[]` as `{id: "preview", kind: "preview", agent: null, ...}`: the fleet's, never a worker's
     (`fleet ws add --reuse preview` is refused; `list` shows it as the preview). Its @ is the merge: parents
@@ -4676,7 +4063,7 @@ not yet integrated, merged, in one live page, and optionally one worker's alone.
   id off the record's `include[]`: taking in a workspace says nothing of the next one of that name), or the last look left it out (above): always when it is running, queued or blocked or was taken in (`include WORKER`); otherwise
   (done, failed, any other status) while its changes are not in the stack, so a done worker's work shows
   until it is integrated and drops out once its @'s changes are ancestors of the stack or of trunk(), or
-  its workspace is gone. The page's boxes take in and out through the hub; the page's `included` is the same rule, from
+  its workspace is gone. The page's boxes post `preview-workers` (`fleet/page/src/Views.tsx`; tstack serves no such route now, and `fleet preview include` / `exclude` make the same change); the page's `included` is the same rule, from
   the last look's `merged`.
 - `start --per-worker WORKER`: a dev server in that worker's own workspace (installed first when it has
   no node_modules), base `/f/<fleet>/preview/<worker>/`, logging to `DIR/preview/<worker>.log`. No merge,
@@ -4685,33 +4072,33 @@ not yet integrated, merged, in one live page, and optionally one worker's alone.
   by `fleet preview DIR set --root` and taken back by `set --no-root`, kept beside `preview.cmd`): for an
   app that only runs at its root, whose client asks for `/api/...`, `/api/shapes` or a WebSocket at
   `/api/sala` absolutely (the Casos app: about 600 such lines across 100 files), so under
-  `/f/<fleet>/preview/` its pages load and every data call 404s at the hub's root. The dev server is told
+  `/f/<fleet>/preview/` its pages load and every data call 404s at the preview server's root. The dev server is told
   base `/` (Vite: `--base /`; `{base}` is `/`) and its own free 127.0.0.1 port as before, and the preview
-  is given a **public port**, on which the hub serves it over TLS at the root of an origin of its own,
-  `https://<MagicDNS name>:<port>/`, with this machine's Tailscale certificate (see [the
-  hub](#the-hub-fleet-hub)); the certificate names the MagicDNS name, so that is the one address, never
+  is given a **public port**, on which the preview server serves it over TLS at the root of an origin of its own,
+  `https://<MagicDNS name>:<port>/`, with this machine's Tailscale certificate (see [the preview
+  server](#the-preview-server-fleet-preview-serve)); the certificate names the MagicDNS name, so that is the one address, never
   the tailnet IP, and without Tailscale there is none. The port speaks HTTP/2 (ALPN `h2`, Node's `http2`
   secure server, `fleet/src/hub/preview-serve.ts`) and HTTP/1.1 for clients without it and for
   WebSockets: over HTTP/1.1 a browser opens 6 connections per origin, so an app that holds long polls
-  open (Casos keeps 17) queued every other request behind them. Any port the hub serves over TLS itself
+  open (Casos keeps 17) queued every other request behind them. Any port the preview server serves over TLS itself
   goes through that server, never `Bun.serve`'s `tls`, which has no HTTP/2. The port is given once per preview (the combined one, each worker's) and kept in the
   record's `ports {combined, workers {<worker>: port}}` across stops and starts, so the address stays
   good; `server.public` (and a per-worker server's) names it while that start runs in root mode. It comes
-  from `FLEET_PREVIEW_PORTS` (`LO-HI`), **7500-7599** by default: beside the hub's 7420 and 7443, clear of
+  from `FLEET_PREVIEW_PORTS` (`LO-HI`), **7500-7599** by default: beside the preview server's 7420 and 7443, clear of
   the ports this machine's other servers use (Vite's 5173, 5300 and up for workers' dev servers, the
   apps' 24116-24118, 9787-9791, 8444) and below the kernel's ephemeral range (32768 and up on Linux, 49152
   on the Mac), where the dev servers' own free ports land. A port is skipped when another fleet's record
-  holds it, when it is the hub's (7420, 7443, or what `hub.json` records), when `tailscale serve` exposes
+  holds it, when it is the preview server's (7420, 7443, or the ports `preview-server.json` records), when `tailscale serve` exposes
   it, or when something listens on it on 127.0.0.1 or the tailnet IP now; a range with none left is
   refused. `start` and `status` print `public: https://<MagicDNS name>:<port>/` (without Tailscale,
-  `public: port N, no https address: …`) and what the hub says of the port (`the hub serves it over
-  https (on loopback and the tailnet)`, `the hub cannot serve https on port N: …`, `no hub runs`);
-  `start` waits up to 3 s for a running hub to take the port. The page there is a secure context
+  `public: port N, no https address: …`) and what the preview server says of the port (`the preview server serves it over
+  https (on loopback and the tailnet)`, `the preview server cannot serve https on port N: …`, `no preview server runs: ...`);
+  `start` waits up to 3 s for a running preview server to take the port. The page there is a secure context
   (`navigator.clipboard` works), and Vite's HMR client opens its socket as `wss` from the page's scheme.
   The `/f/<fleet>/preview/` path still leads to the same server, with the prefix stripped.
-  - **Security**: the dev server stays on 127.0.0.1; only the hub faces the tailnet, on the two addresses
+  - **Security**: the dev server stays on 127.0.0.1; only the preview server faces the tailnet, on the two addresses
     it binds its own port on. The public port carries the same identity rule as `/f/<fleet>/preview/`
-    (below): the client's `Tailscale-*` and `X-Forwarded-For` dropped, then set from what the hub
+    (below): the client's `Tailscale-*` and `X-Forwarded-For` dropped, then set from what the preview server
     verified; `Host` rewritten to `127.0.0.1:<dev port>`, the browser's in `X-Forwarded-Host` (below); a
     write (not GET, HEAD or OPTIONS) the chat's writers' only; a stopped dev server 502. Every request and
     WebSocket carries `X-Forwarded-Prefix: /`,
@@ -4725,7 +4112,7 @@ not yet integrated, merged, in one live page, and optionally one worker's alone.
   ...` (the file holds references only, never values); nothing writes or copies a secret file. secretspec's
   1Password provider can fail to reach the desktop app (`connecting to desktop app … timed out`) where `op`
   works: `op run --env-file` is then the fallback. Nothing else starts a dev server but its keeper, which
-  wakes it in `start`'s environment (the updater merges, the hub proxies), so a server that dies is
+  wakes it in `start`'s environment (the updater merges, the preview server proxies), so a server that dies is
   started again by `start`, under the same loader.
 - **Idle sleep** (D160, `fleet/src/preview/sleep.ts`): a Vite dev server and its workerd grow while they run
   (3.5 GB after 54 hours; the idle per-worker previews held about 11 GB and the machine OOM-killed a
@@ -4733,15 +4120,15 @@ not yet integrated, merged, in one live page, and optionally one worker's alone.
   gets a **keeper**, `fleet preview DIR keeper [--per-worker WORKER]`, detached, logging to
   `DIR/preview/keeper-<worker|combined>.log`, recorded as the server's `keeper`. It runs in `start`'s whole
   environment, so dev secrets from `op run` or secretspec reach the server it starts again and are written
-  nowhere. The hub notes each use of a server, at most every 5 s, by writing the time to
+  nowhere. The preview server notes each use of a server, at most every 5 s, by writing the time to
   `DIR/preview/<worker|combined>.seen`: each request it passes, and each WebSocket frame either way (an HMR
   session at work, the dev server's updates to an open tab). Each second the keeper reads it: a server with
   no use (and no start or wake) for `FLEET_PREVIEW_IDLE_S` seconds (1800) is stopped (see *Processes*) and
   recorded with `pid` null and `asleep` its time; a request after that starts it again with the recorded
-  command, port and log. While a server is asleep, or woken and not yet answering, the hub answers 503 with
+  command, port and log. While a server is asleep, or woken and not yet answering, the preview server answers 503 with
   `Retry-After: 2`: a page that reloads itself every 2 s for a browser (`Accept: text/html`), a line of
   JSON otherwise; a root-mode preview's public port stays open while it sleeps. When a server sleeps, the
-  hub closes each browser socket piped to it with a close frame (1001), so Vite's client takes it as a clean
+  preview server closes each browser socket piped to it with a close frame (1001), so Vite's client takes it as a clean
   close and does not poll; the tab's next request gets the waking page. Vite's pings are no use: the
   `{"type":"ping"}` frame its client sends every 30 s on an open socket, and its HTTP ping after a socket
   closed (`Accept: text/x-vite-ping`, a socket on `vite-ping`), which is answered 503 and wakes nothing.
@@ -4754,7 +4141,7 @@ not yet integrated, merged, in one live page, and optionally one worker's alone.
   - *Failure* (D163): a wake that does not come up (the command exits, the port is taken, nothing answers
     in 120 s) is tried again after 1, 2 and 4 s; after the fourth try, or when the server exits while it
     runs, the keeper records `failed` (`at`, `why`, the last 30 lines of its log, colour codes removed),
-    takes itself off the record and ends. The hub then answers 502, a page that says the server couldn't
+    takes itself off the record and ends. The preview server then answers 502, a page that says the server couldn't
     start, shows that log, names the command that starts it again (`fleet preview DIR start
     [--per-worker W] [--root]`), and does not reload itself (JSON with `error`, `log`, `restart`
     otherwise). A server whose keeper is gone (it was killed, the machine rebooted) gets the same page
@@ -4770,7 +4157,7 @@ not yet integrated, merged, in one live page, and optionally one worker's alone.
     too; else by its own tree (its descendants, and on Linux the members of the session it leads), each
     pid while it is still the process first seen (TERM, then KILL after 3 s), never a process group, as
     `stopTree` does for an orphan. Before any signal the pid's start time is read again: a pid that no
-    longer has it (a reboot, a reused pid) is never signalled, and counts as gone to `status` and the hub.
+    longer has it (a reboot, a reused pid) is never signalled, and counts as gone to `status` and the preview server.
     A record from before start times were kept (1.9.37) proves a server only within 3 s of its `started`
     stamp, a keeper not at all, and an updater by its command line: the pid runs `<bun>
     /…/fleet/src/main.ts preview DIR updater`, as `start` spawns it (`/proc/PID/cmdline`; `ps -o args=` on
@@ -4810,8 +4197,8 @@ not yet integrated, merged, in one live page, and optionally one worker's alone.
   stack_from (the revset the last merge's stack came from, null for the default rule), stack_given
   (`start --stack`'s, for that start), commit, conflicts[] {path, workers[]}, error, updated, workers[] (per-worker servers), ports {combined,
   workers}}`. It is not a key of
-  `state.json`: it has three writers (the coordinator's commands, the updater, the hub), and `state.json`
-  is locked only by `fleet state` and the hub's rename. Each change is made under an exclusive `flock` on `DIR/preview.lock` and
+  `state.json`: it has three writers (the coordinator's commands, the updater), and `state.json`
+  is locked only by `fleet state`. Each change is made under an exclusive `flock` on `DIR/preview.lock` and
   written whole through a rename. A pid counts as running when the process exists, is no zombie, and still
   has its recorded start time (*Processes* above).
 - **The dev server's last error** (`status`, the page): in the last 400 lines of its log, colours
@@ -4819,7 +4206,7 @@ not yet integrated, merged, in one live page, and optionally one worker's alone.
   after the last time-stamped line that was none, so Vite's "Internal server error" and its parse error
   lead), without stack frames and box drawing, ten lines at most; none once the server logs a page reload
   or an HMR update after it.
-- **The hub**: `/f/<fleet>/preview/…` goes to the combined preview's dev server and
+- **The preview server**: `/f/<fleet>/preview/…` goes to the combined preview's dev server and
   `/f/<fleet>/preview/<worker>/…` to a per-worker one (a per-worker preview's name wins over a path of the
   combined one); `/f/<fleet>/preview` redirects (301) to the slash. HTTP is passed with the path kept for
   a server told its base (stripped, and its root redirects put back under the prefix, for one at its
@@ -4827,38 +4214,36 @@ not yet integrated, merged, in one live page, and optionally one worker's alone.
   the tailnet name), hop-by-hop headers and `Accept-Encoding` dropped. A WebSocket upgrade (Vite's HMR, on
   the `vite-hmr` protocol, its token in the query) is piped to `ws://127.0.0.1:<port><path>` both ways,
   the protocol echoed, messages queued until the dev server's end opens. HTTP and the WebSocket alike
-  carry `X-Forwarded-Prefix` (the hub's path for the server), the proxy marker, and where the browser
+  carry `X-Forwarded-Prefix` (the preview server's path for the server), the proxy marker, and where the browser
   asked: `X-Forwarded-Host` (the Host it sent), `X-Forwarded-Proto` (the scheme it came on, or on loopback
-  the `https` that `tailscale serve` sets, believed on the hub's own port only, never on a root-mode port) and
+  the `https` that `tailscale serve` sets, believed on the preview server's own port only, never on a root-mode port) and
   `Forwarded` with both, any client's own replaced, and its `X-Forwarded-Port`, `X-Forwarded-Ssl` and `X-Real-IP` dropped; the
   WebSocket carries the browser's `Origin`, as HTTP does. So an app that compares a write's `Origin` with
-  its own address finds the page's (reported 10-13: without them, every write behind the hub was refused).
+  its own address finds the page's (reported 10-13: without them, every write behind the preview server was refused).
   `Host` stays the dev server's, since Vite's `server.allowedHosts` refuses the tailnet name. A request
   that could change something there (not GET, HEAD or OPTIONS) is the chat's writers' only (403 otherwise); a missing
-  preview is 404, a stopped server 502. `POST /f/<fleet>/preview-workers` `{worker, include}` takes a worker
-  in or out under the chat's post policy (403, 415, 413, 400 as for `POST /chat`) and answers `{include,
-  exclude}`. Peer hubs' previews are not passed through.
-- **Who the dev server sees**: the hub never passes a client's `Tailscale-*` headers or
+  preview is 404, a stopped server 502.
+- **Who the dev server sees**: the preview server never passes a client's `Tailscale-*` headers or
   `X-Forwarded-For`; it sets them from what it verified (`proxiedIdentity`, HTTP and the WebSocket
   alike). A request on loopback that carries `Tailscale-User-Login` came through `tailscale serve`, which
   set it, so its `Tailscale-*` headers (and `X-Forwarded-For`) go on as they came; one from a tailnet
   peer carries `Tailscale-User-Login` as `tailscale whois` gives that peer (none when it gives none) and
   `X-Forwarded-For` its address; a plain loopback request carries none. Before this, any tailnet peer
-  that sent `Tailscale-User-Login` to the hub's tailnet address reached the dev server on loopback with
+  that sent `Tailscale-User-Login` to the preview server's tailnet address reached the dev server on loopback with
   that login, and an app that trusts loopback plus the header (the Casos app's dev guard) answered as
-  that user. An app behind the preview may trust `Tailscale-User-Login` only from the hub's proxy, which
+  that user. An app behind the preview may trust `Tailscale-User-Login` only from the preview server's proxy, which
   sets it; it must not trust loopback alone, since every proxied request arrives from loopback.
 - **Why a path, not a port per preview**: evidence from Vite 8.3.2 (create-vite 9.2.1) behind a Bun proxy
   in headless Chromium: with `--base` every URL the page asks for (`@vite/client`, `@react-refresh`, the
   sources, the pre-bundled deps) is under the base, and the HMR client opens its socket at the page's own
-  origin (`import.meta.url`: `wss` under https) and the base, so one hub port (and `tailscale serve`'s
+  origin (`import.meta.url`: `wss` under https) and the base, so one preview-server port (and `tailscale serve`'s
   https in front of it) carries every preview, with no Tailscale config per preview; the `Host` rewrite
   answers Vite's `allowedHosts`. A port per preview through `tailscale serve` would need Vite told the
   MagicDNS host (config or an undocumented environment variable), a serve port allocated and freed per
   preview, and changes to tailscaled's persistent config; it stays the way for a server whose base is
   set only in its config (Next's `basePath`), which this does not do yet. A page with hard-coded absolute
-  URLs (`/icons.svg`) misses the base either way: that is what root mode is for, on a port the hub owns
-  (no `tailscale serve` entry per preview and no change to the app), in https with the hub holding the
+  URLs (`/icons.svg`) misses the base either way: that is what root mode is for, on a port the preview server owns
+  (no `tailscale serve` entry per preview and no change to the app), in https with the preview server holding the
   machine's certificate.
 - **The page** (the view's `preview`, only when `DIR/preview.json` exists, so no trace changes): `{url
   ("preview/", or null with only per-worker ones), address, running, up, port, log, updater, every,
@@ -4867,13 +4252,13 @@ not yet integrated, merged, in one live page, and optionally one worker's alone.
   updater", and that worker's box unticked), updated, per_worker[]
   {worker, url, address, running, up, port, log, public, public_url, public_error}, public, public_url,
   public_error}`, `public` the root-mode public port or null, `public_url` the `https://<MagicDNS
-  name>:<public>/` the running hub serves it at (null while it serves none) and `public_error` the
-  running hub's word on it. The Fleet view's Preview block links a root-mode preview (and each per-worker
+  name>:<public>/` the running preview server serves it at (null while it serves none) and `public_error` the
+  running preview server's word on it. The Fleet view's Preview block links a root-mode preview (and each per-worker
   one) at `public_url` (an `https:` address only) and shows `The hub cannot serve https on port N:
   <public_error>`. It also shows the link, a box
-  per worker's workspace (disabled for a viewer who may not write; put back when the hub refuses), the
+  per worker's workspace (disabled for a viewer who may not write; put back when the page's server refuses), the
   conflicts with the workers' names, the build error and each per-worker preview; the Links view lists
-  the combined and per-worker links. The hub's view of a fleet is recomputed when `state.json` or
+  the combined and per-worker links. The page's view of a fleet is recomputed when `state.json` or
   `preview.json` changes, so the stream carries the updater's news.
 
 ## Rules as commands (`fleet brief`, `fleet turn`)
@@ -4994,24 +4379,22 @@ recommendation attached.
 | `fleets.py gate take/free`, `name` | `REGISTRY/gate/gate.json` (under `REGISTRY/gate/gate.lock`; the TypeScript fleet also `queue.json` and, from `gate run`, `runs.jsonl`), `REGISTRY/<fleet>.json` |
 | `serve_dashboard.py` | `DIR/server.json`, `DIR/server.log`, `REGISTRY/<fleet>.json` |
 | `fleet serve` | `REGISTRY/<fleet>.json` (removed with `--stop`); with `--take-over`, when it displaced a host that ran: `DIR/state.json` (one event, `updated`) and one line in `DIR/chat.jsonl` (TypeScript only) |
-| `fleet hub` | `REGISTRY/hub/hub.json` while it runs (it reads `REGISTRY/hub/config.json`, written by hand); `REGISTRY/hub/tokens.json` at start and when a token rotates; `DIR/chat.jsonl` on a post, and on a post to the manager's page each addressed coordinator's `DIR/chat.jsonl`; the manager's `DIR/chat.jsonl` (the courier's mirrored answers); on an allow-once to a permission, in this order, the root's `~/.claude/tstack-grants/<hash>/tstack-grants-issued.json`, `<root>/.claude/settings.local.json` (and its folder) or `<root>/.claude/tstack-grants.json`, `DIR/grants.jsonl`, and for a rule granted anew the root's `tstack-grants-ended.json` beside it (`why: superseded`); on an expiry, the settings file, `tstack-grants-ended.json` and `DIR/grants.jsonl`; on a page rename, `DIR/state.json` (a worker's `name`, `name_by`, `updated`, under the ledger's lock) or `REGISTRY/overrides/<hash>.json` and `REGISTRY/<fleet>.json` |
 | the plugin's hook (grant removal) | `<root>/.claude/settings.local.json` or `<root>/.claude/tstack-grants.json`, the root's `~/.claude/tstack-grants/<hash>/tstack-grants-ended.json` (the take-back, with its `why`), `DIR/grants.jsonl` (`remove` lines), `DIR/grants.taken/` |
 | the plugin's hook (`fleet_permission_denied`), through `fleet state DIR decision ID --kind refusal\|permission` | `DIR/state.json` (`refusals`, or for a spawn `decisions`; `events`, `updated`), `DIR/index.html`; for a draft one line in `DIR/chat.jsonl` from `fleet-hub`, or one line to the host's session's socket when its watch is not running; the session's `transient-refusals` and `refusal-notes` folders in the plugin's data folder |
-| the hub (its wake timer, `POST wake`) | `REGISTRY/hub/wakes.json`; one line to the session's socket, `<FLEET_CC_SOCKS>/<pid>.sock`, which is Claude Code's, not the fleet's |
 | `usage.py capture` | `REGISTRY/usage/reading.json` |
 | the plugin's hook (`fleet_heartbeat`) | `DIR/heartbeats/<session>[.<agent>].json` |
 | the plugin's hook (`fleet_listen_guard`, `fleet_idle_guard`, `fleet_chat_nudge`, `fleet_said_once`, `fleet_news`) | nothing in DIR; the session's `fleet-guard`, `fleet-idle`, `fleet-nudge`, `said-once` and `fleet-news` state in the plugin's data folder |
 | `news post`, and a `state decision --kind notice` once its ledger is written, when a manager is served | `REGISTRY/news/news.jsonl` (under its `flock`) |
 | `news read` | `REGISTRY/news/read/<fleet>` when the cursor moves |
 | the plugin's hook (`onepw_watch`, `onepw_hold`) | `REGISTRY/onepw/locked.json` (under `REGISTRY/onepw/onepw.lock`), `REGISTRY/onepw/locked.json.broken` (a state that did not read, set aside), `REGISTRY/onepw/onepw.log` |
-| the hub (its settle timer, `POST onepw/unlocked`), `fleet onepw unlocked` outside Claude Code | `REGISTRY/onepw/locked.json` (`cleared`, `lapsed` and `told` set, rows dropped, kinds pruned, and the file removed when nothing is left; under `REGISTRY/onepw/onepw.lock`), `REGISTRY/onepw/locked.json.broken`, `REGISTRY/onepw/onepw.log`, and for each held fleet the hub's notice: its `DIR/chat.jsonl` (under the store's lock), or one line to its session's socket, `<FLEET_CC_SOCKS>/<pid>.sock`, when its host's watch is dead |
+| `fleet onepw unlocked` outside Claude Code | `REGISTRY/onepw/locked.json` (`cleared`, `lapsed` and `told` set, rows dropped, kinds pruned, and the file removed when nothing is left; under `REGISTRY/onepw/onepw.lock`), `REGISTRY/onepw/locked.json.broken`, `REGISTRY/onepw/onepw.log`, and for each held fleet the notice: its `DIR/chat.jsonl` (under the store's lock), or one line to its session's socket, `<FLEET_CC_SOCKS>/<pid>.sock`, when its host's watch is dead |
 | `state`, on a write that numbers a row or `approval add next` (TypeScript only) | `REGISTRY/numbers/numbers.json` (under `REGISTRY/numbers/numbers.lock`), when `REGISTRY` exists |
 | `fleet ws add` / `prune --apply` | `DIR/state.json` (`workspaces`, `events`, `updated`), `DIR/index.html`; the workspace directory made / moved to the trash with its note, `TRASH/<repo>/<entry>` and `<entry>.json` (a shared fleet's `add` writes nothing); whatever the repo's hooks (`.fleet/ws-pre-add`, `.fleet/ws-add` or `devenv-run --prepare`, `.fleet/ws-pre-remove`) write |
 | `fleet ws restore` / `gc` | the entry's folder moved back and a jj workspace added there (`jj workspace add`, `jj sparse reset`), its note removed / each entry past the age deleted, folder and note |
 | `fleet ws add --reuse` | `DIR/state.json` (`workspaces`, `events`, `updated`), `DIR/index.html`; a new change in the workspace (`jj new`) |
 | `fleet ws split` | `DIR/state.json` (`events`, `updated`), `DIR/index.html`; the default workspace's `@` split in two |
 | `fleet preview start` / `stop` / `set` | `DIR/state.json` (`workspaces` with the preview's row on its first start, `preview` by `set`, `events`, `updated`), `DIR/index.html`; `DIR/preview.json` (under `DIR/preview.lock`); `DIR/preview/*.log`; the `<repo>-preview` workspace (made once); a node_modules install in a workspace that has none |
-| `fleet preview include` / `exclude`, the hub's `POST preview-workers` | `DIR/preview.json` |
+| `fleet preview include` / `exclude` | `DIR/preview.json` |
 | `fleet preview`'s updater | `DIR/preview.json` when the merge changed; the preview workspace's @ (rebased, also for each trial of a worker that may conflict) and its files (`update-stale`, a clean merge only); jj's operation log (each worker snapshot that records an edit); `DIR/chat.jsonl` (one `[hub]` line when a worker is left out, the same worker and reason not again within 10 minutes) |
 | `fleet ws prune --apply` of the preview | its directory moved to the trash, its merge commit abandoned, `DIR/preview.json` removed |
 
@@ -5082,7 +4465,7 @@ Stage 2 runs `run.py check` on each trace in `oracle/traces/` with
 or sets `FLEET_ORACLE_IMPL='{"state": "fleet state", "chat": "fleet chat", "fleets": "fleet fleets", "news": "fleet news", "subst": {"<its dir>": "$SKILL"}}'`
 for `test_corpus.py` and `test_model.py`. The corpus: `ledger-lifecycle`, `decisions`, `hold`,
 `plan-and-grill`, `chat`, `manager` (written by hand from the tests), `manager-news` (the manager's
-`--fleets` watch and `fleets waiting`), `delivered` (what the hub delivered: the marks, the manager's
+`--fleets` watch and `fleets waiting`), `delivered` (what was delivered: the marks, the manager's
 watch and news leaving it out), `emptied` (open-7), `workspaces` (`set --workspaces`, the shared
 fleet's refusal of lanes that meet, the isolated fleet's warning, `show`, validation, a render),
 `question-limit` (a decision's question limit and its warnings), `grill-options` (a grilling question's

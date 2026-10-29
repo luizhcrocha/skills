@@ -2,7 +2,7 @@
   "name": "@tstack/fleet",
   "private": true,
   "type": "module",
-  "description": "The fleet in TypeScript on Bun and Effect 4: its CLIs (state, chat, fleets) matched against the Python oracle, and the hub that serves every fleet of the machine and of the tailnet (D13 stages 2 and 3).",
+  "description": "The fleet in TypeScript on Bun and Effect 4: its CLIs (state, chat, fleets) matched against the Python oracle, the machine's registry of which session hosts which fleet (`fleet serve`), and the preview server (`fleet preview serve`). The pages are the cloud's, written by the office host.",
   "bin": { "fleet": "./bin/fleet" },
   "engines": { "bun": ">=1.4.2" },
   "packageManager": "bun@1.4.2",
