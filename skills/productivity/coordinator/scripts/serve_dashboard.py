@@ -247,13 +247,13 @@ PASSED_HEADERS = {"accept", "content-type", "content-length", "last-event-id", "
                   "tailscale-user-name", "tailscale-user-profile-pic"}
 DROPPED_HEADERS = {"connection", "keep-alive", "transfer-encoding", "cache-control", "server", "date"}
 BODY_SANDBOX = "sandbox allow-scripts allow-popups allow-popups-to-escape-sandbox"
-# What a decision's body may load and run (fleet/src/hub/body-policy.ts): no script, handler, frame or form;
+# What a decision's body may load and run (fleet/page/src/body-policy.ts): no script, handler, frame or form;
 # its styles, the page's fonts and its pictures.
 BODY_POLICY = (BODY_SANDBOX + "; default-src 'none'; script-src 'none'; style-src 'unsafe-inline' https://fonts.googleapis.com; "
                "img-src data: blob: 'self'; font-src data: https://fonts.gstatic.com 'self'; object-src 'none'; "
                "base-uri 'none'; form-action 'none'")
 # Every other file of DIR but the page (DIR/index.html): agents write there, so a file opened by itself has no
-# origin and runs no script, whatever its type (fleet/src/hub/body-policy.ts's FILE_POLICY).
+# origin and runs no script, whatever its type.
 FILE_POLICY = "sandbox; script-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'"
 # The types a file under DIR/decisions/ keeps as served; anything else there (a body) is plain text.
 SHOWN_TYPES = ("image/", "font/", "audio/", "video/")

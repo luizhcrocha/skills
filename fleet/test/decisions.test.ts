@@ -12,7 +12,6 @@ import { beforeEach, describe, expect, test } from "bun:test";
 import { messageOf, type Message } from "../src/chat/store.ts";
 import { answeredAt } from "../src/health.ts";
 import { asArray, asObject, type JsonObject } from "../src/json.ts";
-import { answerRefusal } from "../src/ledger/answers.ts";
 import { callRev } from "../src/ledger/permission.ts";
 import { baseEnv, fleet, readJson, tmp, type Environment, type Ran } from "./support.ts";
 
@@ -1115,56 +1114,6 @@ describe("a failed action", () => {
     const warned = run("event", "y").stderr;
     expect(warned).toContain("the user answered D1");
     expect(warned).not.toContain("and it failed");
-  });
-});
-
-describe("answers", () => {
-  test("an open item takes an answer", () => {
-    ok("decision", ...SCHEMA);
-    expect(answerRefusal(root, "d1", "B: keep both")).toBeUndefined();
-    expect(answerRefusal(root, "d1", "None of these: split the table instead")).toBeUndefined();
-  });
-
-  test("an unknown or closed item refuses with the reason", () => {
-    expect(answerRefusal(root, "d1", "A")).toContain("unknown decision");
-    ok("decision", ...SCHEMA);
-    ok("decision", "d1", "--withdraw", "the worker found the answer in the migration notes");
-    const said = answerRefusal(root, "d1", "A") ?? "";
-    expect(said).toContain("withdrawn");
-    expect(said).toContain("the worker found the answer in the migration notes");
-  });
-
-  test("a secret takes a reference or an item name and never a value", () => {
-    ok("decision", "d1", "--kind", "secret", "--title", "Neo4j password", "--question", "Where is the Neo4j password?", "--why", "w", "--secret", "NEO4J_PASSWORD", "--manual", "secretspec set NEO4J_PASSWORD");
-
-    for (const fine of [
-      "op://Engineering/Neo4j Aura/password",
-      "op://dev/abcdefghijklmnopqrstuvwxyz/section/credential",
-      "Neo4j Aura (prod)",
-      "NEO4J_PASSWORD in the Engineering vault",
-      "Set by hand.",
-    ]) {
-      expect(answerRefusal(root, "d1", fine), fine).toBeUndefined();
-    }
-
-    for (const value of [
-      "sk-ant-api03-Zk9xQ2",
-      "ghp_16C7e42F292c6912E7710c838347Ae178B4a",
-      "xoxb-12345-abcdef",
-      "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.abc",
-      "f3a9c1d27b6e4f0a8d5c2b1e9f7a6d3c",
-      "AKIAIOSFODNN7EXAMPLE",
-      "the password is hunter2hunter2hunter2",
-      "-----BEGIN PRIVATE KEY-----",
-      "x".repeat(300),
-    ]) {
-      expect(answerRefusal(root, "d1", value), value).toContain("never the value");
-    }
-  });
-
-  test("other kinds take any text", () => {
-    ok("decision", "d1", "--kind", "input", "--title", "T", "--question", "q", "--why", "w");
-    expect(answerRefusal(root, "d1", "commit f3a9c1d27b6e4f0a8d5c2b1e9f7a6d3c is the one")).toBeUndefined();
   });
 });
 

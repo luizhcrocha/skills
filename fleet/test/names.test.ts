@@ -5,7 +5,7 @@ import { describe, expect, test } from "bun:test";
 import { withFleetDir } from "../src/cli/run.ts";
 import { machineOf } from "../src/world.ts";
 import { aliasesAfter, dropsNumber, fleetName, unnumbered } from "../src/registry.ts";
-import { isHubProcess } from "../src/hub/server.ts";
+import { isHubProcess } from "../src/hub/preview-server.ts";
 
 describe("a fleet's name from its session's", () => {
   test("the number Claude Code puts before a restarted session goes", () => {

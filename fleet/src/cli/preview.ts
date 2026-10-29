@@ -40,7 +40,8 @@ import { fileURLToPath } from "node:url";
 import * as Effect from "effect/Effect";
 
 import { stampOf } from "../clock.ts";
-import { readPortStates, runningHub } from "../hub/server.ts";
+import { readPortStates } from "../hub/preview-ports.ts";
+import { runningPreviewServer } from "../hub/preview-server.ts";
 import { readTailnetSync, tailscaleBin, type Tailnet } from "../hub/tailnet.ts";
 import { PreviewError, Refusal } from "../errors.ts";
 import { exists, isDir, movedRefusal, readText, resolvePath } from "../files.ts";
@@ -328,7 +329,7 @@ function publicLine(machine: Machine, server: DevServer): string | undefined {
   if (port === null) return undefined;
   const address = publicUrl(machine, server) ?? `port ${port}, no https address: this machine has no MagicDNS name (is Tailscale running?)`;
 
-  return `  public: ${address}; ${hubSays(machine, port, running(server))}\n`;
+  return `  public: ${address}; ${serverSays(machine, port, running(server))}\n`;
 }
 
 /** A root-mode dev server's `https://<MagicDNS name>:<port>/`, or undefined (not in root mode, or no MagicDNS name). */
@@ -345,33 +346,33 @@ function previewAt(machine: Machine, server: DevServer | null, hub: string, dir:
   return own === undefined ? { kind: "shared", url: hub, dir } : { kind: "own", url: own };
 }
 
-/** What the running hub says of a public port. */
-function hubSays(machine: Machine, port: number, on: boolean): string {
+/** What the running preview server says of a public port. */
+function serverSays(machine: Machine, port: number, on: boolean): string {
   const home = machine.registry.place.home;
-  const hub = runningHub(home);
+  const server = runningPreviewServer(home);
 
-  if (hub === undefined) return "no hub runs: `fleet hub` serves it";
+  if (server === undefined) return "no preview server runs: `fleet preview serve` serves it";
 
-  if (!on) return "the hub listens on it while the dev server runs";
-  const state = readPortStates(home, hub.pid)?.find((p) => p.port === port);
+  if (!on) return "the preview server listens on it while the dev server runs";
+  const state = readPortStates(home, server)?.find((p) => p.port === port);
 
-  if (state === undefined) return "the hub does not listen on it yet (it looks every second)";
+  if (state === undefined) return "the preview server does not listen on it yet (it looks every second)";
 
-  if (state.error !== null) return `the hub cannot serve https on port ${port}: ${state.error}`;
+  if (state.error !== null) return `the preview server cannot serve https on port ${port}: ${state.error}`;
 
-  return `the hub serves it over https (on loopback${state.tailnet === null ? "" : " and the tailnet"})`;
+  return `the preview server serves it over https (on loopback${state.tailnet === null ? "" : " and the tailnet"})`;
 }
 
-/** Wait (at most 3 s) until the running hub has taken up a new public port, or said it cannot. */
-function waitHub(machine: Machine, port: number | null): void {
+/** Wait (at most 3 s) until the running preview server has taken up a new public port, or said it cannot. */
+function waitServer(machine: Machine, port: number | null): void {
   const home = machine.registry.place.home;
-  const hub = runningHub(home);
+  const server = runningPreviewServer(home);
 
-  if (port === null || hub === undefined) return;
+  if (port === null || server === undefined) return;
   const deadline = Date.now() + 3000;
 
   while (Date.now() < deadline) {
-    const state = readPortStates(home, hub.pid)?.find((p) => p.port === port);
+    const state = readPortStates(home, server)?.find((p) => p.port === port);
 
     if (state !== undefined && (state.loopback || state.error !== null)) return;
     Bun.sleepSync(100);
@@ -548,7 +549,7 @@ function startCombined(machine: Machine, root: string, raw: JsonObject, given: M
     out.out(`preview: ${address}\n`);
     out.out(`  dev server: ${ours.cmd} (pid ${ours.pid}, port ${ours.port}${cameNote(came)}), log ${ours.log}\n`);
     out.out(`  updater: pid ${updater?.pid ?? "?"}, every ${everyMs(machine) / 1000} s; merged: ${workers.length === 0 ? "the stack alone" : workers.join(", ")}\n`);
-    waitHub(machine, ours.public);
+    waitServer(machine, ours.public);
     out.out(publicLine(machine, ours) ?? "");
 
     const said = cameLine(came, ours, root, since);
@@ -641,7 +642,7 @@ function startPerWorker(machine: Machine, root: string, raw: JsonObject, worker:
     if (fault !== undefined) return yield* Effect.fail(fault);
     out.out(`preview of ${cand.id}: ${address}\n`);
     out.out(`  dev server: ${server.cmd} (pid ${server.pid}, port ${server.port}${cameNote(came)}) in ${cand.path}, log ${server.log}\n`);
-    waitHub(machine, server.public);
+    waitServer(machine, server.public);
     out.out(publicLine(machine, server) ?? "");
     const said = cameLine(came, server, root, since);
 

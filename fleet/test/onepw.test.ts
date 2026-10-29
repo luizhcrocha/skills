@@ -782,6 +782,6 @@ describe("fleet onepw", () => {
     expect(help).toContain("usage: fleet onepw [-h] [unlocked [--note TEXT]]");
     expect(help).toContain("Refused inside a Claude Code session");
     expect(help).toContain("Every 15 min the hook lets one held command of a locked kind through");
-    expect(fleet(["nope"], env).stderr).toContain("usage: fleet {version,ls,tell,state,chat,fleets,news,onepw,ws,");
+    expect(fleet(["nope"], env).stderr).toContain("usage: fleet {version,ls,state,chat,fleets,news,onepw,ws,");
   });
 });

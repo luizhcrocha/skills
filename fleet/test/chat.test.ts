@@ -14,13 +14,11 @@ import { batchReminders, openBatches, remindPeriod } from "../src/chat/batches.t
 import { FleetNews, firstLine } from "../src/chat/news.ts";
 import { Settle, settleOf } from "../src/chat/watch.ts";
 import { ownerPath, readOwner } from "../src/chat/watchers.ts";
-import { hubRecordPath } from "../src/hub/server.ts";
 import { readChat, type Message, type Part } from "../src/chat/store.ts";
 import { parseInstant, stampOf } from "../src/clock.ts";
 import { ChatError } from "../src/errors.ts";
 import { asArray, asNumber, asObject, asString, parseJson, type Json, type JsonObject } from "../src/json.ts";
 import { startedOf } from "../src/procs.ts";
-import { wakesPath, type Wake } from "../src/wake.ts";
 import { machineOf, type Machine } from "../src/world.ts";
 import { baseEnv, FLEET, fleet, Lines, machine, now, readJson, sleep, start, startTty, tmp, type Environment, type Ran } from "./support.ts";
 
@@ -2015,115 +2013,6 @@ describe("the manager relays the unheard", () => {
     const answered = append(m, billing.dir, { sender: "coordinator", text: "here", re: 1 }, now());
     expect(answered).not.toBeInstanceOf(ChatError);
     expect(listening(m, billing.dir).unread).toBe(0);
-  });
-});
-
-describe("the manager's watch leaves the unheard to a hub that runs", () => {
-  test("while a hub runs the fleet is not named, the hub wakes its session itself; once no hub runs it is named, as before", async () => {
-    asManager(["billing", "billing"]);
-    const billing = m.registry.live().find((e) => e.id === "billing");
-
-    if (billing === undefined) throw new Error("billing is not served");
-    append(m, billing.dir, { sender: "user", text: "are you there?", allowUser: true }, now());
-    const record = hubRecordPath(env["FLEET_HOME"] ?? "");
-    mkdirSync(join(record, ".."), { recursive: true });
-    // A hub's record naming a live process: this test's own.
-    writeFileSync(record, JSON.stringify({ pid: process.pid, port: 7420, url: "http://127.0.0.1:7420/" }));
-    const { proc, lines } = start(["chat", root, "watch", "--as", "manager", "--all", "--once"], { ...env, FLEET_CHECK_S: "0.2", FLEET_UNHEARD_S: "0" });
-    procs.push(proc);
-    await sleep(1500);
-    expect(proc.exitCode).toBeNull();
-    expect(existsSync(join(root, "watch-manager.told"))).toBe(false);
-    rmSync(record);
-    expect((await lines.next()).startsWith("! billing does not read its chat: 1 message(s) from the user since #0")).toBe(true);
-    expect(await proc.exited).toBe(0);
-  });
-
-  /** billing, served, with one message of the user's that no watch read, while a hub's record names a live
-   * process (this test's own): its DIR, and the message's id. */
-  function deafUnderHub() {
-    asManager(["billing", "billing"]);
-    const billing = m.registry.live().find((e) => e.id === "billing");
-
-    if (billing === undefined) throw new Error("billing is not served");
-    const sent = append(m, billing.dir, { sender: "user", text: "are you there?", allowUser: true }, now());
-
-    if (sent instanceof ChatError) throw new Error(sent.reason);
-    const record = hubRecordPath(env["FLEET_HOME"] ?? "");
-    mkdirSync(join(record, ".."), { recursive: true });
-    writeFileSync(record, JSON.stringify({ pid: process.pid, port: 7420, url: "http://127.0.0.1:7420/" }));
-
-    return { dir: billing.dir, first: sent.id };
-  }
-
-  /** What the hub did for the fleet at `dir`, as it keeps it in `REGISTRY/hub/wakes.json`. */
-  function hubWoke(dir: string, wakes: readonly Wake[]): void {
-    writeFileSync(wakesPath(m), JSON.stringify({ [dir]: { fleet: "billing", wakes } }));
-  }
-
-  const ago = (minutes: number): string => stampOf(new Date(Date.now() - minutes * 60_000));
-
-  const TOLD = "! billing does not read its chat: 1 message(s) from the user since #0";
-
-  const quick = (): Environment => ({ ...env, FLEET_CHECK_S: "0.2", FLEET_UNHEARD_S: "0" });
-
-  test("a hub whose wake works is left to it; once its last wake for the fleet failed, it is no hub to that fleet and the manager is told", async () => {
-    const { dir, first } = deafUnderHub();
-    // One wake written a minute ago, and the fleet still deaf: the hub goes on waking it.
-    hubWoke(dir, [{ at: ago(1), first, by: "hub", error: null }]);
-    const { proc, lines } = start(["chat", root, "watch", "--as", "manager", "--all", "--once"], quick());
-    procs.push(proc);
-    await sleep(1200);
-    expect([proc.exitCode, existsSync(join(root, "watch-manager.told"))]).toEqual([null, false]);
-    // The session went: the hub records a wake it could not write.
-    hubWoke(dir, [
-      { at: ago(1), first, by: "hub", error: null },
-      { at: ago(0), first, by: "hub", error: "the session is gone: its process no longer runs" },
-    ]);
-    expect((await lines.next()).startsWith(TOLD)).toBe(true);
-    expect(await proc.exited).toBe(0);
-  });
-
-  test("a hub that wrote its three wakes for the message that waits first has done what it does: the manager is told", async () => {
-    const { dir, first } = deafUnderHub();
-    hubWoke(dir, [
-      { at: ago(200), first, by: "hub", error: null },
-      { at: ago(190), first, by: "hub", error: null },
-      { at: ago(160), first, by: "hub", error: null },
-    ]);
-    const { proc, lines } = start(["chat", root, "watch", "--as", "manager", "--all", "--once"], quick());
-    procs.push(proc);
-    expect((await lines.next()).startsWith(TOLD)).toBe(true);
-    expect(await proc.exited).toBe(0);
-  });
-
-  test("three wakes of the hub for an earlier message, or two for this one and the user's own, are not that: the hub still wakes", async () => {
-    const { dir, first } = deafUnderHub();
-    hubWoke(dir, [
-      { at: ago(200), first: first + 7, by: "hub", error: null },
-      { at: ago(190), first: first + 7, by: "hub", error: null },
-      { at: ago(160), first: first + 7, by: "hub", error: null },
-      { at: ago(150), first, by: "hub", error: null },
-      { at: ago(140), first, by: "hub", error: null },
-      { at: ago(130), first, by: "user", error: null },
-    ]);
-    const { proc } = start(["chat", root, "watch", "--as", "manager", "--all", "--once"], quick());
-    procs.push(proc);
-    await sleep(1200);
-    expect([proc.exitCode, existsSync(join(root, "watch-manager.told"))]).toEqual([null, false]);
-  });
-
-  test("a hub that spent the hour's three wakes on the fleet cannot wake it now: the manager is told", async () => {
-    const { dir, first } = deafUnderHub();
-    hubWoke(dir, [
-      { at: ago(50), first: first + 7, by: "hub", error: null },
-      { at: ago(40), first, by: "user", error: null },
-      { at: ago(20), first, by: "hub", error: null },
-    ]);
-    const { proc, lines } = start(["chat", root, "watch", "--as", "manager", "--all", "--once"], quick());
-    procs.push(proc);
-    expect((await lines.next()).startsWith(TOLD)).toBe(true);
-    expect(await proc.exited).toBe(0);
   });
 });
 

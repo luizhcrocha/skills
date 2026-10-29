@@ -13,7 +13,7 @@ import { join } from "node:path";
 
 import puppeteer, { type Browser, type Frame, type Page } from "puppeteer-core";
 
-import { servedBody } from "../../src/hub/body-policy.ts";
+import { servedBody } from "../src/body-policy.ts";
 import { coordinatorChat } from "./fixtures.ts";
 import { serveHarness, type Harness } from "./harness.ts";
 import { D30_BODY, marksView } from "./marks-fixtures.ts";

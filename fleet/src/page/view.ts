@@ -26,7 +26,7 @@ import { lastError, logTail } from "../preview/devserver.ts";
 import { readRecord, serverProc, updaterProc, type DevServer } from "../preview/record.ts";
 import { runs } from "../preview/tracked.ts";
 import { readPortStates, type PortState } from "../hub/preview-ports.ts";
-import { runningHub } from "../hub/server.ts";
+import { runningPreviewServer } from "../hub/preview-server.ts";
 import { candidates, everyMs, included, said } from "../preview/updater.ts";
 import { filePathOf, filesRoot, linkKind, reachOf, servedRel } from "../ledger/links.ts";
 import { numberState, pyStr } from "./number.ts";
@@ -335,11 +335,11 @@ function orphanJson(o: Orphan): JsonObject {
   return { pid: o.pid, started: o.started, command: o.command, age: o.age, rss: o.rss, cwd: o.cwd, workspace: o.workspace, session: o.session, fleet: o.fleet };
 }
 
-/** What the running hub says of a root-mode preview's public port: the https address it serves it at, or why it cannot serve it. */
+/** What the running preview server says of a root-mode preview's public port: the https address it serves it at, or why it cannot serve it. */
 function publicState(machine: Machine, port: number | null): Pick<PortState, "url" | "error"> {
   const home = machine.registry.place.home;
-  const hub = port === null ? undefined : runningHub(home);
-  const state = hub === undefined ? undefined : readPortStates(home, hub.pid)?.find((p) => p.port === port);
+  const server = port === null ? undefined : runningPreviewServer(home);
+  const state = server === undefined ? undefined : readPortStates(home, server)?.find((p) => p.port === port);
 
   return { url: state?.url ?? null, error: state?.error ?? null };
 }

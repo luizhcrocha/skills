@@ -316,7 +316,7 @@ describe("root mode", () => {
     expect(preview("start", "--root", "--cmd", STUB).code).toBe(0);
     const pub = String(record().server?.public);
     const status = preview("status").stdout;
-    expect(status).toContain(`public: https://box.example.ts.net:${pub}/; no hub runs`);
+    expect(status).toContain(`public: https://box.example.ts.net:${pub}/; no preview server runs`);
     expect(status).not.toContain("127.0.0.2");
     expect(status).not.toMatch(new RegExp(`http://[^ ]*:${pub}/`));
     expect(status).not.toContain("secure context");

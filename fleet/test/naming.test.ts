@@ -1,8 +1,7 @@
 /**
- * Where names come from: a worker's from the coordinator (`agent --name`), the user (the page), else its
- * subagent's meta.json (`name`, else the Agent tool's `description`); a fleet's from the page, its session's
- * /rename, the live session record Claude Code keeps (`sessions/<pid>.json`, a derived name included) or the
- * transcript's AI title. And the ledger's lock, which the CLI and the hub's rename both take.
+ * Where names come from: a worker's from the coordinator (`agent --name`), else its subagent's meta.json
+ * (`name`, else the Agent tool's `description`); a fleet's from the page, its session's /rename, the live
+ * session record Claude Code keeps (`sessions/<pid>.json`, a derived name included) or the transcript's AI title.
  */
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -10,10 +9,8 @@ import { join } from "node:path";
 import { beforeEach, describe, expect, test } from "bun:test";
 
 import { asArray, asObject, type JsonObject } from "../src/json.ts";
-import { lockLedger } from "../src/ledger/store.ts";
-import { renameAgent } from "../src/ledger/rename.ts";
 import type { Registry } from "../src/registry.ts";
-import { baseEnv, fleet, FLEET, machine, readJson, tmp, type Environment, type Ran } from "./support.ts";
+import { baseEnv, fleet, machine, readJson, tmp, type Environment, type Ran } from "./support.ts";
 
 const PROJECT = "-home-x-repo";
 
@@ -101,24 +98,6 @@ describe("a worker's name", () => {
     expect(named("a2")).toEqual(["second", "coordinator"]);
   });
 
-  test("a session title change does not overwrite a name the user gave", () => {
-    meta("t1", { description: "Map fleet naming" });
-    ok("agent", "a1", "--task", "t", "--milestone", "m1", "--task-id", "t1", "--name", "mapper");
-    expect(renameAgent(machine(env), root, "a1", "Naming map")).toEqual({ name: "Naming map", name_by: "user" });
-    meta("t1", { description: "A new title", name: "renamed" });
-    ok("event", "tick");
-    ok("agent", "a1", "--report", "r");
-    expect(named("a1")).toEqual(["Naming map", "user"]);
-  });
-
-  test("an empty name clears the user's and the worker goes back to its session's", () => {
-    meta("t1", { description: "Map fleet naming" });
-    ok("agent", "a1", "--task", "t", "--milestone", "m1", "--task-id", "t1");
-    renameAgent(machine(env), root, "a1", "Naming map");
-    expect(renameAgent(machine(env), root, "a1", "  ")).toEqual({ name: "Map fleet naming", name_by: "session" });
-    expect(named("a1")).toEqual(["Map fleet naming", "session"]);
-  });
-
   test("an empty --name puts the id back, and the session's name follows", () => {
     ok("agent", "a1", "--task", "t", "--milestone", "m1", "--task-id", "t1", "--name", "mapper");
     ok("agent", "a1", "--name", "");
@@ -152,15 +131,6 @@ describe("a worker's name", () => {
     expect(fleet(["state", elsewhere, "agent", "a1", "--task", "t", "--milestone", "m1", "--task-id", "t1", "--no-render"], env).code).toBe(0);
     const a = asObject(asArray(readJson(join(elsewhere, "state.json"))["agents"])?.[0]) ?? {};
     expect([a["name"], a["name_by"]]).toEqual(["Fleet advisor: review ADR 0040", "session"]);
-  });
-
-  test("a user's name that a mention could not tell apart is refused, and nothing is written", () => {
-    ok("agent", "a1", "--task", "t", "--milestone", "m1");
-    ok("agent", "a2", "--task", "t", "--milestone", "m1", "--name", "mapper");
-    const refused = renameAgent(machine(env), root, "a1", "Mapper");
-    expect("why" in refused ? refused.why : "").toContain("a mention could not tell them apart");
-    expect(named("a1")).toEqual(["a1", undefined]);
-    expect(renameAgent(machine(env), root, "zz", "x")).toEqual({ why: "no worker 'zz'" });
   });
 });
 
@@ -252,35 +222,5 @@ describe("a fleet's name", () => {
     expect(registry.rename(root, "user")).toEqual({ why: "'user' cannot name a fleet; the chat keeps ['coordinator', 'manager', 'user'] for itself" });
     expect(registry.rename(root, "fleet-hub")).toEqual({ why: "'fleet-hub' cannot name a fleet; the hub signs its own lines in a chat with it" });
     expect(now()).toContainEqual(["p", null]);
-  });
-});
-
-describe("the ledger's lock", () => {
-  test("a CLI write and a page rename that meet both land", async () => {
-    ok("agent", "a1", "--task", "t", "--milestone", "m1");
-    const before = await Bun.file(join(root, "state.json")).text();
-    const release = lockLedger(root);
-
-    expect(release).toBeDefined();
-
-    // Both writers start while the lock is held: each must wait, and neither may lose the other's change.
-    const cli = Bun.spawn([FLEET, "state", root, "agent", "a1", "--report", "found it", "--no-render"], { env, stdout: "pipe", stderr: "pipe" });
-
-    const rename = `import { renameAgent } from ${JSON.stringify(join(import.meta.dir, "..", "src", "ledger", "rename.ts"))};
-import { machineOf } from ${JSON.stringify(join(import.meta.dir, "..", "src", "world.ts"))};
-const m = machineOf(() => new Date(), (name) => process.env[name]);
-console.log(JSON.stringify(renameAgent(m, ${JSON.stringify(root)}, "a1", "Finder")));`;
-
-    const page = Bun.spawn(["bun", "-e", rename], { env, stdout: "pipe", stderr: "pipe" });
-
-    await Bun.sleep(700);
-    expect(await Bun.file(join(root, "state.json")).text()).toBe(before);
-    expect([cli.exitCode, page.exitCode]).toEqual([null, null]);
-    release?.();
-
-    expect(await cli.exited).toBe(0);
-    expect(await page.exited).toBe(0);
-    expect(await new Response(page.stdout).text()).toBe(`${JSON.stringify({ name: "Finder", name_by: "user" })}\n`);
-    expect([row("a1")["report"], ...named("a1")]).toEqual(["found it", "Finder", "user"]);
   });
 });

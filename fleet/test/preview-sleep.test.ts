@@ -1,6 +1,6 @@
 /**
- * The preview's idle sleep (D160), through `fleet preview` and the hub: a per-worker dev server no request
- * reaches for `FLEET_PREVIEW_IDLE_S` is stopped and recorded asleep; the next request through the hub gets
+ * The preview's idle sleep (D160), through `fleet preview` and the preview server: a per-worker dev server no request
+ * reaches for `FLEET_PREVIEW_IDLE_S` is stopped and recorded asleep; the next request through the preview server gets
  * the "starting" page and wakes it, with the same command, port and environment; a server named in
  * `FLEET_PREVIEW_AWAKE` (by worker, by public port; 7501 by default) never sleeps; Vite's ping wakes nothing.
  *
@@ -19,7 +19,7 @@ import { isRunning } from "../src/preview/devserver.ts";
 import { readRecord, updateRecord, type WorkerServer } from "../src/preview/record.ts";
 import { awakeNames, exempt, FAILED_LINES } from "../src/preview/sleep.ts";
 import { lstartOf, runs, startedAt, treeRows } from "../src/preview/tracked.ts";
-import { startHub, type Running } from "../src/hub/server.ts";
+import { startPreviewServer, type PreviewServing } from "../src/hub/preview-server.ts";
 import { baseEnv, fleet, machine, sleep, spawnFleet, tmp, type Environment } from "./support.ts";
 
 setDefaultTimeout(60_000);
@@ -32,7 +32,7 @@ let dir: string;
 
 let env: Environment;
 
-let hub: Running | undefined;
+let hub: PreviewServing | undefined;
 
 let hubPort: number;
 
@@ -89,7 +89,7 @@ beforeEach(async () => {
   expect(fleet(["ws", dir, "add", "a1", "--repo", repo], env).code).toBe(0);
   expect(fleet(["serve", dir, "--pid", String(process.pid)], env).code).toBe(0);
   hubPort = freePort();
-  const started = await startHub({ port: hubPort, machine: machine(env), tailscale, peers: false, hosts: [], https: undefined }, () => {});
+  const started = await startPreviewServer({ port: hubPort, machine: machine(env), tailscale, https: undefined, tickMs: 20 }, () => {});
 
   if (started instanceof Error) throw started;
   hub = started;

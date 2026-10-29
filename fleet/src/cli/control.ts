@@ -1,12 +1,8 @@
 /**
  * The control plane's commands:
  *
- * - `fleet hub [--port N] [--https PORT] [--no-peers] [--reload | --no-reload]`: run the hub until stopped
- *   (SIGTERM, SIGINT). The port is `--port`, else `$FLEET_HUB_PORT`, else 7420. Under a supervisor (systemd,
- *   launchd), or with `--reload`, it also stops when its own sources change, exiting 75 so the supervisor
- *   starts it on the new code.
- * - `fleet serve DIR [--stop] [--pid PID] [--take-over]`: put DIR's fleet in the registry, so the hub serves it at
- *   `/f/<fleet>/`, and print its address (`--stop` takes it out). The entry lives while PID does: by
+ * - `fleet serve DIR [--stop] [--pid PID] [--take-over]`: put DIR's fleet in the registry, so the preview server
+ *   serves its previews under `/f/<fleet>/`, and print its address (`--stop` takes it out). The entry lives while PID does: by
  *   default the Claude Code session that runs the command (the nearest `claude` among its parents). It
  *   records that session's id (`$CLAUDE_CODE_SESSION_ID`), by which a respawned session keeps the name.
  * - `fleet render STATE OUT [--fragment]`: render a page from a state file (Python's render_dashboard.py).
@@ -23,8 +19,7 @@ import { stampOf } from "../clock.ts";
 import { Refusal } from "../errors.ts";
 import { isDir, movedRefusal, readText, resolvePath, writeText } from "../files.ts";
 import { discover } from "../hub/served.ts";
-import { codeChanged, RELOAD_EXIT, supervised } from "../hub/reload.ts";
-import { DEFAULT_PORT, runningHub, startHub } from "../hub/server.ts";
+import { DEFAULT_PORT } from "../hub/preview-server.ts";
 import { readTailnetSync, tailscaleBin } from "../hub/tailnet.ts";
 import { Out } from "../io.ts";
 import { recordedHost, runs } from "../host.ts";
@@ -43,7 +38,7 @@ import { secondsNow, World, type Machine } from "../world.ts";
 import { exitOf } from "./exit.ts";
 import { load, pruneOutlook } from "./ws.ts";
 
-function refuse(speaker: "hub" | "serve" | "render_dashboard" | "usage" | "spend", reason: string): Effect.Effect<never, Refusal> {
+function refuse(speaker: "serve" | "render_dashboard" | "usage" | "spend", reason: string): Effect.Effect<never, Refusal> {
   return Effect.fail(new Refusal({ speaker, reason }));
 }
 
@@ -63,63 +58,6 @@ function portOf(given: string | undefined, machine: Machine): number | undefined
   return Number.isInteger(port) && port > 0 && port < 65536 ? port : undefined;
 }
 
-// -- fleet hub ---------------------------------------------------------------------------------
-
-function hub(machine: Machine, argv: readonly string[]): Effect.Effect<number, Refusal, Out> {
-  return Effect.gen(function* () {
-    const out = yield* Out;
-    const [portText, afterPort] = option(argv, "--port");
-    const [httpsText, rest] = option(afterPort, "--https");
-    const peers = !rest.includes("--no-peers");
-    const reload = rest.includes("--reload") || (!rest.includes("--no-reload") && supervised(machine.env));
-    const unknown = rest.filter((a) => a !== "--no-peers" && a !== "--reload" && a !== "--no-reload");
-
-    if (unknown.length > 0) return yield* refuse("hub", "usage: fleet hub [--port N] [--https PORT] [--no-peers] [--reload | --no-reload]");
-    const port = portOf(portText, machine);
-    const https = httpsText === undefined ? undefined : portOf(httpsText, machine);
-
-    if (port === undefined || (httpsText !== undefined && https === undefined)) return yield* refuse("hub", "a port is a number from 1 to 65535");
-    const log = (line: string): void => out.err(`hub: ${line}\n`);
-    const underSupervisor = supervised(machine.env);
-    const serving = underSupervisor ? undefined : runningHub(machine.registry.place.home);
-
-    // A hub started by hand leaves a running hub alone: under a supervisor it would only be stopped again.
-    if (serving !== undefined) {
-      out.out(`${serving.url}\n`);
-      log(`a hub already serves ${serving.url} (pid ${String(serving.pid)}${serving.supervised ? ", the service" : ""}); leaving it`);
-
-      return 0;
-    }
-
-    const running = yield* Effect.promise(() =>
-      startHub({ port, machine, tailscale: tailscaleBin(machine.env), peers, hosts: [], https, supervised: underSupervisor }, log),
-    );
-
-    if (running instanceof Error) return yield* refuse("hub", running.message);
-    out.out(`${running.url}\n`);
-
-    const watch = reload ? codeChanged() : undefined;
-
-    const why = yield* Effect.promise(() =>
-      Promise.race([
-        new Promise<"signal">((resolve) => {
-          process.once("SIGTERM", () => resolve("signal"));
-          process.once("SIGINT", () => resolve("signal"));
-        }),
-        ...(watch ? [watch.changed.then(() => "code" as const)] : []),
-      ]),
-    );
-
-    watch?.stop();
-
-    if (why === "code") log("its code changed: stopping, to be started again on the new code");
-    yield* Effect.promise(() => running.stop());
-    log("stopped");
-
-    return why === "code" ? RELOAD_EXIT : 0;
-  });
-}
-
 // -- fleet serve -------------------------------------------------------------------------------
 
 /** The Claude Code session that runs this command: the nearest `claude` among its parents, else the parent. */
@@ -127,11 +65,8 @@ export function sessionPid(): number {
   return ancestry(process.ppid).find((pid) => isClaudeBinary(nameOf(pid), exeOf(pid))) ?? process.ppid;
 }
 
-/** The hub's address on this machine: the running hub's, else the one it will have. */
+/** The address the fleet's previews are served under on this machine (`fleet preview serve`, on the port the hub had). */
 function hubUrl(machine: Machine, port: number | undefined): string {
-  const running = runningHub(machine.registry.place.home);
-
-  if (running !== undefined && port === undefined) return running.url;
   const at = port ?? DEFAULT_PORT;
   const self = readTailnetSync(tailscaleBin(machine.env))?.self;
 
@@ -214,10 +149,6 @@ function serve(machine: Machine, argv: readonly string[]): Effect.Effect<number,
 
     if (boss !== undefined && entry.role !== "manager") {
       out.out(`manager: session ${boss.session ?? "(not named yet)"}  ${boss.url}  what holds for every fleet: ${join(boss.dir, "standing.md")}\n`);
-    }
-
-    if (runningHub(registry.place.home) === undefined) {
-      out.err(`serve: no hub runs on this machine yet; start it (systemctl --user start fleet-hub, or fleet hub) and ${entry.url} answers\n`);
     }
 
     return 0;
@@ -343,27 +274,25 @@ function served(machine: Machine): Effect.Effect<number, never, Out> {
   });
 }
 
-/** Run one of the control plane's commands (`cli` is hub, serve, render, usage, spend or served). */
+/** Run one of the control plane's commands (`cli` is serve, render, usage, spend or served). */
 export function controlCli(cli: string, argv: readonly string[]): Effect.Effect<number, never, Out | World> {
   return Effect.gen(function* () {
     const machine = yield* World;
 
     const run =
-      cli === "hub"
-        ? hub(machine, argv)
-        : cli === "serve"
-          ? serve(machine, argv)
-          : cli === "render"
-            ? render(machine, argv)
-            : cli === "usage"
-              ? usage(machine, argv)
-              : cli === "spend"
-                ? spend(machine, argv)
-                : served(machine);
+      cli === "serve"
+        ? serve(machine, argv)
+        : cli === "render"
+          ? render(machine, argv)
+          : cli === "usage"
+            ? usage(machine, argv)
+            : cli === "spend"
+              ? spend(machine, argv)
+              : served(machine);
 
     return yield* run.pipe(Effect.catch(exitOf));
   });
 }
 
 /** The CLIs {@link controlCli} runs. */
-export const CONTROL_CLIS = ["hub", "serve", "render", "usage", "spend", "served"] as const;
+export const CONTROL_CLIS = ["serve", "render", "usage", "spend", "served"] as const;

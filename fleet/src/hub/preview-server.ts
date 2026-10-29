@@ -27,6 +27,9 @@ import { FUNNEL_PORT, PublicShares } from "./preview-share.ts";
 import { answersAt, jsonResponse, Logins, Previews, serviceWorkerGuard } from "./previews.ts";
 import { readTailnet, tailscale, type Tailnet } from "./tailnet.ts";
 
+/** The port the previews are served on unless told otherwise: the one the hub had, so its links keep working. */
+export const DEFAULT_PORT = 7420;
+
 /** Where a running hub says where it is. */
 export function hubRecordPath(home: string): string {
   return join(home, "hub", "hub.json");

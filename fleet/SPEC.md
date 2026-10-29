@@ -1357,7 +1357,7 @@ navy shape, quoted in both themes) and `test/bodytext.test.ts`.
 its head with a Content-Security-Policy `<meta>`, before its `<base>`: `default-src 'none'; script-src
 'nonce-<N>'; style-src 'unsafe-inline' https://fonts.googleapis.com; img-src data: blob: <hub>; font-src
 data: https://fonts.gstatic.com <hub>; object-src 'none'; base-uri <the frame's base URL>; form-action
-'none'` (`fleet/src/hub/body-policy.ts`), N 16 random bytes drawn on each render, `<hub>` the page's
+'none'` (`fleet/page/src/body-policy.ts`), N 16 random bytes drawn on each render, `<hub>` the page's
 origin. Only the fleet's own script carries the nonce (sizing, the tables' cards, the marks:
 markframe.ts); the body's `<script>`, its inline handlers (`onclick=`, `onerror=`, an SVG's `onload=`),
 its `javascript:` links, its frames, objects and forms do nothing, and a `<script` tag the body leaves

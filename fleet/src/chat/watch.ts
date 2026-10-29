@@ -23,9 +23,7 @@ import { staleDrafts, untoldDrafts } from "../ledger/warnings.ts";
 import { stripHidden } from "../ledger/permission-words.ts";
 import { findDecision, number } from "../ledger/numbers.ts";
 import { Refusal } from "../errors.ts";
-import { runningHub } from "../hub/server.ts";
 import { readObject } from "../registry.ts";
-import { Wakes, wakeWorks } from "../wake.ts";
 import { activeAt } from "../transcripts.ts";
 import { secondsNow, type Machine } from "../world.ts";
 import {
@@ -45,7 +43,6 @@ import {
   rosterOf,
   stateOfDir,
   waitsHere,
-  unreadFromUser,
 } from "./chat.ts";
 import { BATCH_REMIND_S, batchReminders } from "./batches.ts";
 import { FleetNews } from "./news.ts";
@@ -311,17 +308,10 @@ function unanswered(machine: Machine, entry: { readonly id: string; readonly dir
 
 /** For a manager's watch: the fleets that do not read their chat while the user waits, or leave the user's
  * messages unanswered, the answers they have not recorded, their silent workers and those queued past half an
- * hour; each told once (kept in the manager's DIR); and the manager's own batches of marks still open, once per FLEET_BATCH_REMIND_S.
- *
- * While a hub runs on the machine and its wake works for a fleet (wake.ts `wakeWorks`: its last wake was
- * written, and its wakes are not spent), a fleet that does not read its chat is not told here: the hub wakes
- * its session itself, and the page says so, so it is said once. With no hub, or one that cannot wake that
- * fleet, the manager is told, as before. */
+ * hour; each told once (kept in the manager's DIR); and the manager's own batches of marks still open, once per FLEET_BATCH_REMIND_S. */
 export function fleetsUnheard(machine: Machine, me: string): string[] {
   const toldPath = join(me, "watch-manager.told");
   const told = readTold(toldPath);
-  // A hub that runs and cannot wake a fleet (its last wake failed, its wakes are spent) is no hub to that fleet.
-  const hub = runningHub(machine.registry.place.home) === undefined ? undefined : new Wakes(machine);
   const unheardS = seconds(machine.env, "FLEET_UNHEARD_S", 120);
   const unansweredS = seconds(machine.env, "FLEET_UNANSWERED_S", UNANSWERED_S);
   const lines: string[] = [];
@@ -337,9 +327,7 @@ export function fleetsUnheard(machine: Machine, me: string): string[] {
     const at = heard.since === null ? undefined : parseInstant(pyText(heard.since));
     const waited = at === undefined ? unheardS : secondsNow(machine) - at / 1000;
 
-    const woken = hub !== undefined && heard.unread > 0 && wakeWorks(hub.of(e.dir), unreadFromUser(e.dir, heard.seen)[0]?.id, machine.now().getTime());
-
-    if (woken || heard.on || heard.unread === 0 || told.get(e.id) === mark || waited < unheardS) {
+    if (heard.on || heard.unread === 0 || told.get(e.id) === mark || waited < unheardS) {
       lines.push(...unanswered(machine, e, told, unansweredS));
       continue;
     }

@@ -35,7 +35,7 @@ import { clock } from "./format.ts";
 import { KIND_WORDS, StatePill } from "./Overview.tsx";
 import { CodeBlock, ManualText, Rich, UndoText } from "./Rich.tsx";
 import { approvalHref } from "./Approvals.tsx";
-import { bodyPolicy } from "../../src/hub/body-policy.ts";
+import { bodyPolicy } from "./body-policy.ts";
 import { safeBody, type SafeBody } from "./safebody.ts";
 
 const TOKENS = ["bg", "card", "card-2", "text", "muted", "faint", "line", "accent", "accent-soft", "you", "you-soft", "run", "good", "warning", "serious", "critical", "s1", "s2", "s3", "s4", "s5", "s6", "s7", "s8"];
