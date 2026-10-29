@@ -1011,12 +1011,11 @@ describe("a fleet has one host: fleet serve from another process", () => {
     const root = makeFleet("a", "infra");
     const [first, second] = [session(), session()];
     serve(root, first.pid);
-    const url = registry.find(root)?.url ?? "";
     expect([readJson(join(root, "state.json"))["events"], existsSync(join(root, "chat.jsonl"))]).toEqual([[], false]);
     const taken = serve(root, second.pid, "--take-over");
     expect([taken.code, refusedFor(taken)]).toEqual([0, false]);
     expect(taken.stdout).toBe(
-      `${url}\ntook over from the session running as pid ${String(first.pid)} (session sess-${String(first.pid)}): its chat watch stands down, and it is not woken for this fleet any more\n` +
+      `infra is registered as this session's fleet (${root}); it has no page until the team is cut over to the cloud\ntook over from the session running as pid ${String(first.pid)} (session sess-${String(first.pid)}): its chat watch stands down, and it is not woken for this fleet any more\n` +
         `recorded: an event in the fleet's ledger and #1 in its chat; the page shows it to the user until the host has read their next message\n`,
     );
     expect(hostOf(root)).toEqual([second.pid, startedOf(second.pid) ?? "none", `sess-${String(second.pid)}`]);

@@ -206,13 +206,66 @@ describe("a moved team's cloud page is an https address or none", () => {
   });
 });
 
-describe("each team is shown once", () => {
-  test("a live fleet serving the moved team's folder is listed once, as the live one", () => {
-    machine(env).registry.register(root, "https://box.ts.net:7420/f/skills/", process.pid, "2026-10-15T09:00:00+00:00");
-    const here = machine(env).registry.shown().filter((e) => e.dir === root);
+describe("fleet serve on a moved team's folder keeps it moved", () => {
+  /** The session `fleet serve` registers: this test's process, with a live record whose derived name would rename a fleet. */
+  function serve(): ReturnType<typeof fleet> {
+    mkdirSync(join(base, "config", "sessions"), { recursive: true });
+    writeFileSync(join(base, "config", "sessions", `${String(process.pid)}.json`), JSON.stringify({ pid: process.pid, sessionId: "sid-moved", cwd: "/x", name: "skills-29-10", nameSource: "derived", nameSince: 1 }));
 
-    expect(here.map((e) => e.moved === true)).toEqual([false]);
+    return fleet(["serve", root, "--pid", String(process.pid)], { ...env, CLAUDE_CODE_SESSION_ID: "sid-moved", TAILSCALE: join(base, "none") });
+  }
+
+  test("its entry keeps the team's id, the moved mark and the cloud page; no hub address is printed", () => {
+    writeFileSync(join(root, "cloud.json"), JSON.stringify({ fleet: "team-x", cloud: "https://fleet.example.dev" }));
+    const ran = serve();
+
+    expect([ran.code, ran.stderr]).toEqual([0, ""]);
+    expect(ran.stdout).toStartWith("team-x is moved to the cloud: its page is https://fleet.example.dev/team-x\n");
+    expect(ran.stdout).not.toContain(":7420");
+    const registry = machine(env).registry;
+    const here = registry.shown().filter((e) => e.dir === root);
+
+    expect(here.map((e) => [e.id, e.url, e.moved === true, e.raw["pid"]])).toEqual([["team-x", "https://fleet.example.dev/team-x", true, process.pid]]);
+    expect(registry.find(root)?.moved).toBe(true);
   });
+
+  test("`fleets list` still shows it moved, with its cloud page", () => {
+    expect(serve().code).toBe(0);
+    const ran = fleet(["fleets", "list"], env);
+
+    expect(ran.stdout).toContain("skills  (coordinator, running, moved to the cloud)");
+    expect(ran.stdout).toContain(`  page     ${PAGE}\n`);
+    expect(ran.stdout).not.toMatch(/^skills-29-10 /m);
+    expect(ran.stdout).not.toContain(":7420");
+  });
+
+  test("its previews are not addressed under the cloud page", () => {
+    writeFileSync(join(root, "state.json"), JSON.stringify(ledger({ decisions: [] })));
+    expect(serve().code).toBe(0);
+    writeFileSync(join(root, "preview.json"), JSON.stringify({ fleet: "skills", workspace: "preview", path: join(base, "ws"), repo: join(base, "repo") }));
+    const ran = fleet(["preview", root, "status"], env);
+
+    expect(ran.stderr).toBe("");
+    expect(ran.stdout).toStartWith("preview: /f/skills/preview/ ");
+    expect(ran.stdout).not.toContain(PAGE);
+  });
+});
+
+describe("fleet serve on a folder with no cloud.json", () => {
+  test("registers it and says it has no page until the team is cut over, with no hub address", () => {
+    const dir = join(base, "s", "coordinator");
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "state.json"), JSON.stringify(ledger({ project: "local" })));
+    const ran = fleet(["serve", dir, "--pid", String(process.pid)], { ...env, TAILSCALE: join(base, "none") });
+
+    expect([ran.code, ran.stderr]).toEqual([0, ""]);
+    expect(ran.stdout).toStartWith(`local is registered as this session's fleet (${dir}); it has no page until the team is cut over to the cloud\n`);
+    expect(ran.stdout).not.toContain("http");
+    expect(machine(env).registry.find(dir)?.id).toBe("local");
+  });
+});
+
+describe("each team is shown once", () => {
 
   test("two moved folders naming one team: the first folder by path is shown", () => {
     const copy = join(base, "fleet", "skills-copy");

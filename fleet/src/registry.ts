@@ -46,7 +46,8 @@ export interface Entry {
   readonly aliases: readonly string[];
   /** The entry as written, with what this model does not read. */
   readonly raw: JsonObject;
-  /** Set on a team moved to the cloud (fleet slice 3), which no server here serves: read from its folder, never written. */
+  /** Set on a team moved to the cloud (fleet slice 3): read from its folder ({@link MOVED_MARKER}), never written. A
+   * session registered for it (`fleet serve`) keeps it moved, under the marker's name and with its cloud page. */
   readonly moved?: true;
 }
 
@@ -414,10 +415,15 @@ export class Registry {
       if (entry === undefined) {
         if (raw !== undefined) this.keepName(raw);
         remove(path);
-      } else entries.push(entry);
+      } else {
+        const away = movedEntry(entry.dir);
+        entries.push(away === undefined ? entry : { ...entry, url: away.url, moved: true });
+      }
     }
 
     entries.forEach((entry, i) => {
+      // The cloud names a moved team: its session's title does not rename it.
+      if (entry.moved === true) return;
       const found = this.titleOf(entry.dir, asString(entry.raw["session_id"]), pidOfEntry(entry));
 
       if (found === undefined || found.title === entry.session || (!found.given && entry.session !== null)) return;
@@ -542,9 +548,13 @@ export class Registry {
     const found = this.titleOf(dir, session, pid);
     const title = found !== undefined && (found.given || priorSession === undefined) ? found.title : undefined;
     const free = (id: string): boolean => !taken(id) && !isKept(id);
+    // A team moved to the cloud keeps the name and the page its marker gives, whatever its session is called.
+    const away = movedEntry(dir);
     let name: string;
 
-    if (title !== undefined && role !== "manager" && free(fleetName(title))) {
+    if (away !== undefined && !taken(away.id)) {
+      name = away.id;
+    } else if (title !== undefined && role !== "manager" && free(fleetName(title))) {
       name = fleetName(title);
     } else if (priorId !== undefined) {
       // An entry named before session numbers were dropped (`3.ui-coordinator`) drops its number now.
@@ -568,13 +578,13 @@ export class Registry {
 
     for (const used of [keptOfDir, prior === keptOfSession?.raw ? keptOfSession : undefined]) if (used !== undefined) remove(used.path);
 
-    return this.write(
+    const entry = this.write(
       {},
       {
         id: name,
         role,
         dir,
-        url,
+        url: away?.url ?? url,
         pid,
         // When that process started: with it, a later process that has its pid is not taken for the host (host.ts).
         started: startedOf(pid) ?? null,
@@ -584,6 +594,8 @@ export class Registry {
       },
       prior === undefined || priorId === undefined ? [] : aliasesAfter(prior, priorId, name),
     );
+
+    return away === undefined ? entry : { ...entry, moved: true };
   }
 
   /** Forget the fleet served from `root` (`fleet serve --stop`): a stop is on purpose, so its name is not kept. */

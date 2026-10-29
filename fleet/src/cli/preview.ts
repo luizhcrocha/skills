@@ -161,11 +161,11 @@ function scopeFor(machine: Machine, what: string): string | null {
   return yes ? unitName(what) : null;
 }
 
-/** The fleet's address on the hub, and its name. */
+/** The fleet's address on the preview server, and its name; none for a team moved to the cloud, whose url is its page. */
 function served(machine: Machine, root: string): { readonly fleet: string; readonly url: string } | undefined {
   const entry = machine.registry.find(root);
 
-  return entry === undefined ? undefined : { fleet: entry.id, url: entry.url };
+  return entry === undefined || entry.moved === true ? undefined : { fleet: entry.id, url: entry.url };
 }
 
 /** How a dev server came up: it answers, it is still starting, or its process is gone. */

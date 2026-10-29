@@ -2,7 +2,8 @@
  * The control plane's commands:
  *
  * - `fleet serve DIR [--stop] [--pid PID] [--take-over]`: put DIR's fleet in the registry, so the preview server
- *   serves its previews under `/f/<fleet>/`, and print its address (`--stop` takes it out). The entry lives while PID does: by
+ *   serves its previews under `/f/<fleet>/` (`--stop` takes it out). A team moved to the cloud (DIR holds cloud.json)
+ *   stays moved, under the marker's name, and its cloud page is printed; any other has no page until it is cut over. The entry lives while PID does: by
  *   default the Claude Code session that runs the command (the nearest `claude` among its parents). It
  *   records that session's id (`$CLAUDE_CODE_SESSION_ID`), by which a respawned session keeps the name.
  * - `fleet render STATE OUT [--fragment]`: render a page from a state file (Python's render_dashboard.py).
@@ -17,7 +18,7 @@ import * as Option from "effect/Option";
 
 import { stampOf } from "../clock.ts";
 import { Refusal } from "../errors.ts";
-import { isDir, movedRefusal, readText, resolvePath, writeText } from "../files.ts";
+import { isDir, MOVED_MARKER, movedRefusal, readText, resolvePath, writeText } from "../files.ts";
 import { discover } from "../hub/served.ts";
 import { DEFAULT_PORT } from "../hub/preview-server.ts";
 import { readTailnetSync, tailscaleBin } from "../hub/tailnet.ts";
@@ -132,7 +133,13 @@ function serve(machine: Machine, argv: readonly string[]): Effect.Effect<number,
     const session = given === undefined || given === "" ? undefined : given;
     const first = registry.register(root, base, pid, stamp, session);
     const entry = registry.register(root, `${base}f/${encodeURIComponent(first.id)}/`, pid, stamp, session);
-    out.out(`${entry.url}\n`);
+    out.out(
+      entry.moved !== true
+        ? `${entry.id} is registered as this session's fleet (${root}); it has no page until the team is cut over to the cloud\n`
+        : entry.url === ""
+          ? `${entry.id} is moved to the cloud, but ${join(root, MOVED_MARKER)} names no https page\n`
+          : `${entry.id} is moved to the cloud: its page is ${entry.url}\n`,
+    );
 
     if (displaced !== undefined) {
       out.out(`took over from the session running as pid ${String(displaced.pid)} (session ${asString(was?.raw["session_id"]) ?? "not recorded"}): its chat watch stands down, and it is not woken for this fleet any more\n`);
