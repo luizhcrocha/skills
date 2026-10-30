@@ -7,6 +7,7 @@
  * program status protocol, OSC 7501), which `program_status` reads back: idle or done is ready, working is
  * working, blocked is asking. It reports nothing before its prompt is up, so a start that stays silent while
  * its program runs is taken as waiting on a prompt in its tab (trust, an MCP server's approval).
+ * Claude Code 2.1.314 in a trusted folder said idle 1.6 s after it started, with no prompt sent (2026-10-30).
  */
 import { spawnSync } from "node:child_process";
 import { join } from "node:path";
