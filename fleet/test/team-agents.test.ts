@@ -80,8 +80,8 @@ describe("an agent's file", () => {
     expect(parseAgent("ui", text)).toEqual({ why });
   });
 
-  test("a name herdr cannot take is refused", () => {
-    expect(parseAgent("UI team", '{"fleet": {"role": "coordinator"}}')).toEqual({ why: "UI team.json: name 'UI team' is lower-case letters, digits, - and _, starting with a letter, at most 32 (herdr's agent names)" });
+  test("a name that is not lower-case letters, digits, - and _ is refused", () => {
+    expect(parseAgent("UI team", '{"fleet": {"role": "coordinator"}}')).toEqual({ why: "UI team.json: name 'UI team' is lower-case letters, digits, - and _, starting with a letter, at most 32" });
   });
 
   test("a ledger under ~ is the home's", () => {

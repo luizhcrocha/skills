@@ -1,8 +1,8 @@
 /**
  * The seam `fleet team` starts agents through: a place that runs sessions, each holding agents, one per tab. It
- * takes an agent's definition and decides itself how to run it; `fleet team` never sees a command line. herdr
- * (herdr.ts) is the one real adapter; the tests' fake is the other. Rex and Managed Agents would be adapters here
- * too, one file each; none is built. Every method answers or says why it could not, in one sentence.
+ * takes an agent's definition and decides itself how to run it; `fleet team` never sees a command line. Rex
+ * (rex.ts) is the one real adapter; the tests' fake is the other. Managed Agents would be one more file. Every
+ * method answers or says why it could not, in one sentence.
  */
 import type { Agent, Why } from "./agents.ts";
 
@@ -57,8 +57,8 @@ export interface Opened {
 export interface Launcher {
   /** The sessions running now, by name. */
   sessions(): readonly string[] | Why;
-  /** Session `name` running, started (in `cwd`) when it was not. */
-  open(name: string, cwd: string): Opened | Why;
+  /** Session `name` running, started when it was not. */
+  open(name: string): Opened | Why;
   /** Whether `handle`, from {@link Launcher.open}, still names the instance of session `name` that runs now. */
   owns(name: string, handle: Handle): boolean;
   /** A new tab in `session` running `launch.agent`, named after it; returns once it is ready for its first prompt,

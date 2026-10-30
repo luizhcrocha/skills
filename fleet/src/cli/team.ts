@@ -1,6 +1,6 @@
 /**
  * `fleet team {start,stop,attach,list} [--force] [--trust] [NAME ...|all]`: the repo's standing agents
- * (`.fleet/agents/<name>.json`, team/agents.ts) as tabs of one herdr session (team/team.ts). The repo is the
+ * (`.fleet/agents/<name>.json`, team/agents.ts) as tabs of one rex session (team/team.ts). The repo is the
  * nearest folder up from here holding `.fleet/agents`. No NAME is every agent, for start and list; stop names
  * them, or `all`. attach takes none. start first makes sure Claude Code trusts the repo (team/trust.ts), asking
  * on the terminal unless `--trust`. TypeScript only.
@@ -14,8 +14,8 @@ import { Refusal, UsageError } from "../errors.ts";
 import { isDir } from "../files.ts";
 import { Out } from "../io.ts";
 import { readTeam, type Agent, type Team, type Why } from "../team/agents.ts";
-import { herdrLauncher } from "../team/herdr.ts";
 import type { Launcher } from "../team/launcher.ts";
+import { rexLauncher } from "../team/rex.ts";
 import { listTeam, startTeam, stopTeam, type BeforeStart, type Ground, type Said } from "../team/team.ts";
 import { claudeConfigOf, ensureTrusted, trustRootOf, type Asker, type Consent } from "../team/trust.ts";
 import { World, type Machine } from "../world.ts";
@@ -24,7 +24,7 @@ import { exitOf, printUsage } from "./exit.ts";
 const USAGE = "usage: fleet team [-h] {start,stop,attach,list} [--force] [--trust] [NAME ...|all]\n";
 
 const HELP = `${USAGE}
-A repo's standing agents (.fleet/agents/<name>.json) as tabs of one herdr session, named after the repo's
+A repo's standing agents (.fleet/agents/<name>.json) as tabs of one rex session, named after the repo's
 folder or .fleet/team.json's "session". Run it in the repo or below it.
     start [NAME ...] [--trust]
                            a tab per agent running a new claude, then its opening naming its ledger; one
@@ -35,7 +35,7 @@ folder or .fleet/team.json's "session". Run it in the repo or below it.
                            close the agent's tab once it is ready, waiting at most 10 min (--force: at
                            once); only tabs fleet team started that still run their agent
     list [NAME ...]        each agent: running here, elsewhere (where), or not running
-    attach                 herdr session attach to the team's session
+    attach                 show the team's session in the Rex app (rex do session.select)
 No NAME is every agent, for start and list.`;
 
 const COMMANDS = ["start", "stop", "attach", "list"] as const;
@@ -180,7 +180,7 @@ const askOnTerminal = askerOn(
   (byte) => readSync(0, byte, 0, 1, null),
 );
 
-/** `fleet team` with `argv` (after `team`), over herdr, from the process's directory, asking on its terminal. */
+/** `fleet team` with `argv` (after `team`), over rex, from the process's directory, asking on its terminal. */
 export function teamCli(argv: readonly string[]): Effect.Effect<number, never, Out | World> {
-  return teamWith(argv, (state) => herdrLauncher({ state }), process.cwd(), process.stdin.isTTY ? askOnTerminal : undefined);
+  return teamWith(argv, (state) => rexLauncher({ state }), process.cwd(), process.stdin.isTTY ? askOnTerminal : undefined);
 }

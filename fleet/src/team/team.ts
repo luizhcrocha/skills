@@ -5,7 +5,7 @@
  * `<state>/marks.json` by the launcher's handles: the session when it started it, and each agent's tab. A mark is
  * trusted only while it still holds: a tab still labelled with the agent's name and running an agent of that
  * name, a session the launcher says is still the instance it started. It closes only what is marked and holds:
- * a tab or session someone else opened (or a shell tab restored in place of the agent's) is never closed. `start`
+ * a tab or session someone else opened is never closed. `start`
  * and `stop` hold `<state>/team.lock` throughout, so two of them never drive the session at once.
  */
 import { existsSync, realpathSync } from "node:fs";
@@ -241,7 +241,7 @@ function startLocked(ground: Ground, agents: readonly Agent[], before: BeforeSta
       if ("why" in ready) return { lines, refused: [...refused, ready.why] };
 
       if (ready.line !== undefined) lines.push(ready.line);
-      const open = ground.launcher.open(session, ground.team.repo);
+      const open = ground.launcher.open(session);
 
       if ("why" in open) return { lines, refused: [...refused, open.why] };
       opened = true;
@@ -249,12 +249,6 @@ function startLocked(ground: Ground, agents: readonly Agent[], before: BeforeSta
       if (open.started !== undefined) {
         lines.push(`started session ${session}`);
         save({ session: open.started, agents: {}, unsent: [] });
-        const restored = runningHere(ground, marks, lookOf(ground, session), agent);
-
-        if (restored !== undefined) {
-          lines.push(restored);
-          continue;
-        }
       } else if (marks.session !== undefined && !ground.launcher.owns(session, marks.session)) save({ ...marks, session: undefined });
     }
 

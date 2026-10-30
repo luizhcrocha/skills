@@ -44,8 +44,8 @@ export class FakeLauncher implements Launcher {
     return [...this.held.keys()];
   }
 
-  open(name: string, cwd: string): Opened {
-    this.calls.push(`open ${name} ${cwd}`);
+  open(name: string): Opened {
+    this.calls.push(`open ${name}`);
 
     if (this.held.has(name)) return { started: undefined };
     const instance = this.instance(name);

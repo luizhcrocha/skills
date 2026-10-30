@@ -69,7 +69,7 @@ const FIELDS = ["name", "description", "model", "system", "tools", "multiagent",
 /** The fields of its `fleet` block. */
 const FLEET_FIELDS = ["role", "opening", "remote_control", "machine", "ledger"];
 
-/** herdr's agent names, which a standing agent's name must also be. */
+/** A standing agent's name: its file, its block and its conversation's `--name`. */
 const NAME = /^[a-z][a-z0-9_-]{0,31}$/;
 
 /** A session's name: a letter or digit first, then letters, digits, `.`, `_` and `-`; no path, no option. */
@@ -149,7 +149,7 @@ function parseFleet(raw: JsonObject, file: string, home: string): Agent["fleet"]
 export function parseAgent(name: string, text: string, home = ""): Agent | Why {
   const file = `${name}.json`;
 
-  if (!NAME.test(name)) return { why: `${file}: name '${name}' is lower-case letters, digits, - and _, starting with a letter, at most 32 (herdr's agent names)` };
+  if (!NAME.test(name)) return { why: `${file}: name '${name}' is lower-case letters, digits, - and _, starting with a letter, at most 32` };
   const raw = Option.getOrUndefined(parseObject(text));
 
   if (raw === undefined) return { why: `${file} is not a JSON object` };
