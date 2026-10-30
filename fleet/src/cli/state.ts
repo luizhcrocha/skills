@@ -11,6 +11,7 @@ import * as Option from "effect/Option";
 import { deafWarning } from "../chat/chat.ts";
 import { tellHost, toldWords } from "../chat/hub-line.ts";
 import { unreadLine } from "../news/news.ts";
+import { roomPointer } from "../room/room.ts";
 import { stampOf } from "../clock.ts";
 import { Refusal, stateRefusal, UsageError } from "../errors.ts";
 import { exists, FLEET_BIN, isMoved, makeDirs, movedRefusal, readText, resolvePath, SKILL_DIR, writeText } from "../files.ts";
@@ -404,6 +405,7 @@ function ledgerCommand(machine: Machine, request: LedgerRequest): Effect.Effect<
       seen === undefined ? undefined : idleWorkspaces(seen, activeWorkspaces(readObject(path))),
       ...(settingDone ? pruneOutlook(root, readObject(path) ?? {}) : []),
       cmd === "init" ? undefined : unreadLine(machine, root),
+      cmd === "init" ? undefined : roomPointer(root),
       addressLike ? `state: decision ${given}'s id reads as a card's address: #decision/${given} opens it, not card ${String(cardNumberOf(given))}. Recorded; a plainer id leaves that address to its card.` : undefined,
     ];
 

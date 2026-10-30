@@ -47,6 +47,7 @@ import {
 import { BATCH_REMIND_S, batchReminders } from "./batches.ts";
 import { FleetNews } from "./news.ts";
 import { unreadLine } from "../news/news.ts";
+import { FORWARD_S, forwardReminders, roomPointer, RoomWatch } from "../room/room.ts";
 import { isHost, liveHost, type Host } from "../host.ts";
 import { displacedLine } from "../takeover.ts";
 import { foreign, forgetOwner, isWatch, orphaned, ownerWords, readOwner, recordOwner, sessionAbove, type Owner } from "./watchers.ts";
@@ -350,6 +351,7 @@ export function fleetsUnheard(machine: Machine, me: string): string[] {
 
   // The manager's own refusal drafts: a call of its session, or of a worker of its own.
   lines.push(...draftReminders(machine, me, told));
+  lines.push(...forwardReminders(machine, me, told, seconds(machine.env, "FLEET_ROOM_FORWARD_S", FORWARD_S)));
   lines.push(...batchReminders(machine, me, told, seconds(machine.env, "FLEET_BATCH_REMIND_S", BATCH_REMIND_S)));
 
   if (lines.length > 0) writeTold(toldPath, told);
@@ -523,6 +525,7 @@ export function ownSilent(machine: Machine, root: string): string[] {
     ...strandedSteps(root, told),
     ...unexplainedPermissions(root, told),
     ...draftReminders(machine, root, told),
+    ...forwardReminders(machine, root, told, seconds(machine.env, "FLEET_ROOM_FORWARD_S", FORWARD_S)),
     ...batchReminders(machine, root, told, seconds(machine.env, "FLEET_BATCH_REMIND_S", BATCH_REMIND_S)),
   ];
 
@@ -578,7 +581,7 @@ export function watch(machine: Machine, root: string, request: WatchRequest): Ef
         );
       }
 
-      yield* follow(machine, root, who, request, undefined, false);
+      yield* follow(machine, root, who, request, undefined, false, undefined, roomFor(root, who));
 
       return;
     }
@@ -611,6 +614,7 @@ export function watch(machine: Machine, root: string, request: WatchRequest): Ef
 
     const pid = String(process.pid);
     const mine = recordOwner(root, who);
+    const room = roomFor(root, who);
     let nobody = false;
 
     const end = (): void => {
@@ -641,7 +645,7 @@ export function watch(machine: Machine, root: string, request: WatchRequest): Ef
           return true;
         };
 
-        const last = yield* follow(machine, root, who, request, mine, host !== undefined, armed);
+        const last = yield* follow(machine, root, who, request, mine, host !== undefined, armed, room);
 
         if (last === NOBODY) {
           nobody = true;
@@ -650,11 +654,12 @@ export function watch(machine: Machine, root: string, request: WatchRequest): Ef
         }
 
         if (last !== undefined) writeText(cursorPath(root, who), String(last));
+        room?.commit(machine);
 
-        // The news never wakes anyone: it rides on a wake the chat makes.
-        const told = who === hostOf(root) ? unreadLine(machine, root) : undefined;
+        // The news and the room's unread lines never wake anyone: they ride on a wake the chat or the room makes.
+        for (const told of who === hostOf(root) ? [unreadLine(machine, root), roomPointer(root)] : []) if (told !== undefined) (yield* Out).out(`${told}\n`);
 
-        if (told !== undefined) (yield* Out).out(`${told}\n`);
+        for (const line of room?.forwards() ?? []) (yield* Out).out(`${stripHidden(line)}\n`);
       }),
       Effect.sync(() => {
         process.off("SIGTERM", onSignal);
@@ -681,6 +686,11 @@ function notHost(root: string, who: string, host: Host): string | undefined {
         `If this session is to host the fleet from now on, \`fleet serve ${root} --take-over\` first, which is recorded in the fleet's ledger and chat and shown to the user on its page.`;
 }
 
+/** The room a watch as `who` wakes for: the host's alone, of a team folder the export gives a room. */
+function roomFor(root: string, who: string): RoomWatch | undefined {
+  return who === hostOf(root) ? new RoomWatch(root) : undefined;
+}
+
 /** What {@link follow} gives back when the watch stood down because it hears for nobody: nothing it printed
  * is marked read, so the next watch prints it again. */
 const NOBODY = "nobody";
@@ -700,7 +710,8 @@ function taken(root: string, who: string): boolean {
  * when it stood down: another watch took its place, the session that armed it (`mine`) is gone, or (`hosted`:
  * a watch as the host's role, armed by the fleet's host) the fleet has another host now. Standing down is
  * silent but for that last case: the displaced host is told in one line (takeover.ts `displacedLine`).
- * `armed` runs once the first read of the chat is done; when it says no, the watch stands down. */
+ * `armed` runs once the first read of the chat is done; when it says no, the watch stands down. `room` prints the room
+ * lines that wake the team, each with its `re` chain, as chat lines are printed. */
 function follow(
   machine: Machine,
   root: string,
@@ -709,6 +720,7 @@ function follow(
   mine: Owner | undefined,
   hosted: boolean,
   armed?: () => boolean,
+  room?: RoomWatch,
 ): Effect.Effect<number | typeof NOBODY | undefined, never, Out> {
   return Effect.gen(function* () {
     const out = yield* Out;
@@ -736,6 +748,9 @@ function follow(
 
     const first = messages.filter((m) => m.id > after && wanted.has(m.id));
     show(first);
+    const roomFirst = room?.take().lines ?? [];
+
+    for (const line of roomFirst) out.out(`${stripHidden(line)}\n`);
     const news = request.fleets ? new FleetNews(machine, resolvePath(root), request.resume) : undefined;
 
     const tell = (): boolean => {
@@ -753,7 +768,7 @@ function follow(
     let window = tell() ? performance.now() / 1000 + request.batch : undefined;
 
     // What waited already is not held back.
-    if (request.once && first.length > 0) return last;
+    if (request.once && (first.length > 0 || roomFirst.length > 0)) return last;
 
     /** What this watch says when the fleet has another host now and it was the old host's (`hosted`): the
      * line of takeover.ts `displacedLine`. Undefined while the host is the session that armed it, or unknown. */
@@ -806,6 +821,9 @@ function follow(
 
       const fresh = tail.read().filter((m) => m.to.includes(who) || (request.all && m.from === "user" && waitsHere(m)));
       show(fresh);
+      const roomFresh = room?.take() ?? { lines: [], user: false };
+
+      for (const line of roomFresh.lines) out.out(`${stripHidden(line)}\n`);
 
       if (tell() && window === undefined) window = performance.now() / 1000 + request.batch;
       let lines: string[] = [];
@@ -822,7 +840,9 @@ function follow(
       // The first look's `!` lines were due before the watch began.
       if (request.once && backlog && lines.length > 0) return last;
 
-      if (request.once && (fresh.length > 0 || lines.length > 0)) settle.saw(performance.now() / 1000, fresh.some((m) => m.from === "user" && m.to.includes(who)));
+      if (request.once && (fresh.length > 0 || lines.length > 0 || roomFresh.lines.length > 0)) {
+        settle.saw(performance.now() / 1000, roomFresh.user || fresh.some((m) => m.from === "user" && m.to.includes(who)));
+      }
     }
   });
 }

@@ -46,6 +46,7 @@ Contents: [Environment](#environment) · [state.py](#statepy-the-ledger-cli) ·
 | `FLEET_UNHEARD_S` | chat.py, `fleet chat watch` | how long the user's message waits unread before a manager's watch tells (default 120 s) |
 | `FLEET_UNANSWERED_S` | chat.py | how long the user's message to a fleet's host goes without a reply (`--re`) before a manager's watch tells, read or not (default 600 s) |
 | `FLEET_NUDGE_S` | chat.py | how long a message to a worker waits unanswered before the coordinator's watch tells (default 600 s, L1) |
+| `FLEET_ROOM_FORWARD_S` | `fleet chat watch` (TypeScript only) | how long a room line to a worker waits unforwarded before the host's watch tells again (default 600 s). See [The project room](#the-project-room-fleet-room) |
 | `FLEET_WATCH_SETTLE` | chat.py | how long a `--once` watch waits after a new line for more before it exits (default 30 s; `--settle` wins) |
 | `FLEET_WATCH_SETTLE_USER` | chat.py | the same after the user's message to WHO (default 10 s, never more than the settle) |
 | `FLEET_WATCH_SETTLE_MAX` | chat.py | the longest a `--once` watch holds its first new line (default 120 s) |
@@ -956,6 +957,9 @@ After the handler succeeds, before validation, on stderr, in this order (not for
    last, when the machine's news holds items the fleet has not read ([The news](#the-news-fleet-news)).
    Not for `init`. Read only when `REGISTRY/news/news.jsonl` exists, and the fleet's name is read from the
    registry's entries without pruning or renaming any.
+10. **Unread room lines** (`room: N lines since #K you did not read; \`fleet room <project> since K --as <team>\``), one
+   line, after warning 9, when the folder holds a room ([The project room](#the-project-room-fleet-room)). Not
+   for `init`. TypeScript only.
 
 *TypeScript only*, after 4: **the refusal drafts left open** for `FLEET_REFUSAL_REMIND_S` (900) are said
 on every command, in one line whatever their number, until the host asks each in its own words or drops it
@@ -2998,6 +3002,57 @@ entry's `id`, matched by its dir.
 Why no relay: an item another fleet must act on goes to that fleet as one direct message, once; routing it
 through the manager wakes the manager (a large context) and then the fleet, two wakes for one.
 
+## The project room (`fleet room`)
+
+TypeScript only. A team moved to the cloud and placed under a project shares that project's room with its other
+teams and the user. The host's export writes the room into each team folder: `DIR/room.jsonl`, one line each,
+`{id, at, project, from, to, re, text, parts}` (`from` `user` or a team's FleetId; `to` `"everyone"` or a list of
+`{team, agent?}`), and `DIR/room.json`, `{project, manager, teams}`. The folder's team is the one its `cloud.json`
+names. The CLI only reads them; a row that does not parse is skipped.
+
+A line wakes team T when its `to` names T (directly or through one of T's workers), and the manager team also when
+it is untagged and from the user. An untagged line from a team or the manager wakes nobody; T's own line never
+wakes T. The host's `--once` chat watch wakes for such a line as for a chat line, and prints it:
+
+```
+room casos #4 from you to @api/c208: c208: rerun the suite
+  re #3 us: on it   re #2 manager: api: can you check the deploy?
+room: 2 lines since #0 you did not read; `fleet room casos since 0 --as api`
+! forward #4 verbatim (SendMessage c208), then `fleet room casos forwarded 4 --to c208 --as api`
+```
+
+The second line is the `re` chain, nearest first, at most 5 lines and 600 tokens (characters / 4), the nearest
+cut to fit rather than left out; then the pointer below; then a `!` line for each of T's workers the line names,
+after every other line the watch prints. A sender is `you` (the user), `us` (T), `manager` (the manager team) or a
+team id; a text's whitespace runs print as one space. The words and the chain are the fleet's ledger
+`roomWakeText` and `chainOf` (packages/ledger/src/room.ts), which session-wake prints too. On
+exit the watch appends the ids it showed (the lines and their chains) to `DIR/room.seen`, one id a line, as the
+host's session-wake does (not when it stood down), and appends one `delivered` event per waking line. A line wakes
+only once it is past `DIR/room.cursor` and in no wake yet (`room.seen`), the host's `roomWaking` rule. A forward not acked (`forwarded`) 10 minutes after its line
+(`FLEET_ROOM_FORWARD_S`) is told once more by the coordinator's or manager's checks: `! #K for AGENT is not
+forwarded yet: …`.
+
+What T has not read is never a wake: one line, `room: N lines since #K you did not read; \`fleet room <project>
+since K --as <team>\``, where K is `DIR/room.cursor` (0 before any pull) and N counts the lines after K that no wake showed
+and T did not write. It rides on a `--once` watch as the host exiting for a real line (after the news line),
+every state command (warning 10), and the hook's SessionStart and Stop (`fleet_room`).
+
+| Command | Does | Output | Exit |
+| :-- | :-- | :-- | :-- |
+| `room PROJECT since K [--as TEAM]` | prints the lines after #K; moves `DIR/room.cursor` to the last one printed when that is past it; appends a `pull` event | one line each, `#<id> <from> -> <to>: <text>` and ` ↳#<re>` when it has one, `<to>` `everyone` or `@manager`, `@<team>`, `@<team>/<agent>` | 0; 1 refused |
+| `room PROJECT say [--as TEAM] [--re K] TEXT` | sends `return await room(TEXT, { re: K });` on the stdin of fleet-run (`TSTACK_FLEET_RUN`, else the plugin's) with `FLEET_DIR` the team's folder | fleet-run's | fleet-run's; 1 refused |
+| `room PROJECT answer K [--as TEAM] TEXT` | sends `return await room.answer(K, TEXT);` the same way: a worker's answer posted as a reply to #K | fleet-run's | fleet-run's; 1 refused |
+| `room PROJECT forwarded K --to AGENT [--as TEAM]` | sends `return await room.forwarded(K, "AGENT");` the same way; on exit 0 appends a `forwarded` event | fleet-run's | fleet-run's; 1 refused: no line #K |
+
+The team folder is `--as TEAM`'s (a served or moved team whose `room.json` names PROJECT), else the one folder on
+this machine whose `room.json` names PROJECT; none, or several, is refused (`room: …`). Every team folder of a project on one
+machine holds its room, so the lines the CLI prints name `--as`.
+
+`DIR/room-events.jsonl`, one event per line, `at` an ISO time in UTC, which the host ships to the cloud's counters
+(`DIR/room-events.sent` holds the bytes it shipped): `{kind: "pull", at, team, since, lines}`, `{kind: "delivered",
+at, team, line, how: "watch"}`, `{kind: "forwarded", at, team, line, agent}`. The room's calls are the cloud
+prelude's `rooms` connector: `room`, `room.answer` and `room.forwarded` each return a promise, not an op.
+
 ## 1Password locked (`fleet secrets`)
 
 For Luiz: "1p problems ask the user to unlock and pauses all fleet until unblocked." On his machines git
@@ -4581,6 +4636,7 @@ page panel that comes later read that record.
 | the plugin's hook (`fleet_listen_guard`, `fleet_idle_guard`, `fleet_chat_nudge`, `fleet_said_once`, `fleet_news`) | nothing in DIR; the session's `fleet-guard`, `fleet-idle`, `fleet-nudge`, `said-once` and `fleet-news` state in the plugin's data folder |
 | `news post`, and a `state decision --kind notice` once its ledger is written, when a manager is served | `REGISTRY/news/news.jsonl` (under its `flock`) |
 | `news read` | `REGISTRY/news/read/<fleet>` when the cursor moves |
+| `room since` / `forwarded`, a `--once` chat watch woken by the room (TypeScript only) | `DIR/room.cursor` / `DIR/room.seen`, and `DIR/room-events.jsonl` |
 | the plugin's hook (`onepw_watch`, `onepw_hold`) | `REGISTRY/onepw/locked.json` (under `REGISTRY/onepw/onepw.lock`), `REGISTRY/onepw/locked.json.broken` (a state that did not read, set aside), `REGISTRY/onepw/onepw.log` |
 | `fleet secrets unlocked` outside Claude Code | `REGISTRY/onepw/locked.json` (`cleared`, `lapsed` and `told` set, rows dropped, kinds pruned, and the file removed when nothing is left; under `REGISTRY/onepw/onepw.lock`), `REGISTRY/onepw/locked.json.broken`, `REGISTRY/onepw/onepw.log`, and for each held fleet the notice: its `DIR/chat.jsonl` (under the store's lock), or one line to its session's socket, `<FLEET_CC_SOCKS>/<pid>.sock`, when its host's watch is dead |
 | `state`, on a write that numbers a row or `approval add next` (TypeScript only) | `REGISTRY/numbers/numbers.json` (under `REGISTRY/numbers/numbers.lock`), when `REGISTRY` exists |
