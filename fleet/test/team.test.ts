@@ -286,6 +286,30 @@ describe("list and attach", () => {
     });
   });
 
+  test("list refuses when the team's session runs but cannot be read, or the sessions cannot; no session is not running", () => {
+    const at = place();
+    const launcher = new FakeLauncher();
+
+    expect(team(at, launcher, "list")).toEqual({ code: 0, stdout: "ui  not running\n", stderr: "" });
+    team(at, launcher, "start", "ui");
+
+    const blind = new (class extends FakeLauncher {
+      override look(): Why {
+        return { why: "rex could not run" };
+      }
+    })().seed(at.session);
+
+    expect(team(at, blind, "list")).toEqual({ code: 1, stdout: "", stderr: `team: session ${at.session} could not be read: rex could not run\n` });
+
+    const none = new (class extends FakeLauncher {
+      override sessions(): Why {
+        return { why: "rex could not run" };
+      }
+    })();
+
+    expect(team(at, none, "list")).toEqual({ code: 1, stdout: "", stderr: "team: the sessions could not be read: rex could not run\n" });
+  });
+
   test("attach attaches to the team's session", () => {
     const at = place();
     const launcher = new FakeLauncher();

@@ -363,11 +363,16 @@ function stopLocked(ground: Ground, agents: readonly Agent[], force: boolean): S
   return { lines, refused };
 }
 
-/** Where each of `agents` runs: here, elsewhere (where), or not at all. */
+/** Where each of `agents` runs: here, elsewhere (where), or not at all; refused when the launcher cannot say. */
 export function listTeam(ground: Ground, agents: readonly Agent[]): Said {
   const session = ground.team.session;
   const marks = readMarks(ground);
-  const here = lookOf(ground, session);
+  const sessions = ground.launcher.sessions();
+
+  if ("why" in sessions) return { lines: [], refused: [`the sessions could not be read: ${sessions.why}`] };
+  const here = sessions.includes(session) ? ground.launcher.look(session) : undefined;
+
+  if (here !== undefined && "why" in here) return { lines: [], refused: [`session ${session} could not be read: ${here.why}`] };
 
   const lines = agents.map((agent) => {
     const tab = ourTab(marks, here, agent.name);

@@ -50,7 +50,7 @@ export class FakeLauncher implements Launcher {
     return `fake:${name}:${String(this.instances)}:${String(Math.random()).slice(2, 8)}`;
   }
 
-  sessions(): readonly string[] {
+  sessions(): readonly string[] | Why {
     return [...this.held.keys()];
   }
 

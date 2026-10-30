@@ -4463,7 +4463,9 @@ says `all`; `attach` takes none.
   name (idle, as the schema says); `working`; `asking` for `blocked`, or for no state while its program runs, as
   a start reads it; `unknown` for no state once its program ended, or when rex cannot say),
   `running here, not started by fleet
-  team: <where>`, `running elsewhere: <where>`, or `not running`.
+  team: <where>`, `running elsewhere: <where>`, or `not running`. A session of the team's name that runs but
+  cannot be read, or sessions that cannot be listed, refuse with the launcher's reason: only no such session is
+  `not running`.
 - **attach.** Shows the team's session in the Rex app (`rex do session.select session_id=<ID>`, the app
   connected, or the one `REX_CLIENT` or `-C` names); rex has no terminal client on Linux.
 - **The seam.** `team/launcher.ts`: sessions, open-or-reuse (the started session's handle), whether a handle
