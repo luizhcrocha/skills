@@ -1556,6 +1556,56 @@ class NewsHookTest(FleetCase):
         self.assertEqual(self.news(self.hook("SessionStart", self.payload("SessionStart", source="startup"))), [])
 
 
+class RoomHookTest(FleetCase):
+    """fleet_room: SessionStart and Stop name the project room's unread lines in one line, never as a block (fleet/SPEC.md,
+    The project room)."""
+
+    def setUp(self):
+        super().setUp()
+        (self.fleet / "cloud.json").write_text(json.dumps({"fleet": "api"}))
+        (self.fleet / "room.json").write_text(json.dumps({"project": "casos", "manager": "mgr", "teams": []}))
+
+    def line(self, id, frm="user", to="everyone"):
+        with open(self.fleet / "room.jsonl", "a") as f:
+            f.write(json.dumps({"id": id, "at": "2026-10-30T09:00:00Z", "project": "casos", "from": frm, "to": to,
+                                "re": None, "text": f"line {id}", "parts": []}) + "\n")
+
+    def room(self, result):
+        self.assertEqual(result.returncode, 0, result.stderr)
+        text = json.loads(result.stdout)["hookSpecificOutput"]["additionalContext"] if result.stdout else ""
+        return [l for l in text.splitlines() if l.startswith("room:")]
+
+    def pointer(self, count, since):
+        return (f"room: {count} {'line' if count == 1 else 'lines'} since #{since} you did not read; "
+                f"`{self.fleet_cli} room casos since {since} --as api`")
+
+    def test_session_start_and_stop_name_the_lines_left_unread(self):
+        self.watch()  # a live watch: the Stop guard stays quiet
+        start = lambda: self.hook("SessionStart", self.payload("SessionStart", source="resume"))
+        stop = lambda: self.hook("Stop", self.payload("Stop", stop_hook_active=False))
+        self.assertEqual(self.room(start()), [])
+        self.line(1)
+        self.line(2, frm="api")  # its own line is never unread
+        self.line(3, frm="mgr", to=[{"team": "api"}])
+        (self.fleet / "room.seen").write_text("3\n")  # a wake showed it, one id a line
+        self.line(4, frm="web")
+        self.assertEqual(self.room(start()), [self.pointer(2, 0)])
+        out = stop()
+        self.assertNotIn('"decision"', out.stdout, "the room never blocks a stop")
+        self.assertEqual(self.room(out), [self.pointer(2, 0)])
+        self.assertEqual(self.room(stop()), [], "told once per new line on Stop")
+        self.line(5)
+        self.assertEqual(self.room(stop()), [self.pointer(3, 0)])
+        (self.fleet / "room.cursor").write_text("5")
+        self.assertEqual(self.room(start()), [])
+
+    def test_a_worker_and_a_folder_without_a_room_hear_nothing(self):
+        self.line(1)
+        self.assertEqual(self.room(self.hook("SessionStart", self.payload("SessionStart", source="startup", agent_id="a1"))), [])
+        (self.fleet / "room.json").unlink()
+        self.assertEqual(self.room(self.hook("SessionStart", self.payload("SessionStart", source="startup"))), [])
+
+
 class DreamPendingTest(FleetCase):
     """memo_dream_pending: a coordinator's SessionStart says, in one line, how many drafted notes wait for Luiz."""
 

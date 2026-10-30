@@ -2919,6 +2919,11 @@ A handler of SessionStart and Stop tells the host of the machine's news ([The ne
   convenient: \`<plugin>/fleet/bin/fleet news read --as <fleet>\`.` A SessionStart says it whenever any is
   unread; a Stop once per new item (the session's `fleet-news` state keeps the last item told per fleet).
   No process: it reads the registry's entries, the log and the cursor itself.
+- **Room** (`fleet_room`, SessionStart and Stop). For each moved fleet the session hosts (the same membership, and
+  the moved folders it served) whose folder holds a room, when lines are left unread, one line of context, never
+  a block: `room: N lines since #K you did not read; \`<plugin>/fleet/bin/fleet room <project> since K --as
+  <team>\`` ([The project room](#the-project-room-fleet-room)). A SessionStart says it whenever any is unread; a
+  Stop once per new line (the session's `fleet-room` state keeps the last line told per folder). No process.
 
 A Stop handler of the same dispatcher keeps a coordinator at work while work waits (coordinator SKILL.md, Track):
 
@@ -3035,7 +3040,7 @@ forwarded yet: …`.
 What T has not read is never a wake: one line, `room: N lines since #K you did not read; \`fleet room <project>
 since K --as <team>\``, where K is `DIR/room.cursor` (0 before any pull) and N counts the lines after K that no wake showed
 and T did not write. It rides on a `--once` watch as the host exiting for a real line (after the news line),
-every state command (warning 10), and the hook's SessionStart and Stop (`fleet_room`).
+every state command (warning 10), and the hook's SessionStart and Stop (`fleet_room`, [Listening hooks](#listening-hooks)).
 
 | Command | Does | Output | Exit |
 | :-- | :-- | :-- | :-- |
@@ -4633,7 +4638,7 @@ page panel that comes later read that record.
 | the plugin's hook (`fleet_permission_denied`), through `fleet state DIR decision ID --kind refusal\|permission` | `DIR/state.json` (`refusals`, or for a spawn `decisions`; `events`, `updated`), `DIR/index.html`; for a draft one line in `DIR/chat.jsonl` from `fleet-hub`, or one line to the host's session's socket when its watch is not running; the session's `transient-refusals` and `refusal-notes` folders in the plugin's data folder |
 | `usage.py capture` | `REGISTRY/usage/reading.json` |
 | the plugin's hook (`fleet_heartbeat`) | `DIR/heartbeats/<session>[.<agent>].json` |
-| the plugin's hook (`fleet_listen_guard`, `fleet_idle_guard`, `fleet_chat_nudge`, `fleet_said_once`, `fleet_news`) | nothing in DIR; the session's `fleet-guard`, `fleet-idle`, `fleet-nudge`, `said-once` and `fleet-news` state in the plugin's data folder |
+| the plugin's hook (`fleet_listen_guard`, `fleet_idle_guard`, `fleet_chat_nudge`, `fleet_said_once`, `fleet_news`, `fleet_room`) | nothing in DIR; the session's `fleet-guard`, `fleet-idle`, `fleet-nudge`, `said-once`, `fleet-news` and `fleet-room` state in the plugin's data folder |
 | `news post`, and a `state decision --kind notice` once its ledger is written, when a manager is served | `REGISTRY/news/news.jsonl` (under its `flock`) |
 | `news read` | `REGISTRY/news/read/<fleet>` when the cursor moves |
 | `room since` / `forwarded`, a `--once` chat watch woken by the room (TypeScript only) | `DIR/room.cursor` / `DIR/room.seen`, and `DIR/room-events.jsonl` |

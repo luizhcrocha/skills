@@ -1399,6 +1399,73 @@ def fleet_news(hook):
     return "\n".join(lines) or None
 
 
+ROOM_LINE = "room: {count} {lines} since #{cursor} you did not read; `{cli} room {project} since {cursor} --as {team}`"
+
+
+def _room_unread(d):
+    """The project room's lines the team at d has not read (fleet/SPEC.md, The project room), as (ids, cursor, project,
+    team), or None when its folder holds no room: ids after its cursor (DIR/room.cursor), never shown in a wake
+    (DIR/room.seen, one id a line), not its own. The team is the one its cloud.json names."""
+    try:
+        marker = json.loads(Path(d, MOVED_MARKER).read_text())
+        members = json.loads(Path(d, "room.json").read_text())
+        raw = Path(d, "room.jsonl").read_bytes().decode("utf-8", "replace")
+    except (OSError, ValueError):
+        return None
+    team = marker.get("fleet") if isinstance(marker, dict) and isinstance(marker.get("fleet"), str) else os.path.basename(d)
+    project = members.get("project") if isinstance(members, dict) else None
+    if not isinstance(project, str):
+        return None
+    try:
+        cursor = int(Path(d, "room.cursor").read_text().strip())
+    except (OSError, ValueError):
+        cursor = 0
+    try:
+        seen = {int(t) for t in Path(d, "room.seen").read_text().split() if t.isdigit()}
+    except OSError:
+        seen = set()
+    ids = []
+    for text in raw.split("\n"):
+        try:
+            line = json.loads(text) if text.strip() else None
+        except ValueError:
+            continue
+        if not isinstance(line, dict) or not isinstance(line.get("id"), int) or isinstance(line.get("id"), bool):
+            continue
+        if line["id"] > cursor and line["id"] not in seen and line.get("from") != team:
+            ids.append(line["id"])
+    return sorted(set(ids)), cursor, project, team
+
+
+def fleet_room(hook):
+    """SessionStart and Stop: one short line naming the project room's lines each fleet this session hosts has not
+    read, never a block: only a line that tags the team wakes it, through its chat watch. A Stop says it once per new
+    line (the session's `fleet-room` state keeps the last line told per folder); a SessionStart whenever any is
+    unread."""
+    if fleet_worker(hook):
+        return None
+    dirs = fleet_dirs(hook)
+    if not hook.env.get("FLEET_DIR"):
+        dirs = [d for d in dirs if served_by_session(hook, d)]
+        dirs += _moved_served_dirs(hook, dirs)
+    told = hook.load_state("fleet-room") if hook.session_id and hook.event == "Stop" else {}
+    lines, seen = [], dict(told)
+    for d in dirs:
+        unread = _room_unread(d) if moved(d) else None
+        if not unread or not unread[0]:
+            continue
+        ids, cursor, project, team = unread
+        key = os.path.realpath(d)
+        if hook.event == "Stop" and isinstance(told.get(key), int) and max(ids) <= told[key]:
+            continue
+        seen[key] = max(ids)
+        lines.append(ROOM_LINE.format(count=len(ids), lines="line" if len(ids) == 1 else "lines", cursor=cursor,
+                                      cli=fleet_cli(), project=project, team=team))
+    if hook.event == "Stop" and hook.session_id and seen != told:
+        hook.save_state("fleet-room", seen)
+    return "\n".join(lines) or None
+
+
 SAID_ONCE = ("You answered on the page ({where}). Said once: end this turn with one line naming where, e.g. "
              "'{example}' Do not repeat the answer here.")
 SAID_ONCE_CHARS = 200  # "Answered #42 on the page." and a short note of what comes next fit; an answer does not
@@ -6863,8 +6930,8 @@ def grant_records_tracked(hook):
 
 
 HANDLERS = {
-    "SessionStart": [memo_wake, jj_hints, tuca_mode, fleet_news, memo_dream_pending, fleet_heartbeat, grant_records_tracked, tape_build],
-    "Stop": [memo_nudge, fleet_listen_guard, fleet_idle_guard, fleet_said_once, fleet_news, fleet_heartbeat],
+    "SessionStart": [memo_wake, jj_hints, tuca_mode, fleet_news, fleet_room, memo_dream_pending, fleet_heartbeat, grant_records_tracked, tape_build],
+    "Stop": [memo_nudge, fleet_listen_guard, fleet_idle_guard, fleet_said_once, fleet_news, fleet_room, fleet_heartbeat],
     "PreCompact": [memo_precompact],
     "PreToolUse": [fleet_agent_grant, fleet_spawn_effort, fleet_moved_writes, land_turn_gate, push_attribution, suite_gate,
                    onepw_hold, rm_guard, fleet_monitor_watch, fleet_grant_alone],
