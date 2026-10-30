@@ -1,8 +1,8 @@
 /**
- * `fleet onepw` and `fleet onepw unlocked [--note TEXT]`: the machine's 1Password lock (onepw.ts) from a
- * terminal or a session. With no command it prints the state, anywhere, and changes nothing. `unlocked` is
- * the user's own word, for a terminal outside Claude Code: it clears every locked kind as the user and
- * settles at once, so each held fleet is told now.
+ * `fleet secrets` and `fleet secrets unlocked [--note TEXT]` (`fleet onepw`, the old name, is a hidden alias):
+ * the machine's 1Password lock (onepw.ts) from a terminal or a session. With no command it prints the state,
+ * anywhere, and changes nothing. `unlocked` is the user's own word, for a terminal outside Claude Code: it
+ * clears every locked kind as the user and settles at once, so each held fleet is told now.
  *
  * `unlocked` is refused inside a Claude Code session: `CLAUDECODE` or `CLAUDE_CODE_SESSION_ID` in the
  * environment (as `fleet tell`), or a Claude Code process among the caller's ancestors, which unsetting the
@@ -23,7 +23,7 @@ import { World, type Machine } from "../world.ts";
 import { formatUsage, opt, parseArgs, usageWidth, type CommandSpec } from "./args.ts";
 import { exitOf, printUsage } from "./exit.ts";
 
-const PROG = "fleet onepw";
+const PROG = "fleet secrets";
 
 const UNLOCKED: CommandSpec = { name: "unlocked", positionals: [], options: [opt.value("--note", { metavar: "TEXT" })] };
 
@@ -46,9 +46,9 @@ A kind also clears when a command of that kind succeeds in any session, and laps
 lock. A fleet is told at most once in 30 min.`;
 
 /** What `unlocked` says to a Claude Code session. */
-const REFUSED = "onepw: only the user clears the lock, by running `fleet onepw unlocked` in his own terminal; an agent does not say for the user that 1Password is unlocked. `fleet onepw` prints the state.\n";
+const REFUSED = "secrets: only the user clears the lock, by running `fleet secrets unlocked` in his own terminal; an agent does not say for the user that 1Password is unlocked. `fleet secrets` prints the state.\n";
 
-/** What `fleet onepw unlocked` asks of the machine it runs on. The process's own are {@link HERE}; a test
+/** What `fleet secrets unlocked` asks of the machine it runs on. The process's own are {@link HERE}; a test
  * gives its own, since the tests themselves run under a Claude Code session and write to no socket. */
 export interface Seams {
   /** Whether a Claude Code process is among this process's ancestors. */
@@ -106,11 +106,11 @@ function run(machine: Machine, argv: readonly string[], seams: Seams): Effect.Ef
       return 1;
     }
 
-    const cleared = clear(machine, "user", parsed.args.str("note") ?? "fleet onepw unlocked");
+    const cleared = clear(machine, "user", parsed.args.str("note") ?? "fleet secrets unlocked");
     const settled = yield* Effect.promise(() => settle(machine, { socks: socksDir(machine.env), send: seams.send, probe: seams.probe }).catch((cause: unknown): Settled | Error => new Error(strerror(cause))));
 
     if (settled instanceof Error) {
-      out.err(`onepw: ${cleared === undefined ? "nothing was locked" : "unlocked"}, and the fleets could not be told: ${settled.message}\n`);
+      out.err(`secrets: ${cleared === undefined ? "nothing was locked" : "unlocked"}, and the fleets could not be told: ${settled.message}\n`);
 
       return 1;
     }
@@ -126,7 +126,8 @@ function run(machine: Machine, argv: readonly string[], seams: Seams): Effect.Ef
   });
 }
 
-/** Run `fleet onepw` with `argv` (after `onepw`); the exit code. `seams` are the machine's unless a test says. */
+/** Run `fleet secrets` with `argv` (after `secrets`, or its alias `onepw`); the exit code. `seams` are the
+ * machine's unless a test says. */
 export function onepwCli(argv: readonly string[], seams: Seams = HERE): Effect.Effect<number, never, Out | World> {
   return Effect.gen(function* () {
     const machine = yield* World;

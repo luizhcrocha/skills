@@ -1,7 +1,7 @@
 /**
  * The card "Unlock 1Password": on every page while 1Password is locked on the machine (the view's `onepw`,
  * fleet/src/onepw.ts), above everything else that waits, reading as an action of the user's. It gives the
- * command that clears the lock, `fleet onepw unlocked`, for the user's own terminal, and posts nothing; the card
+ * command that clears the lock, `fleet secrets unlocked`, for the user's own terminal, and posts nothing; the card
  * goes when the state does. Run in happy-dom, through `takeState`.
  */
 import { afterEach, beforeEach, expect, test } from "bun:test";
@@ -87,7 +87,7 @@ test("while 1Password is locked, a fleet's page and the manager's open with the 
       "Waiting: a session outside the fleets, for the GitHub CLI.",
     ]);
     expect(text("#onepw .ask > .meta")).toStartWith("Asked 42 min ago.");
-    expect(command()).toBe("fleet onepw unlocked");
+    expect(command()).toBe("fleet secrets unlocked");
     expect(root.querySelector("#decisions")?.firstElementChild?.id).toBe("onepw");
     dispose();
     root.replaceChildren();
@@ -108,7 +108,7 @@ test("cleared and then locked again, it is the same card marked still locked: as
   ]);
   expect(root.querySelectorAll("#onepw .onepw-waits").length).toBe(2);
   expect(text("#onepw .ask > .meta")).toStartWith("Asked 42 min ago.");
-  expect(command()).toBe("fleet onepw unlocked");
+  expect(command()).toBe("fleet secrets unlocked");
   page.m.takeState(JSON.stringify({ ...view, onepw: { ...ONEPW, again: stamp(20_000) }, updated: new Date(NOW + 1000).toISOString() }));
   flush();
   expect(text("#onepw .onepw-again")).toBe("It was cleared and a command failed again just now.");
@@ -157,7 +157,7 @@ test("the card gives the command and posts nothing; it goes when the state does"
 
 test("a copy of the page with no server shows the same card and command", () => {
   show({ ...coordinatorView(NOW), onepw: ONEPW }, "unavailable");
-  expect(command()).toBe("fleet onepw unlocked");
+  expect(command()).toBe("fleet secrets unlocked");
 });
 
 test("a view without the key, or with one that is no card, shows none", () => {

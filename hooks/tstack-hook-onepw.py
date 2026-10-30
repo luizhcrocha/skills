@@ -99,24 +99,24 @@ ONEPW_WHY = {"signing": "SSH signing through 1Password failed", "dismissed": "th
 ONEPW_BROKEN = ("not JSON", "no kinds", "an unknown kind", "a kind's since", "a kind's cleared", "waiting", "told")
 # The words of a hold lead with who tells the fleet. They once led with "Don't retry `{what}` before {next}", and a
 # fleet summed that up as "I wait for that time" (Luiz, 2026-10-13): the refusal itself puts the fleet on the waiting
-# list, `fleet onepw unlocked` tells it, and {next} is only when the hook lets one command through to test the lock.
+# list, `fleet secrets unlocked` tells it, and {next} is only when the hook lets one command through to test the lock.
 ONEPW_HELD = ("1Password is locked for {kind}. {told} Do not poll and do not ask Luiz in chat: the lock was recorded "
-              "for the machine at {at}, and he clears it by running `fleet onepw unlocked` in his terminal. A "
+              "for the machine at {at}, and he clears it by running `fleet secrets unlocked` in his terminal. A "
               "coordinator whose work waits on it asks him once, with an action card whose manual is that command in "
               "a ```nu block. Go on with work that needs no 1Password, or end the turn if nothing else is left. The "
               "hook lets one command of this kind through at {next}, from any fleet, to test the lock: that is its own "
               "test, not a time to wait for.")
 ONEPW_SEEN = ("1Password is locked for {kind} ({why}). {told} Do not poll and do not ask Luiz in chat: the lock was "
-              "recorded once for the machine at {at}, and he clears it by running `fleet onepw unlocked` in his "
+              "recorded once for the machine at {at}, and he clears it by running `fleet secrets unlocked` in his "
               "terminal. A coordinator whose work waits on it asks him once, with an action card whose manual is that "
               "command in a ```nu block. Go on with work that needs no 1Password, or end the turn if nothing else is "
               "left.")
 ONEPW_TOLD = ("This fleet is on the waiting list: it is told when Luiz says 1Password is unlocked, in its chat, "
               "or in its session when its watch is not running. Retry `{what}` then, not before.")
 ONEPW_UNTOLD = ("This fleet is not in the registry, so it will not be told when 1Password is unlocked: check "
-                "`{cli} onepw` before you retry `{what}`.")
+                "`{cli} secrets` before you retry `{what}`.")
 ONEPW_UNKEPT = ("This fleet could not be put on the waiting list, so it will not be told when 1Password is unlocked: "
-                "check `{cli} onepw` before you retry `{what}`.")
+                "check `{cli} secrets` before you retry `{what}`.")
 
 
 def _first_line(path):
@@ -575,7 +575,7 @@ def _onepw_lapse(env):
 
 def _onepw_status(entry, env):
     """A kind at now: `cleared` when its `cleared` is not empty, else `lapsed` once it is older than the lapse
-    ($FLEET_ONEPW_LAPSE_S, 2 h), else `locked`. A cleared or lapsed kind holds nothing; `fleet onepw unlocked` settles it."""
+    ($FLEET_ONEPW_LAPSE_S, 2 h), else `locked`. A cleared or lapsed kind holds nothing; `fleet secrets unlocked` settles it."""
     if entry.get("cleared"):
         return "cleared"
     return "lapsed" if max(0.0, fleet_now(env) - _instant(entry["since"])) >= _onepw_lapse(env) else "locked"
@@ -710,7 +710,7 @@ def _bash_exit(hook, response):
 
 def _onepw_hold(hook):
     """PreToolUse (Bash): while a kind of 1Password use is locked, a command of that kind is denied in a fleet's
-    session and its workers, and its fleet is added to those `fleet onepw unlocked` tells. Once the kind's probe
+    session and its workers, and its fleet is added to those `fleet secrets unlocked` tells. Once the kind's probe
     window is open (_onepw_window), the next such command that no other gate refused takes it under the state's lock
     and is let through: one of however many arrive together, so a lock that is no longer true ends by a command that
     succeeds (_onepw_watch). A kind that cleared between the read and the lock denies nothing. Nothing else is held,

@@ -77,7 +77,7 @@ const UNLOCK = { status: "open", asks: "user", blocking: true, kind: "action" } 
  * While 1Password is locked on the machine: the card that asks the user to unlock it, the same on every
  * page, above everything else that waits. It reads as an action of the user's, though no decision holds it:
  * it shows from the machine's state, and it goes when that state does. The user clears the lock by running
- * `fleet onepw unlocked` in his own terminal, which tells each held fleet; no page answers for him. Cleared
+ * `fleet secrets unlocked` in his own terminal, which tells each held fleet; no page answers for him. Cleared
  * and then seen locked again, it is the same card, asked since the same moment, marked "still locked".
  */
 function Unlock(): JSX.Element {
@@ -108,7 +108,7 @@ function Unlock(): JSX.Element {
               </For>
               <span class="meta">Asked {m.ago(o().since)}. Every fleet holds its commands that need 1Password until then, and goes on with the rest.</span>
               <div id="onepw-run">
-                <CodeBlock lang="nu" text="fleet onepw unlocked" />
+                <CodeBlock lang="nu" text="fleet secrets unlocked" />
               </div>
             </div>
           </div>

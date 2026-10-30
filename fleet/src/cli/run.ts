@@ -28,7 +28,7 @@ import { stateCli } from "./state.ts";
 import { turnCli } from "./turn.ts";
 import { TRASH_COMMANDS, wsCli } from "./ws.ts";
 
-const USAGE = "usage: fleet {version,ls,state,chat,fleets,news,onepw,ws,preview,brief,turn,advisor,serve,render,usage,spend,served} ...\n";
+const USAGE = "usage: fleet {version,ls,state,chat,fleets,news,secrets,ws,preview,brief,turn,advisor,serve,render,usage,spend,served} ...\n";
 
 /** This copy of tstack: its version (from the plugin's manifest) and where it is, for `fleet version`. */
 function versionLine(): string {
@@ -122,7 +122,9 @@ function route(argv: readonly string[]): Effect.Effect<number, never, Out | Worl
 
   if (cli === "news") return newsCli(rest);
 
-  if (cli === "onepw") return onepwCli(rest);
+  // `onepw` is the name `secrets` had before 2026-10-29: a hidden alias, in no usage, for sessions on an
+  // older copy and older rule text.
+  if (cli === "secrets" || cli === "onepw") return onepwCli(rest);
 
   if (cli === "ws") return wsCli(rest);
 
@@ -140,7 +142,7 @@ function route(argv: readonly string[]): Effect.Effect<number, never, Out | Worl
   return Effect.gen(function* () {
     const out = yield* Out;
 
-    out.err(`${USAGE}fleet: error: the first argument is state, chat, fleets, news, onepw, ws, preview, brief, turn, advisor, serve, render, usage, spend or served\n`);
+    out.err(`${USAGE}fleet: error: the first argument is state, chat, fleets, news, secrets, ws, preview, brief, turn, advisor, serve, render, usage, spend or served\n`);
 
     return 2;
   });

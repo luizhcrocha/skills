@@ -1,5 +1,5 @@
 /**
- * 1Password locked (`fleet onepw`, src/onepw.ts): the state the plugin's hook writes in `REGISTRY/onepw/`
+ * 1Password locked (`fleet secrets`, src/onepw.ts): the state the plugin's hook writes in `REGISTRY/onepw/`
  * (version 2, a lock per kind), how it reads and when it does not, Luiz's clear, the settle that tells each
  * held fleet (in its chat, or its session when its watch is dead; at most once in 30 min), the card every page
  * shows, and the CLI. The hook itself is Python (`scripts/tests/test_tstack_hook.py`); here its file is
@@ -41,7 +41,7 @@ const unlocked = (at: string, since: string, kinds: string): string => `[hub] 1P
 
 const lapsed = (at: string, since: string, kinds: string): string => `[hub] The 1Password hold lapsed (${at}; locked since ${since}, 2 h with no answer). Held here: ${kinds}. Retry once.`;
 
-const REFUSED = "onepw: only the user clears the lock, by running `fleet onepw unlocked` in his own terminal; an agent does not say for the user that 1Password is unlocked. `fleet onepw` prints the state.\n";
+const REFUSED = "secrets: only the user clears the lock, by running `fleet secrets unlocked` in his own terminal; an agent does not say for the user that 1Password is unlocked. `fleet secrets` prints the state.\n";
 
 /** What the machine says of a session that is there, and of one that is gone. */
 const THERE: Probe = { running: () => ({ claude: true, started: "t" }), holds: () => true, startedMs: () => undefined };
@@ -144,11 +144,11 @@ function watching(dir: string, role = "coordinator"): void {
   writeFileSync(join(dir, `watch-${role}.pid`), String(proc.pid));
 }
 
-function onepw(...args: string[]): Ran {
-  return fleet(["onepw", ...args], { ...env, FLEET_NOW: at });
+function secrets(...args: string[]): Ran {
+  return fleet(["secrets", ...args], { ...env, FLEET_NOW: at });
 }
 
-/** `fleet onepw ARGS` over this test's seams: no Claude Code above unless `seams` says, this test's `send`. */
+/** `fleet secrets ARGS` over this test's seams: no Claude Code above unless `seams` says, this test's `send`. */
 async function cli(args: readonly string[], seams: Partial<Seams> = {}, more: Readonly<Environment> = {}): Promise<Ran> {
   const { layer, recorded } = recordingOut();
   const world = worldLayer.pipe(Layer.provide(Layer.mergeAll(clockFrom(at), envOf({ ...env, ...more }))));
@@ -303,7 +303,7 @@ describe("a state that does not read", () => {
     writeFileSync(statePath(m), text);
     writeFileSync(brokenPath(m), "an older one");
     expect([readState(m), locked(m), cardOf(m), statusLine(m), clear(m, "user", "x")]).toEqual([{ broken: reason }, undefined, undefined, "1Password: not known to be locked", undefined]);
-    expect(onepw()).toEqual({ code: 0, stdout: "1Password: not known to be locked\n", stderr: "" });
+    expect(secrets()).toEqual({ code: 0, stdout: "1Password: not known to be locked\n", stderr: "" });
     expect([readFileSync(statePath(m), "utf8"), existsSync(logPath(m))]).toEqual([text, false]);
     expect(await settle(m, how())).toBeUndefined();
     expect([existsSync(statePath(m)), readFileSync(brokenPath(m), "utf8")]).toEqual([false, text]);
@@ -702,24 +702,24 @@ describe("the card", () => {
   });
 });
 
-describe("fleet onepw", () => {
+describe("fleet secrets", () => {
   test("prints the state anywhere and changes nothing: not known to be locked, or each locked kind, since when, why and who waits for what", () => {
     env["CLAUDECODE"] = "1";
-    expect(onepw()).toEqual({ code: 0, stdout: "1Password: not known to be locked\n", stderr: "" });
+    expect(secrets()).toEqual({ code: 0, stdout: "1Password: not known to be locked\n", stderr: "" });
     expect(existsSync(join(home, "onepw"))).toBe(false);
     const skills = served("skills");
     const casos = served("casos");
     lock({ "ssh-agent": SSH, "op-desktop": OP }, [row(skills, "ssh-agent", { worker: "a3" }), row(casos, "op-desktop"), row(skills), row(null, "op-desktop", { what: "gh pr; rm -rf /" })]);
     const before = readFileSync(statePath(m), "utf8");
 
-    expect(onepw().stdout).toBe(
+    expect(secrets().stdout).toBe(
       "1Password: locked: ssh-agent since 13:50 (SSH signing through 1Password failed), op-desktop since 14:05 (the 1Password prompt was dismissed); waiting: skills (jj git push), casos (secretspec run), a session outside the fleets (op-desktop)\n",
     );
     expect([readFileSync(statePath(m), "utf8"), existsSync(logPath(m))]).toEqual([before, false]);
     lock({ "ssh-agent": SSH });
-    expect(onepw().stdout).toBe("1Password: locked: ssh-agent since 13:50 (SSH signing through 1Password failed); nothing waits\n");
+    expect(secrets().stdout).toBe("1Password: locked: ssh-agent since 13:50 (SSH signing through 1Password failed); nothing waits\n");
     lock({ "ssh-agent": { ...SSH, cleared: { at, by: "command", note: "jj git push" } } }, [row(skills), row(casos), row(null)]);
-    const over = onepw();
+    const over = secrets();
     expect(over.stdout).toBe("1Password: not known to be locked\na hold is over and 2 fleet(s) are not told yet: each is told the next time the user clears the lock from his own terminal, once 30 min have passed since it was last told\n");
     expect([over.stdout.includes("unlocked`"), said(skills), existsSync(logPath(m))]).toEqual([false, [], false]);
   });
@@ -732,15 +732,15 @@ describe("fleet onepw", () => {
     expect(await cli(["unlocked"], {}, { CLAUDECODE: "1" })).toEqual(refused);
     expect(await cli(["unlocked", "--note", "Luiz said so"], {}, { CLAUDE_CODE_SESSION_ID: "5e55-10n" })).toEqual(refused);
     expect(await cli(["unlocked"], { claudeAbove: () => true })).toEqual(refused);
-    expect(fleet(["onepw", "unlocked"], { ...env, FLEET_NOW: at, CLAUDECODE: "1" })).toEqual(refused);
+    expect(fleet(["secrets", "unlocked"], { ...env, FLEET_NOW: at, CLAUDECODE: "1" })).toEqual(refused);
     expect([readFileSync(statePath(m), "utf8"), existsSync(logPath(m)), said(skills), sent, locked(m)?.kinds]).toEqual([before, false, [], [], ["ssh-agent"]]);
   });
 
-  test("the process's own answer: `fleet onepw unlocked` with neither variable is refused exactly when Claude Code is above it", () => {
+  test("the process's own answer: `fleet secrets unlocked` with neither variable is refused exactly when Claude Code is above it", () => {
     lock({ "ssh-agent": SSH });
     const before = readFileSync(statePath(m), "utf8");
     const above = claudeAbove();
-    const ran = spawnFleet(["onepw", "unlocked"], { ...env, FLEET_NOW: at });
+    const ran = spawnFleet(["secrets", "unlocked"], { ...env, FLEET_NOW: at });
     expect(ran).toEqual(above ? { code: 1, stdout: "", stderr: REFUSED } : { code: 0, stdout: "1Password: unlocked; no fleet was told now\n", stderr: "" });
     expect([readFileSync(statePath(m), "utf8") === before, logged().length]).toEqual(above ? [true, 0] : [false, 1]);
   });
@@ -763,7 +763,7 @@ describe("fleet onepw", () => {
     const skills = served("skills");
     lock({ "op-desktop": OP }, [row(null, "op-desktop", { what: "gh pr" })]);
     expect(await cli(["unlocked"])).toEqual({ code: 0, stdout: "1Password: unlocked; no fleet was told now\n", stderr: "" });
-    expect(logged()).toEqual([`${at} cleared by user: fleet onepw unlocked`]);
+    expect(logged()).toEqual([`${at} cleared by user: fleet secrets unlocked`]);
     later(60);
     lock({ "ssh-agent": SSH }, [row(skills)], { told: { [skills]: "2026-10-12T14:30:00+00:00" } });
 
@@ -774,14 +774,27 @@ describe("fleet onepw", () => {
   });
 
   test("anything else is a usage error", () => {
-    const bad = onepw("locked");
+    const bad = secrets("locked");
     expect([bad.code, bad.stdout]).toEqual([2, ""]);
-    expect(bad.stderr).toContain("fleet onepw: error: unrecognized arguments: locked");
-    expect(onepw("unlocked", "now").code).toBe(2);
-    const help = onepw("--help").stdout;
-    expect(help).toContain("usage: fleet onepw [-h] [unlocked [--note TEXT]]");
+    expect(bad.stderr).toContain("fleet secrets: error: unrecognized arguments: locked");
+    expect(secrets("unlocked", "now").code).toBe(2);
+    const help = secrets("--help").stdout;
+    expect(help).toContain("usage: fleet secrets [-h] [unlocked [--note TEXT]]");
     expect(help).toContain("Refused inside a Claude Code session");
     expect(help).toContain("Every 15 min the hook lets one held command of a locked kind through");
-    expect(fleet(["nope"], env).stderr).toContain("usage: fleet {version,ls,state,chat,fleets,news,onepw,ws,");
+    const nope = fleet(["nope"], env).stderr;
+    expect(nope).toContain("usage: fleet {version,ls,state,chat,fleets,news,secrets,ws,");
+    expect(nope).toContain("the first argument is state, chat, fleets, news, secrets, ws,");
+    expect([nope.includes("onepw"), help.includes("onepw")]).toEqual([false, false]);
+  });
+
+  test("`fleet onepw` is a hidden alias of `fleet secrets`: sessions on an older copy and older rule text keep working", () => {
+    expect(fleet(["onepw"], { ...env, FLEET_NOW: at })).toEqual(secrets());
+    lock({ "ssh-agent": SSH }, [row(served("skills"))]);
+    expect(fleet(["onepw"], { ...env, FLEET_NOW: at }).stdout).toBe("1Password: locked: ssh-agent since 13:50 (SSH signing through 1Password failed); waiting: skills (jj git push)\n");
+    const before = readFileSync(statePath(m), "utf8");
+    expect(fleet(["onepw", "unlocked"], { ...env, FLEET_NOW: at, CLAUDECODE: "1" })).toEqual({ code: 1, stdout: "", stderr: REFUSED });
+    expect(readFileSync(statePath(m), "utf8")).toBe(before);
+    expect(fleet(["onepw", "--help"], { ...env, FLEET_NOW: at }).stdout).toContain("usage: fleet secrets [-h] [unlocked [--note TEXT]]");
   });
 });

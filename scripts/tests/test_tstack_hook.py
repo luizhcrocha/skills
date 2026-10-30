@@ -6871,12 +6871,12 @@ class OnepwTest(FleetCase):
         self.assertFalse(self.held("git fetch", repo="none"))
 
     HELD_REST = (" Do not poll and do not ask Luiz in chat: the lock was recorded for the machine at 09:00, and he "
-                 "clears it by running `fleet onepw unlocked` in his terminal. A coordinator whose work waits on it asks "
+                 "clears it by running `fleet secrets unlocked` in his terminal. A coordinator whose work waits on it asks "
                  "him once, with an action card whose manual is that command in a ```nu block. Go on with work that "
                  "needs no 1Password, or end the turn if nothing else is left. The hook lets one command of this kind "
                  "through at 09:15, from any fleet, to test the lock: that is its own test, not a time to wait for.")
     SEEN_REST = (" Do not poll and do not ask Luiz in chat: the lock was recorded once for the machine at 09:00, and he "
-                 "clears it by running `fleet onepw unlocked` in his terminal. A coordinator whose work waits on it asks "
+                 "clears it by running `fleet secrets unlocked` in his terminal. A coordinator whose work waits on it asks "
                  "him once, with an action card whose manual is that command in a ```nu block. Go on with work that "
                  "needs no 1Password, or end the turn if nothing else is left.")
 
@@ -6900,13 +6900,13 @@ class OnepwTest(FleetCase):
         got = self.asks("jj git push --bookmark main")
         self.assertEqual(got["permissionDecisionReason"], (
             f"1Password is locked for {SSH_KIND}. This fleet is not in the registry, so it will not be told when "
-            f"1Password is unlocked: check `{self.fleet_cli} onepw` before you retry `jj git push`." + self.HELD_REST))
+            f"1Password is unlocked: check `{self.fleet_cli} secrets` before you retry `jj git push`." + self.HELD_REST))
         self.assertEqual([(w["dir"], w["fleet"], w["what"], w["seen"]) for w in self.state()["waiting"]][2:],
                          [(None, None, "jj git push", "held")])
         said = json.loads(self.failed("gh pr list", OP_TIMEOUT, event="PostToolUse").stdout)["hookSpecificOutput"]
         self.assertEqual(said["additionalContext"], (
             f"1Password is locked for {OP_KIND} (the 1Password prompt timed out). This fleet is not in the registry, so "
-            f"it will not be told when 1Password is unlocked: check `{self.fleet_cli} onepw` before you retry `gh pr`."
+            f"it will not be told when 1Password is unlocked: check `{self.fleet_cli} secrets` before you retry `gh pr`."
             + self.SEEN_REST))
         self.assertIn(f"{self.NOW} held: jj git push in a session\n", self.onepw_log())
         self.assertIn("another waits: op-desktop in a session\n", self.onepw_log())
@@ -6947,7 +6947,7 @@ class OnepwTest(FleetCase):
                          "hookSpecificOutput"]["additionalContext"]):
             self.assertIn(
                 ". This fleet could not be put on the waiting list, so it will not be told when 1Password is unlocked: "
-                f"check `{self.fleet_cli} onepw` before you retry `gh pr`. Do not poll and ", said)
+                f"check `{self.fleet_cli} secrets` before you retry `gh pr`. Do not poll and ", said)
             self.assertNotIn("it is told when", said)
         self.assertEqual(len(self.state()["waiting"]), load_hook().ONEPW_WAITING_MAX)
         self.assertIn(". This fleet is on the waiting list: it is told when ", self.asks("gh pr list")["permissionDecisionReason"])
@@ -7254,7 +7254,7 @@ class OnepwTest(FleetCase):
         other = self.other_fleet()[0]
         self.assertIn(  # held, and its row could not be written
             ". This fleet could not be put on the waiting list, so it will not be told when 1Password is unlocked: check "
-            f"`{self.fleet_cli} onepw` before you retry `gh pr`. ", self.reason("gh pr list", payload=other))
+            f"`{self.fleet_cli} secrets` before you retry `gh pr`. ", self.reason("gh pr list", payload=other))
         self.assertIn("onepw_hold: could not record the hold", self.log())
         r = self.failed("gh pr list", OP_DISMISSED, event="PostToolUse", payload=other)
         self.assertEqual(r.stdout, "")

@@ -27,7 +27,7 @@ Contents: [Environment](#environment) · [state.py](#statepy-the-ledger-cli) ·
 [chat.py](#chatpy-the-chat) · [fleets.py and the registry](#fleetspy-and-the-registry) ·
 [The other scripts](#the-other-scripts) · [`fleet serve`](#fleet-serve-the-fleets-host) · [Heartbeats](#heartbeats) ·
 [Listening hooks](#listening-hooks) · [The wake](#the-wake) · [The news](#the-news-fleet-news) ·
-[1Password locked](#1password-locked-fleet-onepw) ·
+[1Password locked](#1password-locked-fleet-secrets) ·
 [Workspaces](#workspaces-fleet-ws) · [The preview](#the-preview-fleet-preview) · [The advisor](#the-advisor-fleet-advisor) · [Files by writer](#files-by-writer) ·
 [Oracle traces](#oracle-traces) · [The model](#the-model-based-test) · [Open](#open)
 
@@ -64,7 +64,7 @@ Contents: [Environment](#environment) · [state.py](#statepy-the-ledger-cli) ·
 | `FLEET_REFUSAL_REMIND_S` | the plugin's hook (`fleet_listen_guard`) | how long the Stop guard stays quiet about a refused chat watch after it said so, before it blocks with the command again (default 1800 s). See [Listening hooks](#listening-hooks) |
 | `FLEET_NUDGE_MIN` | the plugin's hook (`fleet_chat_nudge`) | how long the user's message waits unread, or an answer unrecorded, before the session is told mid-turn (default 3 minutes). See [Listening hooks](#listening-hooks) |
 | `FLEET_CC_SOCKS` | src/wake.ts `deliverTo` (the 1Password notice, the `[hub]` line to a host) | the folder of Claude Code's session sockets, `<pid>.sock` each, that a line to a session is written to (default `$XDG_RUNTIME_DIR/cc-socks`; the tests set a folder of their own, so no test reaches a real session). See [The wake](#the-wake) |
-| `FLEET_ONEPW_LAPSE_S` | the plugin's hook (`onepw_watch`, `onepw_hold`), `fleet onepw` | how long a kind of 1Password lock holds with no answer before it lapses (default 7200 s; unset, empty or no number is the default; 0 or less means nothing ever holds). See [1Password locked](#1password-locked-fleet-onepw) |
+| `FLEET_ONEPW_LAPSE_S` | the plugin's hook (`onepw_watch`, `onepw_hold`), `fleet secrets` | how long a kind of 1Password lock holds with no answer before it lapses (default 7200 s; unset, empty or no number is the default; 0 or less means nothing ever holds). See [1Password locked](#1password-locked-fleet-secrets) |
 
 A DIR at `…/<project>/<session>/scratchpad/<name>` names a session transcript; any other DIR has
 none, and every figure read from a transcript (spend, worker tokens, liveness) is absent.
@@ -2997,7 +2997,7 @@ entry's `id`, matched by its dir.
 Why no relay: an item another fleet must act on goes to that fleet as one direct message, once; routing it
 through the manager wakes the manager (a large context) and then the fleet, two wakes for one.
 
-## 1Password locked (`fleet onepw`)
+## 1Password locked (`fleet secrets`)
 
 For Luiz: "1p problems ask the user to unlock and pauses all fleet until unblocked." On his machines git
 over SSH signs through the 1Password agent, and `op`, `secretspec`, `gh` and `aws` read their secrets from
@@ -3005,7 +3005,7 @@ the 1Password app. When the app is locked, each of those commands fails in every
 would open its own card for the same cause. So the machine keeps one state: the first failure of a kind
 asks Luiz once, with one card on every page; while that kind is locked, the plugin's hook denies the fleets'
 commands of that kind, but for one every 15 minutes that tests the lock, and the rest of the work goes on;
-when Luiz runs `fleet onepw unlocked` in his terminal, it tells each held fleet once.
+when Luiz runs `fleet secrets unlocked` in his terminal, it tells each held fleet once.
 TypeScript and the plugin's hook only: the Python twin has none of it, and with nothing locked no view or
 trace differs.
 
@@ -3254,7 +3254,7 @@ The example shows every key a kind can have, not a state that occurs: a kind nev
 | `kinds.<k>.hosts` | `ssh-agent` only: the hosts seen failing through the agent, at most `HOSTS_MAX`, each `[a-z0-9][a-z0-9._-]{0,252}` as the hook writes it (the fleet keeps `[a-z0-9._-]{1,253}`). Absent when none is known |
 | `kinds.<k>.again` | set when the kind was locked again inside the reopen window of a clear ([Damping](#damping)): the card says `still locked` |
 | `kinds.<k>.probe` | when the last probe window of this lock was taken ([The probe window](#the-probe-window)). Written and read by the hook; the fleet keeps it as it is |
-| `kinds.<k>.cleared` | `{at, by, note}`: `by` is `user` (`note`: the CLI's `--note`, else `fleet onepw unlocked`; a state from before 1.9.89 may hold `answered on the page`, from the removed hub's button) or `command` (`note`: the command's `what`). Absent or empty (null, false, `{}`) while locked |
+| `kinds.<k>.cleared` | `{at, by, note}`: `by` is `user` (`note`: the CLI's `--note`, else `fleet secrets unlocked`, or `fleet onepw unlocked` in a state written before the command was renamed; a state from before 1.9.89 may hold `answered on the page`, from the removed hub's button) or `command` (`note`: the command's `what`). Absent or empty (null, false, `{}`) while locked |
 | `kinds.<k>.lapsed` | written by the settle pass the first time it sees the kind past its lapse, so the lapse is logged once |
 | `waiting[]` | who is held: one row per fleet DIR and kind, written for the first command of that kind that failed or was held there, at most `ONEPW_WAITING_MAX` rows. A fleet is told once per hold, so one row per kind is all it needs, and the cap counts fleets, never one fleet's commands. The sessions of no registered fleet share one row per kind, with no `dir`. A row stays until its fleet is told, or it is dropped because nobody can be told |
 | `waiting[].dir` | the fleet's DIR, resolved; null for a session whose fleet is in no registry |
@@ -3300,7 +3300,7 @@ hook, the only reader of it) a `probe` that does not parse; a `told` value that 
 cannot be opened is treated as no file.
 
 A broken file is never a lock and holds nothing. Whoever reads it broken while acting sets it aside: the
-hook on a command that is a use, and the settle pass. `fleet onepw` and the card only read: to them a broken
+hook on a command that is a use, and the settle pass. `fleet secrets` and the card only read: to them a broken
 file is "not known to be locked". Setting aside runs under `onepw.lock`: the file is read there (again, for
 the hook, which first read it without the lock), and when it is still broken it is renamed to
 `locked.json.broken` (replacing an older one) and one line is appended to `onepw.log`:
@@ -3360,16 +3360,16 @@ line, with the kind's fixed words, the local `HH:MM` of the kind's `since`, the 
 the local `HH:MM` the kind's next probe window opens at (its lapse when that comes first; never before now):
 
 ```
-1Password is locked for <kind's words>. <told> Do not poll and do not ask Luiz in chat: the lock was recorded for the machine at HH:MM, and he clears it by running `fleet onepw unlocked` in his terminal. A coordinator whose work waits on it asks him once, with an action card whose manual is that command in a ```nu block. Go on with work that needs no 1Password, or end the turn if nothing else is left. The hook lets one command of this kind through at <next>, from any fleet, to test the lock: that is its own test, not a time to wait for.
+1Password is locked for <kind's words>. <told> Do not poll and do not ask Luiz in chat: the lock was recorded for the machine at HH:MM, and he clears it by running `fleet secrets unlocked` in his terminal. A coordinator whose work waits on it asks him once, with an action card whose manual is that command in a ```nu block. Go on with work that needs no 1Password, or end the turn if nothing else is left. The hook lets one command of this kind through at <next>, from any fleet, to test the lock: that is its own test, not a time to wait for.
 ```
 
 `<told>` says who tells the fleet, and so when it retries. It is one of three, the first that fits:
 
 | The session's fleet | `<told>` |
 | :-- | :-- |
-| is in no registry (its row has no `dir`) | ``This fleet is not in the registry, so it will not be told when 1Password is unlocked: check `<cli> onepw` before you retry `<what>`.`` |
+| is in no registry (its row has no `dir`) | ``This fleet is not in the registry, so it will not be told when 1Password is unlocked: check `<cli> secrets` before you retry `<what>`.`` |
 | has a row of this kind in the state | ``This fleet is on the waiting list: it is told when Luiz says 1Password is unlocked, in its chat, or in its session when its watch is not running. Retry `<what>` then, not before.`` |
-| has none: no room was left (`ONEPW_WAITING_MAX`), or the state could not be written | ``This fleet could not be put on the waiting list, so it will not be told when 1Password is unlocked: check `<cli> onepw` before you retry `<what>`.`` |
+| has none: no room was left (`ONEPW_WAITING_MAX`), or the state could not be written | ``This fleet could not be put on the waiting list, so it will not be told when 1Password is unlocked: check `<cli> secrets` before you retry `<what>`.`` |
 
 `<cli>` is the plugin's fleet CLI by its path, `<plugin root>/fleet/bin/fleet`, as the hook names it in the
 news line.
@@ -3402,7 +3402,7 @@ the same characters replaced, or `unknown`.
 `additionalContext`, with the same three `<told>` as the denial:
 
 ```
-1Password is locked for <kind's words> (<why>). <told> Do not poll and do not ask Luiz in chat: the lock was recorded once for the machine at HH:MM, and he clears it by running `fleet onepw unlocked` in his terminal. A coordinator whose work waits on it asks him once, with an action card whose manual is that command in a ```nu block. Go on with work that needs no 1Password, or end the turn if nothing else is left.
+1Password is locked for <kind's words> (<why>). <told> Do not poll and do not ask Luiz in chat: the lock was recorded once for the machine at HH:MM, and he clears it by running `fleet secrets unlocked` in his terminal. A coordinator whose work waits on it asks him once, with an action card whose manual is that command in a ```nu block. Go on with work that needs no 1Password, or end the turn if nothing else is left.
 ```
 
 On PostToolUseFailure nothing is returned: the event is registered asynchronous, so the session reads no
@@ -3417,11 +3417,11 @@ A lock ends in exactly three ways, each kind on its own:
 
 | Way | Which kinds | What is written |
 | :-- | :-- | :-- |
-| Luiz's answer: `fleet onepw unlocked` typed in a terminal outside Claude Code ([The CLI](#the-cli)), the command the card gives ([The card](#the-card)) | every kind that is locked at that moment | `cleared: {at, by: "user", note}` on each, log `cleared by user: <note>` |
+| Luiz's answer: `fleet secrets unlocked` typed in a terminal outside Claude Code ([The CLI](#the-cli)), the command the card gives ([The card](#the-card)) | every kind that is locked at that moment | `cleared: {at, by: "user", note}` on each, log `cleared by user: <note>` |
 | a command that clears ([What the hook does](#what-the-hook-does)) | that command's kind alone | `cleared: {at, by: "command", note: <what>}` |
 | the lapse: `FLEET_ONEPW_LAPSE_S` (2 h) after the kind's `since` with no answer | each kind by its own `since` | nothing at that moment: the kind reads as lapsed from then on, and the settle pass stamps `lapsed` when it first sees it |
 
-An agent does not say that 1Password is unlocked: `fleet onepw unlocked` is refused inside a Claude Code
+An agent does not say that 1Password is unlocked: `fleet secrets unlocked` is refused inside a Claude Code
 session, which stops an honest agent only ([The CLI](#the-cli)). While a kind is locked, a fleet's sessions are denied
 every command that could clear it (a use that clears is always held), so a command clears from a session of
 no fleet, when it was already running as the lock was recorded, or when it took a probe window.
@@ -3475,9 +3475,9 @@ A flapping lock must not flood Luiz with cards or the fleets with notices.
 ### Settle and the notice
 
 `settle(machine, {socks, send?, probe?})` (`src/onepw.ts`, asynchronous) tells the held fleets of what is
-over and prunes the state. In tstack `fleet onepw unlocked` is the one caller: the removed hub's timer (every 5 s) and
+over and prunes the state. In tstack `fleet secrets unlocked` is the one caller: the removed hub's timer (every 5 s) and
 the card's POST are gone with it, so a hold that ends by a command that succeeds or by lapse stays owed until
-someone settles (`fleet onepw` says so, below). A fleet is told once however many callers: the first stamps its
+someone settles (`fleet secrets` says so, below). A fleet is told once however many callers: the first stamps its
 DIR and drops its rows.
 
 **Phase 1**, under `onepw.lock`, synchronous:
@@ -3584,7 +3584,7 @@ page of its own:
 | with `again` | `It was cleared and a command failed again <N min ago>.` |
 | a line per row | `Waiting: <who>, for <what>.` |
 | under them | `Asked <N min ago>. Every fleet holds its commands that need 1Password until then, and goes on with the rest.` |
-| last | the command, `fleet onepw unlocked`, in a `nu` code block with its copy button (`#onepw-run`) |
+| last | the command, `fleet secrets unlocked`, in a `nu` code block with its copy button (`#onepw-run`) |
 
 A card that was cleared and reopened is the same card: the same `since`, so the same "Asked ... ago". The
 lead sentence counts it as one action that blocks work; the tab's badge and the decision lists do not.
@@ -3594,18 +3594,19 @@ route answers it since the hub was removed (1.9.89): neither tstack nor the clou
 page has no 1Password card. So the card gives the command and posts nothing (`fleet/page/src/Overview.tsx`);
 the stream's next `state` has no `onepw` once the command has cleared the lock, and the card goes.
 
-The refusal of `fleet onepw unlocked` inside a Claude Code session stops an honest agent only: everything on the
+The refusal of `fleet secrets unlocked` inside a Claude Code session stops an honest agent only: everything on the
 machine runs as one Unix user ([The CLI](#the-cli)).
 
 ### The CLI
 
 | Command | Does | Output | Exit |
 | :-- | :-- | :-- | :-- |
-| `fleet onepw` | reads the state; runs anywhere, in a session too; changes nothing | `1Password: not known to be locked`, or `1Password: locked: ssh-agent since 13:50 (<why>), op-desktop since 13:52 (<why>); waiting: skills (jj git push, secretspec run), casos (gh pr)` (`nothing waits` with no row; the rows of no fleet as `a session outside the fleets (...)`). A second line when a notice is owed: `a hold is over and N fleet(s) are not told yet: each is told the next time the user clears the lock from his own terminal, once 30 min have passed since it was last told` (it does not name the command: an agent reads it too) | 0 |
-| `fleet onepw unlocked [--note TEXT]` | outside Claude Code only: clears every locked kind as the user (`note` TEXT, else `fleet onepw unlocked`) and settles at once | a line per fleet told, `told <fleet> (<host>, #<id>): <text>` or `told <fleet> (its session): <text>`; with none told, `1Password: nothing was locked` or `1Password: unlocked; no fleet was told now`; then the owed line, when one is owed | 0; 1 refused, or the settle failed; 2 a usage error |
-| `fleet onepw -h` | prints the usage | | 0 |
+| `fleet secrets` | reads the state; runs anywhere, in a session too; changes nothing | `1Password: not known to be locked`, or `1Password: locked: ssh-agent since 13:50 (<why>), op-desktop since 13:52 (<why>); waiting: skills (jj git push, secretspec run), casos (gh pr)` (`nothing waits` with no row; the rows of no fleet as `a session outside the fleets (...)`). A second line when a notice is owed: `a hold is over and N fleet(s) are not told yet: each is told the next time the user clears the lock from his own terminal, once 30 min have passed since it was last told` (it does not name the command: an agent reads it too) | 0 |
+| `fleet secrets unlocked [--note TEXT]` | outside Claude Code only: clears every locked kind as the user (`note` TEXT, else `fleet secrets unlocked`) and settles at once | a line per fleet told, `told <fleet> (<host>, #<id>): <text>` or `told <fleet> (its session): <text>`; with none told, `1Password: nothing was locked` or `1Password: unlocked; no fleet was told now`; then the owed line, when one is owed | 0; 1 refused, or the settle failed; 2 a usage error |
+| `fleet secrets -h` | prints the usage | | 0 |
+| `fleet onepw [...]` | the command's name before 2026-10-29, kept as a hidden alias so a session on an older copy and older rule text keep working: it runs `fleet secrets` with the same arguments, and no usage lists it | as `fleet secrets` | as `fleet secrets` |
 
-In `fleet onepw`'s line a row's `what` is printed when it is one to four words of `[A-Za-z0-9_.-]`, at most
+In `fleet secrets`'s line a row's `what` is printed when it is one to four words of `[A-Za-z0-9_.-]`, at most
 40 characters; else its kind is printed. `<why>` is whitelisted as on the card. A state that does not read
 is `not known to be locked`.
 
@@ -3619,18 +3620,18 @@ him that 1Password is unlocked. A session is told by either of:
   speak for the user.
 
 The refusal stops an honest agent only. A command that unsets the two variables and leaves its session
-(`env -u CLAUDECODE -u CLAUDE_CODE_SESSION_ID setsid --fork fleet onepw unlocked`) has no Claude Code
+(`env -u CLAUDECODE -u CLAUDE_CODE_SESSION_ID setsid --fork fleet secrets unlocked`) has no Claude Code
 ancestor, and clears as the user (measured, 2026-10-12).
 
 Refused, it clears nothing, exits 1 and prints on stderr:
 
 ```
-onepw: only the user clears the lock, by running `fleet onepw unlocked` in his own terminal; an agent does not say for the user that 1Password is unlocked. `fleet onepw` prints the state.
+secrets: only the user clears the lock, by running `fleet secrets unlocked` in his own terminal; an agent does not say for the user that 1Password is unlocked. `fleet secrets` prints the state.
 ```
 
-A usage error (exit 2: the usage and `fleet onepw: error: unrecognized arguments: ...` on stderr) and
+A usage error (exit 2: the usage and `fleet secrets: error: unrecognized arguments: ...` on stderr) and
 `--help` are answered before the refusal. When the settle fails after the clear, stderr says
-`onepw: unlocked, and the fleets could not be told: <why>` (`onepw: nothing was locked, and ...` when nothing
+`secrets: unlocked, and the fleets could not be told: <why>` (`secrets: nothing was locked, and ...` when nothing
 was), exit 1.
 
 ### Cost
@@ -4387,7 +4388,7 @@ recommendation attached.
 | `news post`, and a `state decision --kind notice` once its ledger is written, when a manager is served | `REGISTRY/news/news.jsonl` (under its `flock`) |
 | `news read` | `REGISTRY/news/read/<fleet>` when the cursor moves |
 | the plugin's hook (`onepw_watch`, `onepw_hold`) | `REGISTRY/onepw/locked.json` (under `REGISTRY/onepw/onepw.lock`), `REGISTRY/onepw/locked.json.broken` (a state that did not read, set aside), `REGISTRY/onepw/onepw.log` |
-| `fleet onepw unlocked` outside Claude Code | `REGISTRY/onepw/locked.json` (`cleared`, `lapsed` and `told` set, rows dropped, kinds pruned, and the file removed when nothing is left; under `REGISTRY/onepw/onepw.lock`), `REGISTRY/onepw/locked.json.broken`, `REGISTRY/onepw/onepw.log`, and for each held fleet the notice: its `DIR/chat.jsonl` (under the store's lock), or one line to its session's socket, `<FLEET_CC_SOCKS>/<pid>.sock`, when its host's watch is dead |
+| `fleet secrets unlocked` outside Claude Code | `REGISTRY/onepw/locked.json` (`cleared`, `lapsed` and `told` set, rows dropped, kinds pruned, and the file removed when nothing is left; under `REGISTRY/onepw/onepw.lock`), `REGISTRY/onepw/locked.json.broken`, `REGISTRY/onepw/onepw.log`, and for each held fleet the notice: its `DIR/chat.jsonl` (under the store's lock), or one line to its session's socket, `<FLEET_CC_SOCKS>/<pid>.sock`, when its host's watch is dead |
 | `state`, on a write that numbers a row or `approval add next` (TypeScript only) | `REGISTRY/numbers/numbers.json` (under `REGISTRY/numbers/numbers.lock`), when `REGISTRY` exists |
 | `fleet ws add` / `prune --apply` | `DIR/state.json` (`workspaces`, `events`, `updated`), `DIR/index.html`; the workspace directory made / moved to the trash with its note, `TRASH/<repo>/<entry>` and `<entry>.json` (a shared fleet's `add` writes nothing); whatever the repo's hooks (`.fleet/ws-pre-add`, `.fleet/ws-add` or `devenv-run --prepare`, `.fleet/ws-pre-remove`) write |
 | `fleet ws restore` / `gc` | the entry's folder moved back and a jj workspace added there (`jj workspace add`, `jj sparse reset`), its note removed / each entry past the age deleted, folder and note |

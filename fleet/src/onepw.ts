@@ -418,7 +418,7 @@ function write(machine: Machine, raw: JsonObject, kept: Kept): void {
 }
 
 /**
- * Clear every locked kind as `by` (Luiz: `fleet onepw unlocked` in a terminal), with a
+ * Clear every locked kind as `by` (Luiz: `fleet secrets unlocked` in a terminal), with a
  * note of how. Nothing is told here: {@link settle} tells the fleets. The lock it cleared, or undefined when
  * nothing was locked (then nothing is written).
  */
@@ -702,7 +702,7 @@ export function cardOf(machine: Machine): JsonObject | undefined {
   };
 }
 
-/** How many fleet DIRs have rows of a kind that is over: a notice each is owed (no `fleet onepw unlocked` has settled since,
+/** How many fleet DIRs have rows of a kind that is over: a notice each is owed (no `fleet secrets unlocked` has settled since,
  * or the DIR was told less than {@link NOTICE_GAP_S} ago). */
 function owed(machine: Machine, state: State, now: Date): number {
   const lapse = lapseSeconds(machine.env);
@@ -721,7 +721,7 @@ export function owedLine(machine: Machine, now: Date = machine.now()): string | 
 }
 
 /**
- * `fleet onepw`'s text, for a terminal or an agent: each locked kind with since when and why, and who waits
+ * `fleet secrets`'s text, for a terminal or an agent: each locked kind with since when and why, and who waits
  * for what in the tools' own words; `not known to be locked` otherwise. A second line ({@link owedLine}) when
  * a hold is over and fleets are not told yet. It reads only: a state that does not read is not known to be
  * locked.
