@@ -62,6 +62,7 @@ import { laneMatches, lanesMeet } from "../ledger/lanes.ts";
 import { activeWorkspaces } from "../ledger/warnings.ts";
 import { decodeLedger } from "../ledger/model.ts";
 import { withLedgerLock } from "../ledger/store.ts";
+import { LockFailed } from "../lock.ts";
 import { readRecord, recordPath, serverProc, updateRecord, updaterProc } from "../preview/record.ts";
 import { kept, serverStanding } from "../preview/sleep.ts";
 import { runs } from "../preview/tracked.ts";
@@ -190,14 +191,21 @@ export function save(machine: Machine, root: string, raw: JsonObject, workspaces
   const fault = ledger instanceof Refusal ? ledger : validate(ledger);
 
   if (fault !== undefined) return fault;
-  withLedgerLock(root, () => {
-    // SAFETY: a JsonObject is a JsonOut: the same JSON, read-only.
-    writeText(join(root, "state.json"), `${dumps(next as JsonOut, { indent: 2, ensureAscii: false })}\n`);
-    const template = readTemplate();
-    const html = template === undefined ? undefined : pageHtml(template, view(machine, cliLookups(), next, root), false);
 
-    if (html !== undefined && !(html instanceof Error)) writePage(join(root, "index.html"), html);
-  });
+  try {
+    withLedgerLock(root, () => {
+      // SAFETY: a JsonObject is a JsonOut: the same JSON, read-only.
+      writeText(join(root, "state.json"), `${dumps(next as JsonOut, { indent: 2, ensureAscii: false })}\n`);
+      const template = readTemplate();
+      const html = template === undefined ? undefined : pageHtml(template, view(machine, cliLookups(), next, root), false);
+
+      if (html !== undefined && !(html instanceof Error)) writePage(join(root, "index.html"), html);
+    });
+  } catch (cause: unknown) {
+    if (cause instanceof LockFailed) return new Refusal({ speaker: "ws", reason: `the ledger's lock could not be taken: ${cause.message}` });
+
+    throw cause;
+  }
 
   return undefined;
 }
