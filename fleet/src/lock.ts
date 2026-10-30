@@ -24,6 +24,9 @@ const TRIES = 100;
 /** `flock` failed every time it was tried (ENOLCK, EBADF, ...): the caller must not go on unlocked. */
 export class LockFailed extends Error {}
 
+/** How a lock is taken on an open file: {@link holdExclusiveLock}, or a caller's own. */
+export type Hold = (fd: number) => () => void;
+
 /** Take an exclusive lock on the open file `fd`, waiting for it; the function returned releases it. Throws
  * {@link LockFailed} when it cannot be taken: nothing runs unlocked. */
 export function holdExclusiveLock(fd: number): () => void {

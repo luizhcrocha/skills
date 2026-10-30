@@ -6,11 +6,11 @@
 import { closeSync, openSync } from "node:fs";
 import { join } from "node:path";
 
-import { holdExclusiveLock } from "../lock.ts";
+import { holdExclusiveLock, type Hold } from "../lock.ts";
 
-/** Take the lock of the ledger in `root`, waiting for it: the function that releases it, or undefined
- * when there is no ledger yet (`init` makes it, and has nothing to race). */
-export function lockLedger(root: string): (() => void) | undefined {
+/** Take the lock of the ledger in `root` with `hold`, waiting for it: the function that releases it, or
+ * undefined when there is no ledger yet (`init` makes it, and has nothing to race). */
+export function lockLedger(root: string, hold: Hold = holdExclusiveLock): (() => void) | undefined {
   let fd: number;
 
   try {
@@ -19,7 +19,14 @@ export function lockLedger(root: string): (() => void) | undefined {
     return undefined;
   }
 
-  const release = holdExclusiveLock(fd);
+  let release: () => void;
+
+  try {
+    release = hold(fd);
+  } catch (cause: unknown) {
+    closeSync(fd);
+    throw cause;
+  }
 
   return () => {
     release();
@@ -27,9 +34,9 @@ export function lockLedger(root: string): (() => void) | undefined {
   };
 }
 
-/** Run `body` under the ledger's lock. */
-export function withLedgerLock<T>(root: string, body: () => T): T {
-  const release = lockLedger(root);
+/** Run `body` under the ledger's lock, taken with `hold`. */
+export function withLedgerLock<T>(root: string, body: () => T, hold: Hold = holdExclusiveLock): T {
+  const release = lockLedger(root, hold);
 
   try {
     return body();

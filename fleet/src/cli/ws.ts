@@ -62,7 +62,7 @@ import { laneMatches, lanesMeet } from "../ledger/lanes.ts";
 import { activeWorkspaces } from "../ledger/warnings.ts";
 import { decodeLedger } from "../ledger/model.ts";
 import { withLedgerLock } from "../ledger/store.ts";
-import { LockFailed } from "../lock.ts";
+import { holdExclusiveLock, LockFailed, type Hold } from "../lock.ts";
 import { readRecord, recordPath, serverProc, updateRecord, updaterProc } from "../preview/record.ts";
 import { kept, serverStanding } from "../preview/sleep.ts";
 import { runs } from "../preview/tracked.ts";
@@ -176,10 +176,10 @@ export function load(root: string): JsonObject | Refusal {
 }
 
 /** Write the ledger with `workspaces` (when given) and these events, stamped, and render the page, under the
- * ledger's lock, so two writes of state.json never interleave; refused for a moved team's folder (decision 48), whichever writer calls it (ws, the workspace
+ * ledger's lock (taken with `hold`), so two writes of state.json never interleave; refused for a moved team's folder (decision 48), whichever writer calls it (ws, the workspace
  * hook's report, every preview writer). `raw` is the ledger as the caller read it: a change another writer made
  * since is overwritten. */
-export function save(machine: Machine, root: string, raw: JsonObject, workspaces: readonly Json[] | undefined, events: readonly JsonObject[]): Refusal | undefined {
+export function save(machine: Machine, root: string, raw: JsonObject, workspaces: readonly Json[] | undefined, events: readonly JsonObject[], hold: Hold = holdExclusiveLock): Refusal | undefined {
   const moved = movedRefusal(root);
 
   if (moved !== undefined) return new Refusal({ speaker: "ws", reason: moved });
@@ -200,7 +200,7 @@ export function save(machine: Machine, root: string, raw: JsonObject, workspaces
       const html = template === undefined ? undefined : pageHtml(template, view(machine, cliLookups(), next, root), false);
 
       if (html !== undefined && !(html instanceof Error)) writePage(join(root, "index.html"), html);
-    });
+    }, hold);
   } catch (cause: unknown) {
     if (cause instanceof LockFailed) return new Refusal({ speaker: "ws", reason: `the ledger's lock could not be taken: ${cause.message}` });
 

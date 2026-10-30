@@ -7,15 +7,14 @@ import { mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { expect, spyOn, test } from "bun:test";
+import { expect, test } from "bun:test";
 import * as Option from "effect/Option";
 
 import { save } from "../src/cli/ws.ts";
 import { Refusal } from "../src/errors.ts";
 import { asObject, parseObject } from "../src/json.ts";
-import * as store from "../src/ledger/store.ts";
 import { lockLedger } from "../src/ledger/store.ts";
-import { LockFailed } from "../src/lock.ts";
+import { holdExclusiveLock } from "../src/lock.ts";
 import { baseEnv, FLEET, fleet, machine, RACES_SEEN, sleep, tmp, untilOpens, type Environment } from "./support.ts";
 
 const WS = fileURLToPath(new URL("../src/cli/ws.ts", import.meta.url));
@@ -101,15 +100,8 @@ test("a ws write whose lock cannot be taken is refused, as render's is, the ledg
   const before = readFileSync(join(root, "state.json"), "utf8");
   const raw = asObject(Option.getOrUndefined(parseObject(before))) ?? {};
 
-  const failing = spyOn(store, "withLedgerLock").mockImplementation(() => {
-    throw new LockFailed("flock(LOCK_EX) failed 100 times on fd 9");
-  });
+  const failing = (): (() => void) => holdExclusiveLock(987_654);
 
-  try {
-    expect(save(machine(env), root, raw, undefined, [])).toEqual(new Refusal({ speaker: "ws", reason: "the ledger's lock could not be taken: flock(LOCK_EX) failed 100 times on fd 9" }));
-  } finally {
-    failing.mockRestore();
-  }
-
+  expect(save(machine(env), root, raw, undefined, [], failing)).toEqual(new Refusal({ speaker: "ws", reason: "the ledger's lock could not be taken: flock(LOCK_EX) failed 100 times on fd 987654" }));
   expect(readFileSync(join(root, "state.json"), "utf8")).toBe(before);
 });
