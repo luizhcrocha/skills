@@ -174,16 +174,20 @@ export function rexLauncher(options: RexOptions): Launcher {
         });
   };
 
-  /** The block of agent `agent` in session `sid`. */
-  const blockOf = (sid: string, agent: string): Block | Why => {
-    const blocks = blocksOf(sid);
+  /** The block of agent `agent` in the session labelled `session`, and the session's ID. */
+  const blockFor = (session: string, agent: string): { readonly sid: string; readonly block: Block } | Why => {
+    const found = idOf(session);
+
+    if ("why" in found) return found;
+    const blocks = blocksOf(found.sid);
 
     if ("why" in blocks) return blocks;
     const mine = blocks.filter((b) => b.label === agent);
+    const [block] = mine;
 
     if (mine.length > 1) return { why: `${String(mine.length)} blocks are labelled ${agent}` };
 
-    return mine[0] ?? { why: `no block is labelled ${agent}` };
+    return block === undefined ? { why: `no block is labelled ${agent}` } : { sid: found.sid, block };
   };
 
   /** The state the block's program last said it is in (its root record's); undefined when it said nothing. */
@@ -318,13 +322,10 @@ export function rexLauncher(options: RexOptions): Launcher {
 
     prompt(session, agent, text) {
       if (/[\r\n]/.test(text)) return { why: "a prompt holding a line break would be sent in parts" };
-      const found = idOf(session);
+      const found = blockFor(session, agent);
 
       if ("why" in found) return found;
-      const { sid } = found;
-      const block = blockOf(sid, agent);
-
-      if ("why" in block) return block;
+      const { sid, block } = found;
       const typed = rex(["send", "-s", sid, "-b", block.id], text);
 
       if ("why" in typed) return { why: typed.why };
@@ -358,13 +359,10 @@ export function rexLauncher(options: RexOptions): Launcher {
     },
 
     settle(session, agent) {
-      const found = idOf(session);
+      const found = blockFor(session, agent);
 
       if ("why" in found) return found;
-      const { sid } = found;
-      const block = blockOf(sid, agent);
-
-      if ("why" in block) return block;
+      const { sid, block } = found;
 
       for (const deadline = Date.now() + settleMs; Date.now() < deadline; sleepMs(pollMs)) {
         const said = reported(sid, block.id);
