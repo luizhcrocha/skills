@@ -18,4 +18,8 @@ General workflow tools, not code-specific.
 - **[show-me](./show-me/SKILL.md)** — Explain the current topic visually with the smallest view that makes the point: pseudocode, call trees, component trees, file trees, Mermaid diagrams, diffs, or a focused HTML artifact.
 - **[teach](./teach/SKILL.md)** — Teach a new skill or concept over multiple sessions using a stateful teaching workspace grounded in a mission, trusted resources, learning records, and a glossary.
 - **[bro](./bro/SKILL.md)** — `/bro` the moment a message doesn't land: the agent says it again like one human to another, simpler and shorter, with the context you're missing, in Simplified Technical English and your `CONTEXT.md` vocabulary. Merges pstack's bro into mattpocock's wait-what.
+- **[sharpen](./sharpen/SKILL.md)** — Make a task deeper, not bigger, then rewrite the prompt. From poteto's pstack.
+- **[ketchup](./ketchup/SKILL.md)** — `/ketchup`: catch you up on what changed in the chat since your last message, in plain words and small visuals, then list every call waiting on you with what you need to decide it from the reply alone. From poteto's pstack.
+- **[ketchup-video](./ketchup-video/SKILL.md)** — `/ketchup-video`: the `/ketchup` catch-up as a short subtitled slide video, with the waiting calls as text under it. From poteto's pstack.
+- **[in-your-own-words](./in-your-own-words/SKILL.md)** — `/in-your-own-words`: the agent restates what it thinks your goals are and the problem you are solving, so you can check it understood. From poteto's pstack.
 - **[writing-for-agents](./writing-for-agents/SKILL.md)** — Writing documents for agents: skills, AGENTS.md/CLAUDE.md, and any doc an agent reaches by a pointer.
