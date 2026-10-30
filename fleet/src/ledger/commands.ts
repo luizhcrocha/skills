@@ -1908,7 +1908,7 @@ function close(run: Run, ledger: Ledger, d: Decision, outcome: { readonly status
 
 /** Revoke every active approval of this ledger that came from decision `d` (from its question `question`, or
  * from any of it), saying `why`: the user's answer it rests on moved, so what it covered asks them again. One
- * line per approval revoked. Another fleet's copy (`fleets approval add`) is refused at use instead. */
+ * line per approval revoked. Another fleet's approval from it is refused at use instead. */
 function revokeFrom(run: Run, ledger: Ledger, d: Decision, question: string | undefined, why: string): void {
   const names = namesOf(run.machine, run.root);
 
@@ -3209,7 +3209,6 @@ export function approval(ledger: Ledger, run: Run): Effect.Effect<Ledger, Refusa
 
     const standing = rows.find((x) => x.status === "active" && sameSource(x, src.ref, src.question, local));
 
-    // One source backs one active approval: two `fleets approval add` at once, the second skips the first's.
     if (standing !== undefined) return yield* refuse(`${src.label} already backs approval ${standing.id} (active)`);
     const taken = approvalNumber(run.machine, run.root, id, highest(rows.map((x) => x.id), "K"));
 

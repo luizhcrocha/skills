@@ -477,7 +477,7 @@ The cloud's owner-answer gate (its `OWNER_ANSWERS_FROM`) is on since 2026-10-28 
   its rule (the one the owner's form showed), message (their line) and author from the card, and stamps `added`; a
   value of yours that differs is refused. One line backs one approval, and an approval that is there may only be
   revoked.
-- **A fleet-wide approval does not reach a moved team**: the cloud refuses an approval whose `ref` names another
+- **Another fleet's approval does not reach a moved team**: the cloud refuses an approval whose `ref` names another
   fleet's card (`manager/G5:Q1`). Ask on this team's own page with an approval question.
 - **Ask once, link the rest** works as [SKILL.md](SKILL.md) says: the user answers on the asking card, and you
   withdraw yours after they answered. An answer they give on your own card is recorded there as any other.

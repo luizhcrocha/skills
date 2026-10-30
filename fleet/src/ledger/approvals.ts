@@ -4,8 +4,8 @@
  * served fleet's, found through the registry; a grilling's by one question (`:Q<n>`), answered while the others
  * may still be open. Only the user's own plain yes to that exact
  * item grants: the ledger's answer and the user's message the hub wrote (`from: user`) must both be one of
- * {@link APPROVES}, whole; a choice's decided option must be one that says yes, and the one the user picked. The
- * same check backs `fleet state DIR approval add` and `fleet fleets approval add`.
+ * {@link APPROVES}, whole; a choice's decided option must be one that says yes, and the one the user picked. It
+ * backs `fleet state DIR approval add`, and the check at use of every approval.
  */
 import { join } from "node:path";
 

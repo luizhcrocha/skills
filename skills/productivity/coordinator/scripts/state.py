@@ -958,7 +958,7 @@ def unheld(d: dict) -> None:
 def revoke_from(state: dict, root, d: dict, question: str | None, why: str) -> None:
     """Revoke every active approval of this ledger that came from decision D (from its question QUESTION, or
     from any of it), saying WHY: the user's answer it rests on moved, so what it covered asks them again. One
-    line per approval revoked. Another fleet's copy (`fleets approval add`) is refused at use instead."""
+    line per approval revoked. Another fleet's approval from it is refused at use instead."""
     names = decisions.names_of(root)
     for a in state.get("approvals") or []:
         if not isinstance(a, dict) or a.get("status") != "active" or not decisions.comes_from(a, d, names, question):

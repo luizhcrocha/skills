@@ -7,7 +7,6 @@ import { spawnSync } from "node:child_process";
 import { join } from "node:path";
 
 import * as Effect from "effect/Effect";
-import * as Option from "effect/Option";
 
 import { listening, oneLine, type Listening } from "../chat/chat.ts";
 import { cardHash } from "../ledger/card-address.ts";
@@ -16,27 +15,23 @@ import { firstLine } from "../chat/news.ts";
 import { readChat } from "../chat/store.ts";
 import { parseInstant } from "../clock.ts";
 import { Refusal } from "../errors.ts";
-import { exists, isDir, readText, resolvePath } from "../files.ts";
+import { exists, readText } from "../files.ts";
 import { answeredAt, silentWorkers } from "../health.ts";
-import { Out, recordingOut } from "../io.ts";
+import { Out } from "../io.ts";
 import { asArray, asNumber, asObject, asString, dumps, pyRepr, truthy, type Json, type JsonObject, type JsonOut } from "../json.ts";
 import { decodeLedger } from "../ledger/model.ts";
 import { find, number } from "../ledger/numbers.ts";
 import { budgetOf, capBytes, cpuBudgetOf, cpusHeld, endOf, floorOf, floorRefusal, gateOf, holdText, memAvailable, memTotal, plain, roomOf, runCapOf, shortText, sizeText, waitsForMemory, type Ask, type Budget, type Day, type GateHolder, type Standing, type Waiting } from "../gate.ts";
 import { gateRun, RUN_USAGE, runArgs } from "../gate-run.ts";
 import { processes } from "../procs.ts";
-import { approvalSource, NoSource, parseSource, sameSource } from "../ledger/approvals.ts";
-import { parseLedger, type Approval } from "../ledger/model.ts";
-import { findDecision } from "../ledger/numbers.ts";
 import { stateOf, type Entry } from "../registry.ts";
-import { stateCli } from "./state.ts";
 import { activeAt, spentBy } from "../transcripts.ts";
 import { World, type Machine } from "../world.ts";
 import { exitOf } from "./exit.ts";
 import { orphansCommand } from "./orphans.ts";
 
 const USAGE =
-  "usage: fleet fleets list | waiting | show FLEET | manager | decision FLEET ID | name DIR SESSION | gate [take FLEET|--as NAME WHAT | free TOKEN] | procs | whose FROM TO | approval add|revoke ...";
+  "usage: fleet fleets list | waiting | show FLEET | manager | decision FLEET ID | name DIR SESSION | gate [take FLEET|--as NAME WHAT | free TOKEN] | procs | whose FROM TO";
 
 function fail(reason: string): Effect.Effect<never, Refusal> {
   return Effect.fail(new Refusal({ speaker: "fleets", reason }));
@@ -790,209 +785,6 @@ function name(machine: Machine, dir: string, session: string): Effect.Effect<voi
   });
 }
 
-const APPROVAL_USAGE =
-  "usage: fleet fleets approval add --all|--fleets A,B --rule R --ref FLEET/DECISION[:Q<n>] [--by WHO] | approval revoke --ref FLEET/DECISION[:Q<n>] --reason R [--fleets A,B]";
-
-/** `approval add|revoke` and its flags. */
-interface ApprovalArgs {
-  readonly action: string;
-  readonly all: boolean;
-  readonly values: ReadonlyMap<string, string>;
-}
-
-function approvalArgs(argv: readonly string[]): ApprovalArgs | undefined {
-  const [action] = argv;
-
-  if (action !== "add" && action !== "revoke") return undefined;
-  const values = new Map<string, string>();
-  let all = false;
-
-  for (let i = 1; i < argv.length; ) {
-    const flag = argv[i] ?? "";
-    const value = argv[i + 1];
-
-    if (flag === "--all") {
-      all = true;
-      i += 1;
-    } else if (["--fleets", "--rule", "--ref", "--by", "--reason"].includes(flag) && value !== undefined) {
-      values.set(flag.slice(2), value);
-      i += 2;
-    } else {
-      return undefined;
-    }
-  }
-
-  return { action, all, values };
-}
-
-/** The served fleets an approval goes to: every one, or those `names` lists (ids or aliases, comma-separated). */
-function targets(machine: Machine, names: string | undefined): Effect.Effect<Entry[], Refusal> {
-  return Effect.gen(function* () {
-    const entries = machine.registry.live();
-
-    if (names === undefined) return entries;
-    const found: Entry[] = [];
-
-    for (const n of new Set(names.split(",").map((x) => x.trim()).filter((x) => x !== ""))) {
-      const e = entries.find((x) => x.id === n) ?? entries.find((x) => x.aliases.includes(n));
-
-      if (e === undefined) return yield* fail(`no fleet '${n}' is being served; \`fleet fleets list\` names the ones that are`);
-
-      if (!found.includes(e)) found.push(e);
-    }
-
-    if (found.length === 0) return yield* fail("--fleets names no fleet: --fleets A,B");
-
-    return found;
-  });
-}
-
-/** The fleet the registry knows by `name` (its id, else an alias), served or not. */
-function knownFleet(entries: readonly Entry[], name: string): Entry | undefined {
-  return entries.find((x) => x.id === name) ?? entries.find((x) => x.aliases.includes(name));
-}
-
-/** The fleets a revoke reaches: every fleet the registry knows whose DIR is there, served or stopped
- * (`Registry.known`), or those `names` lists. */
-function revokeTargets(machine: Machine, names: string | undefined): Effect.Effect<Entry[], Refusal> {
-  return Effect.gen(function* () {
-    const entries = machine.registry.known();
-
-    if (names === undefined) return entries.filter((e) => isDir(e.dir));
-    const found: Entry[] = [];
-
-    for (const n of new Set(names.split(",").map((x) => x.trim()).filter((x) => x !== ""))) {
-      const e = knownFleet(entries, n);
-
-      if (e === undefined) return yield* fail(`no fleet '${n}' is known to the registry; \`fleet fleets list\` names the ones served`);
-
-      if (!found.includes(e)) found.push(e);
-    }
-
-    if (found.length === 0) return yield* fail("--fleets names no fleet: --fleets A,B");
-
-    return found;
-  });
-}
-
-/** One state command on the fleet at `dir` (its page rendered quietly): whether it took, and its refusal. */
-function stateOn(dir: string, ...argv: string[]): Effect.Effect<readonly [boolean, string], never, World> {
-  return Effect.gen(function* () {
-    const recording = recordingOut();
-    const code = yield* stateCli([dir, ...argv, "-q"]).pipe(Effect.provide(recording.layer));
-    const said = recording.recorded.stderr.join("").split("\n").filter((x) => x.trim() !== "");
-    const last = said.at(-1);
-
-    return [code === 0, last === undefined ? `exit ${String(code)}` : last.replace(/^state: /u, "")] as const;
-  });
-}
-
-/** The approvals of the ledger at `dir`. */
-function approvalsAt(dir: string): Approval[] | undefined {
-  const ledger = Option.getOrUndefined(parseLedger(readText(join(dir, "state.json")) ?? ""));
-
-  return ledger === undefined || ledger instanceof Refusal ? undefined : (ledger.approvals ?? []);
-}
-
-/** `approval add` the same standing approval to every served fleet (or those listed), or `approval revoke` it
- * everywhere: one line per fleet; a refusal by any fleet fails the command after the others are done. */
-function approval(machine: Machine, argv: readonly string[]): Effect.Effect<number, Refusal, Out | World> {
-  return Effect.gen(function* () {
-    const out = yield* Out;
-    const say = (line: string): void => out.out(`${line}\n`);
-    const given = approvalArgs(argv);
-
-    if (given === undefined) return yield* fail(APPROVAL_USAGE);
-    const ref = given.values.get("ref") ?? "";
-    const parsed = parseSource(ref);
-
-    if (parsed?.fleet === undefined) return yield* fail("--ref names the decision and the fleet whose ledger holds it: FLEET/DECISION[:Q<n>] (manager/G5:Q1)");
-    const { question } = parsed;
-    let refused = false;
-
-    if (given.action === "add") {
-      if (!given.all && !given.values.has("fleets")) return yield* fail("approval add goes to every served fleet (--all) or to those named (--fleets A,B)");
-      const rule = given.values.get("rule") ?? "";
-
-      if (rule.trim() === "") return yield* fail("approval add needs --rule: what the approval covers, in the user's words");
-      const src = approvalSource(machine, "", undefined, ref);
-
-      if (src instanceof NoSource) return yield* fail(src.why);
-      const by = (given.values.get("by") ?? "").trim() || (src.author ?? "user");
-
-      for (const e of yield* targets(machine, given.values.get("fleets"))) {
-        const rows = approvalsAt(e.dir);
-
-        if (rows === undefined) {
-          say(`${e.id}: refused, no ledger at ${join(e.dir, "state.json")}`);
-          refused = true;
-          continue;
-        }
-
-        const local = resolvePath(e.dir) === resolvePath(src.dir) ? src.id : undefined;
-        const had = rows.find((a) => sameSource(a, src.ref, question, local));
-
-        if (had !== undefined) {
-          say(`${e.id}: skipped, ${had.id} already comes from ${src.label} (${had.status})`);
-          continue;
-        }
-
-        const [took, why] = yield* stateOn(e.dir, "approval", "add", "next", "--rule", rule, "--by", by, "--ref", ref);
-        const now = (approvalsAt(e.dir) ?? []).find((a) => sameSource(a, src.ref, question, local));
-        const raced = took ? undefined : now;
-
-        if (raced !== undefined) say(`${e.id}: skipped, ${raced.id} already comes from ${src.label} (${raced.status})`);
-        else say(took ? `${e.id}: added ${now?.id ?? "it"}` : `${e.id}: refused, ${why}`);
-        refused ||= !took && raced === undefined;
-      }
-    } else {
-      const reason = given.values.get("reason") ?? "";
-
-      if (reason.trim() === "") return yield* fail('approval revoke needs --reason: why, or where the user said it ("revoked on the page (#21)")');
-
-      if (given.values.has("rule") || given.values.has("by")) return yield* fail(APPROVAL_USAGE);
-      const reached = yield* revokeTargets(machine, given.values.get("fleets"));
-      const source = knownFleet(machine.registry.known(), parsed.fleet);
-      const ledger = source === undefined ? undefined : Option.getOrUndefined(parseLedger(readText(join(source.dir, "state.json")) ?? ""));
-      const d = ledger === undefined || ledger instanceof Refusal ? undefined : findDecision(ledger, parsed.key);
-      const canonical = source !== undefined && d !== undefined ? `${source.id}/${d.ref !== undefined && d.ref !== "" ? d.ref : d.id}` : undefined;
-      const refs = [`${parsed.fleet}/${parsed.key}`, ...(canonical === undefined ? [] : [canonical])];
-      const label = (canonical ?? `${parsed.fleet}/${parsed.key}`) + (question === undefined ? "" : `:${question.toUpperCase()}`);
-
-      const unreached: string[] = [];
-
-      for (const e of reached) {
-        const local = d !== undefined && source !== undefined && resolvePath(e.dir) === resolvePath(source.dir) ? d.id : undefined;
-        const rows = approvalsAt(e.dir);
-
-        if (rows === undefined) {
-          say(`${e.id}: not reached, no ledger at ${join(e.dir, "state.json")}`);
-          unreached.push(e.id);
-          continue;
-        }
-
-        const mine = rows.filter((a) => a.status === "active" && refs.some((r) => sameSource(a, r, question, local)));
-
-        if (mine.length === 0) say(`${e.id}: none active from ${label}`);
-
-        for (const a of mine) {
-          const [took, why] = yield* stateOn(e.dir, "approval", "revoke", a.id, "--reason", reason);
-          say(took ? `${e.id}: revoked ${a.id}` : `${e.id}: not reached, ${why}`);
-
-          if (!took && !unreached.includes(e.id)) unreached.push(e.id);
-        }
-      }
-
-      if (unreached.length > 0) {
-        out.err(`fleets: not reached: ${unreached.join(", ")}; the approval is still active there\n`);
-        refused = true;
-      }
-    }
-
-    return refused ? 1 : 0;
-  });
-}
-
 function runCommand(machine: Machine, argv: readonly string[]): Effect.Effect<void | number, Refusal, Out | World> {
   const [cmd, a = "", b = ""] = argv;
 
@@ -1015,8 +807,6 @@ function runCommand(machine: Machine, argv: readonly string[]): Effect.Effect<vo
   if (argv.length === 3 && cmd === "decision") return decision(machine, a, b);
 
   if (argv.length === 3 && cmd === "name") return name(machine, a, b);
-
-  if (cmd === "approval") return approval(machine, argv.slice(1));
 
   return fail(USAGE);
 }

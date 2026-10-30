@@ -12,7 +12,6 @@ from pathlib import Path
 
 SCRIPTS = Path(__file__).resolve().parent.parent / "scripts"
 STATE = str(SCRIPTS / "state.py")
-FLEETS = str(SCRIPTS / "fleets.py")
 
 CHOICE = ["--kind", "decision", "--title", "Landing without asking", "--why", "most landings are routine",
           "--question", "May the fleet land a stack that passed the full gate and a review, and tell you after?",
@@ -240,12 +239,6 @@ class FleetWideTest(Fleet):
         self.assertEqual(result.returncode, code, result.stderr)
         return result
 
-    def fleets(self, *args: str, code: int = 0) -> subprocess.CompletedProcess:
-        result = subprocess.run([sys.executable, FLEETS, *args], capture_output=True, text=True, timeout=60, env=self.env)
-        self.assertEqual(result.returncode, code, result.stderr)
-        self.assertNotIn("Traceback", result.stderr)
-        return result
-
     def said(self, root: Path, message: dict) -> None:
         with open(root / "chat.jsonl", "a") as f:
             f.write(json.dumps({"at": datetime.now(timezone.utc).isoformat(timespec="seconds"), "to": ["manager"], "re": None, **message}) + "\n")
@@ -273,25 +266,6 @@ class FleetWideTest(Fleet):
         self.at(self.manager, "decision", "d1", "--decide", "A", "--resolution", "relayed")
         self.assertIn("manager/D1 (Landing without asking) has no answer from the user in the chat",
                       self.refused("approval", "add", "K1", "--rule", "r", "--by", "luiz", "--ref", "manager/D1"))
-
-    def test_every_fleet_takes_it_once(self):
-        self.ok("approval", "add", "K1", "--rule", "an older one", "--by", "luiz", "--ref", "manager/G1:Q1")
-        out = self.fleets("approval", "add", "--all", "--rule", "land", "--ref", "manager/G1:Q1").stdout.splitlines()
-        self.assertEqual(out, ["manager: added K1", "acme-billing: skipped, K1 already comes from manager/G1:Q1 (active)", "infra: added K1"])
-        again = self.fleets("approval", "add", "--all", "--rule", "land", "--ref", "manager/G1:Q1").stdout
-        self.assertEqual(again.count("skipped"), 3)
-        self.assertEqual([a["by"] for a in self.approvals(self.other)], ["luiz@github"])
-        self.assertIn("was answered '(b) no'", self.fleets("approval", "add", "--fleets", "infra", "--rule", "r", "--ref", "manager/G1:Q2", code=1).stderr)
-        self.assertEqual(len(self.approvals(self.other)), 1)
-
-    def test_revoke_takes_it_back_everywhere(self):
-        self.fleets("approval", "add", "--all", "--rule", "land", "--ref", "manager/G1:Q1")
-        out = self.fleets("approval", "revoke", "--ref", "manager/G1:Q1", "--reason", "revoked on the page (#3)").stdout.splitlines()
-        self.assertEqual(out, ["manager: revoked K1", "acme-billing: revoked K1", "infra: revoked K1"])
-        for root in (self.manager, self.root, self.other):
-            self.assertEqual([(a["status"], a["revoked_why"]) for a in self.approvals(root)], [("revoked", "revoked on the page (#3)")])
-        self.assertEqual(self.fleets("approval", "revoke", "--ref", "manager/G1:Q1", "--reason", "again").stdout.count("none active"), 3)
-
 
     def grill2(self, q2_recommend: str = "yes") -> None:
         self.at(self.manager, "grill", "g2", "--title", "Prod", "--ask", "Landing | May it land? | yes | r",
@@ -340,10 +314,6 @@ class FleetWideTest(Fleet):
         self.assertIn("manager/G2:Q1 is open, not answered yet: a standing approval comes from a question the user answered", why)
         self.ok("approval", "add", "K1", "--rule", "deploy to prod", "--by", "luiz", "--ref", "manager/G2:Q2")
         self.assertEqual([(a["question"], a["message"]) for a in self.approvals(self.root)], [("q2", 2)])
-        out = self.fleets("approval", "add", "--all", "--rule", "deploy to prod", "--ref", "manager/G2:Q2").stdout.splitlines()
-        self.assertEqual(out, ["manager: added K1", "acme-billing: skipped, K1 already comes from manager/G2:Q2 (active)", "infra: added K1"])
-        self.assertIn("manager/G2:Q1 is open, not answered yet",
-                      self.fleets("approval", "add", "--all", "--rule", "r", "--ref", "manager/G2:Q1", code=1).stderr)
 
     G2 = ["--title", "Prod", "--ask", "Landing | May it land? | yes | r", "--ask", "Prod | May it deploy to prod? | yes | r"]
 
@@ -376,7 +346,8 @@ class FleetWideTest(Fleet):
 
     def test_a_question_answered_again_revised_or_dropped_revokes_the_approvals_it_gave_in_its_own_ledger(self):
         self.q2_yes()
-        self.fleets("approval", "add", "--all", "--rule", "deploy to prod", "--ref", "manager/G2:Q2")
+        for root in (self.manager, self.root, self.other):
+            self.at(root, "approval", "add", "K1", "--rule", "deploy to prod", "--by", "luiz", "--ref", "manager/G2:Q2")
         self.said(self.manager, {"id": 3, "from": "user", "author": "luiz@github", "text": "Q2: no", "decision": "g2"})
         self.assertIn("revoked approval K1 (from manager/G2:Q2): G2:Q2 was answered again (no)",
                       self.at(self.manager, "grill", "g2", "--answer", "Q2: no").stdout)
@@ -398,7 +369,7 @@ class FleetWideTest(Fleet):
 
     def test_a_withdrawn_grilling_revokes_every_approval_it_gave_and_gives_none(self):
         self.q2_yes()
-        self.fleets("approval", "add", "--fleets", "manager", "--rule", "deploy to prod", "--ref", "manager/G2:Q2")
+        self.at(self.manager, "approval", "add", "K1", "--rule", "deploy to prod", "--by", "luiz", "--ref", "manager/G2:Q2")
         self.assertIn("revoked approval K1 (from manager/G2:Q2): G2 was withdrawn (plan dropped)",
                       self.at(self.manager, "decision", "g2", "--withdraw", "plan dropped").stdout)
         self.assertIn("manager/G2 (Prod) was withdrawn", self.refused("approval", "add", "K1", "--rule", "r", "--by", "luiz", "--ref", "manager/G2:Q2"))
@@ -463,35 +434,6 @@ class FleetWideTest(Fleet):
         self.assertIn("manager/D1 (Landing without asking) is open: a standing approval comes from a decision the user decided",
                       self.refused("approval", "add", "K1", "--rule", "r", "--by", "luiz", "--ref", "manager/D1"))
 
-    def stop(self, name: str, root: Path) -> None:
-        (self.home / f"{name}.json").write_text(json.dumps({"id": name, "role": "coordinator", "dir": str(root), "url": "x",
-                                                            "pid": 999999999, "session": None, "since": "2026-01-05T08:02:00+00:00"}))
-
-    def test_revoke_reaches_a_fleet_that_is_not_served_now(self):
-        self.fleets("approval", "add", "--all", "--rule", "land", "--ref", "manager/G1:Q1")
-        self.stop("infra", self.other)
-        out = self.fleets("approval", "revoke", "--ref", "manager/G1:Q1", "--reason", "revoked on the page (#3)").stdout.splitlines()
-        self.assertEqual(out, ["manager: revoked K1", "acme-billing: revoked K1", "infra: revoked K1"])
-        self.assertEqual([a["status"] for a in self.approvals(self.other)], ["revoked"])
-
-    def test_revoke_names_the_fleet_it_could_not_reach_and_fails(self):
-        self.fleets("approval", "add", "--all", "--rule", "land", "--ref", "manager/G1:Q1")
-        self.stop("infra", self.other)
-        (self.other / "state.json").unlink()
-        r = self.fleets("approval", "revoke", "--ref", "manager/G1:Q1", "--reason", "revoked on the page (#3)", code=1)
-        self.assertEqual(r.stdout.splitlines(), ["manager: revoked K1", "acme-billing: revoked K1",
-                                                 f"infra: not reached, no ledger at {self.other / 'state.json'}"])
-        self.assertIn("not reached: infra; the approval is still active there", r.stderr)
-
-    def test_concurrent_adds_skip_what_another_just_added(self):
-        runs = [subprocess.Popen([sys.executable, FLEETS, "approval", "add", "--all", "--rule", "land", "--ref", "manager/G1:Q1"],
-                                 stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=self.env) for _ in range(3)]
-        for p in runs:
-            out, err = p.communicate(timeout=60)
-            self.assertEqual(p.returncode, 0, out + err)
-            self.assertNotIn("refused", out)
-        for root in (self.manager, self.root, self.other):
-            self.assertEqual([a["id"] for a in self.approvals(root)], ["K1"])
 
 if __name__ == "__main__":
     unittest.main()
