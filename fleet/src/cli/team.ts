@@ -16,7 +16,7 @@ import { Out } from "../io.ts";
 import { readTeam, type Agent, type Team, type Why } from "../team/agents.ts";
 import type { Launcher } from "../team/launcher.ts";
 import { rexLauncher } from "../team/rex.ts";
-import { listTeam, startTeam, stopTeam, type BeforeStart, type Ground, type Said } from "../team/team.ts";
+import { heldElsewhere, listTeam, startTeam, stopTeam, type BeforeStart, type Ground, type Said } from "../team/team.ts";
 import { claudeConfigOf, ensureTrusted, trustRootOf, type Asker, type Consent } from "../team/trust.ts";
 import { World, type Machine } from "../world.ts";
 import { exitOf, printUsage } from "./exit.ts";
@@ -113,11 +113,6 @@ function run(machine: Machine, argv: readonly string[], launcherAt: (state: stri
     const state = join(machine.registry.place.home, "team", team.session);
     const launcher = launcherAt(state);
 
-    if (command === "attach") return launcher.attach(team.session);
-    const agents = picked(team, names);
-
-    if ("why" in agents) return yield* refuse(agents.why);
-
     const ground: Ground = {
       team,
       launcher,
@@ -126,6 +121,16 @@ function run(machine: Machine, argv: readonly string[], launcherAt: (state: stri
       known: () => machine.registry.known(),
       home,
     };
+
+    if (command === "attach") {
+      const other = heldElsewhere(ground);
+
+      return other === undefined ? launcher.attach(team.session) : yield* refuse(other.why);
+    }
+
+    const agents = picked(team, names);
+
+    if ("why" in agents) return yield* refuse(agents.why);
 
     if (command === "start") {
       const consent: Consent = trust ? { _tag: "Given" } : ask === undefined ? { _tag: "None" } : { _tag: "Ask", ask };

@@ -41,9 +41,10 @@ export interface Said {
   readonly refused: readonly string[];
 }
 
-/** What `fleet team` started: the session's handle when it started it, each agent's tab, and the agents whose
- * opening is not sent yet (their start blocked on a prompt in their tab). */
+/** What `fleet team` started: the repo whose team it is, the session's handle when it started it, each agent's
+ * tab, and the agents whose opening is not sent yet (their start blocked on a prompt in their tab). */
 interface Marks {
+  readonly repo: string | undefined;
   readonly session: Handle | undefined;
   readonly agents: Readonly<Record<string, Handle>>;
   readonly unsent: readonly string[];
@@ -66,13 +67,24 @@ function readMarks(ground: Ground): Marks {
     if (tab !== undefined) agents[name] = tab;
   }
 
-  return { session: asString(raw?.["session"]), agents, unsent };
+  return { repo: asString(raw?.["repo"]), session: asString(raw?.["session"]), agents, unsent };
 }
 
 function writeMarks(ground: Ground, marks: Marks): Why | undefined {
   const agents = Object.fromEntries(Object.entries(marks.agents).map(([name, tab]) => [name, marks.unsent.includes(name) ? { tab, opening: "unsent" } : { tab }]));
 
-  return writeOrWhy(marksPath(ground), `${JSON.stringify({ session: marks.session, agents }, null, 2)}\n`);
+  return writeOrWhy(marksPath(ground), `${JSON.stringify({ repo: ground.team.repo, session: marks.session, agents }, null, 2)}\n`);
+}
+
+/** Why the team's session is another repo's: one whose folder has the same name, its marks still holding a
+ * session or a tab; undefined when it is this repo's or free. */
+export function heldElsewhere(ground: Ground): Why | undefined {
+  const marks = readMarks(ground);
+  const held = marks.session !== undefined || Object.keys(marks.agents).length > 0;
+
+  return marks.repo === undefined || !held || realOf(marks.repo) === realOf(ground.team.repo)
+    ? undefined
+    : { why: `session ${ground.team.session} is the team of ${marks.repo}, which fleet team runs; name this repo's in its .fleet/team.json ("session")` };
 }
 
 function withoutAgent(marks: Marks, name: string): Marks {
@@ -159,6 +171,9 @@ export function startTeam(ground: Ground, agents: readonly Agent[], before: Befo
 }
 
 function startLocked(ground: Ground, agents: readonly Agent[], before: BeforeStart): Said {
+  const other = heldElsewhere(ground);
+
+  if (other !== undefined) return { lines: [], refused: [other.why] };
   const session = ground.team.session;
   const lines: string[] = [];
   const refused: string[] = [];
@@ -248,7 +263,7 @@ function startLocked(ground: Ground, agents: readonly Agent[], before: BeforeSta
 
       if (open.started !== undefined) {
         lines.push(`started session ${session}`);
-        save({ session: open.started, agents: {}, unsent: [] });
+        save({ repo: ground.team.repo, session: open.started, agents: {}, unsent: [] });
       } else if (marks.session !== undefined && !ground.launcher.owns(session, marks.session)) save({ ...marks, session: undefined });
     }
 
@@ -294,6 +309,9 @@ export function stopTeam(ground: Ground, agents: readonly Agent[], force: boolea
 }
 
 function stopLocked(ground: Ground, agents: readonly Agent[], force: boolean): Said {
+  const other = heldElsewhere(ground);
+
+  if (other !== undefined) return { lines: [], refused: [other.why] };
   const session = ground.team.session;
   const lines: string[] = [];
   const refused: string[] = [];
@@ -355,7 +373,7 @@ function stopLocked(ground: Ground, agents: readonly Agent[], force: boolean): S
 
       if (ended === undefined) {
         lines.push(`session ${session} stopped: fleet team started it and nothing is left in it`);
-        save({ session: undefined, agents: {}, unsent: [] });
+        save({ repo: ground.team.repo, session: undefined, agents: {}, unsent: [] });
       } else refused.push(ended.why);
     }
   }
@@ -365,6 +383,9 @@ function stopLocked(ground: Ground, agents: readonly Agent[], force: boolean): S
 
 /** Where each of `agents` runs: here, elsewhere (where), or not at all; refused when the launcher cannot say. */
 export function listTeam(ground: Ground, agents: readonly Agent[]): Said {
+  const other = heldElsewhere(ground);
+
+  if (other !== undefined) return { lines: [], refused: [other.why] };
   const session = ground.team.session;
   const marks = readMarks(ground);
   const sessions = ground.launcher.sessions();

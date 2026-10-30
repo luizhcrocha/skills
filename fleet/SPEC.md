@@ -4448,7 +4448,10 @@ says `all`; `attach` takes none.
   agent's while it is labelled with the agent's name and holds a block labelled with it, and the session is the
   one started while rex still runs that ID under that label. A mark that no longer holds is dropped; `start` drops the
   session's when it reuses another instance. `start` and `stop` hold `REGISTRY/team/<session>/team.lock`
-  (`flock`) throughout.
+  (`flock`) throughout. The marks also name the repo whose team it is: while they hold a session or a tab,
+  every command from another repo of the same session name (two folders called `skills`) is refused (`session
+  skills is the team of <repo>, which fleet team runs; name this repo's in its .fleet/team.json ("session")`),
+  so the session's label in the Rex app stays the plain name.
 - **stop.** Waits, at most 10 minutes, until the agent is ready (its block's `program_status`, asked twice a
   second), then closes its tab (`rex window close`); `--force` closes at once, and a wait that gives up says so. An agent
   waiting on a prompt at its start (its opening unsent, and `asking`, as a silent start is) is closed at once,
