@@ -1,15 +1,25 @@
 /**
  * A launcher in memory, for `fleet team`'s tests: sessions with tabs and agents, every call recorded. A tab that
- * starts an agent sees it working, or asking when it blocks at its start; `settle` lets it finish (ready). Each session instance has its own handle, so a
- * session seeded again (after a reboot) is not the one `open` started. Sessions not this fake's own are given with
+ * starts an agent sees it working; one that blocks at its start stays silent, as Claude Code does before its
+ * prompt is up, and is read through rex's rule (rex.ts's statusOf) until answered. `settle` lets a working agent
+ * finish (ready) and gives up on a silent one. Each session instance has its own handle, so a session seeded again
+ * (after a reboot) is not the one `open` started. Sessions not this fake's own are given with
  * {@link FakeLauncher.seed}.
  */
 import type { Why } from "../src/team/agents.ts";
-import type { Blocked, Handle, Launch, Launcher, Look, Opened, Seen, Tab } from "../src/team/launcher.ts";
+import type { Blocked, Handle, Launch, Launcher, Look, Opened, Seen, Status, Tab } from "../src/team/launcher.ts";
+import { statusOf } from "../src/team/rex.ts";
+
+/** An agent as the fake holds it: its status, or silent while it runs having reported nothing. */
+interface Running {
+  readonly name: string;
+  readonly tab: Handle;
+  readonly status: Status | "silent";
+}
 
 interface Held {
   tabs: Tab[];
-  agents: Seen[];
+  agents: Running[];
   readonly instance: Handle;
 }
 
@@ -68,7 +78,7 @@ export class FakeLauncher implements Launcher {
     held.tabs.push(tab);
     this.launches.set(tab.handle, launch);
     const blocked = this.blockAtStart.has(launch.agent.name);
-    held.agents.push({ name: launch.agent.name, tab: tab.handle, status: blocked ? "asking" : "working" });
+    held.agents.push({ name: launch.agent.name, tab: tab.handle, status: blocked ? "silent" : "working" });
 
     return blocked ? { blocked: tab } : tab;
   }
@@ -90,12 +100,16 @@ export class FakeLauncher implements Launcher {
   look(session: string): Look | Why {
     const held = this.held.get(session);
 
-    return held === undefined ? { why: `no session ${session}` } : { tabs: [...held.tabs], agents: [...held.agents] };
+    if (held === undefined) return { why: `no session ${session}` };
+
+    return { tabs: [...held.tabs], agents: held.agents.map((a): Seen => ({ ...a, status: a.status === "silent" ? statusOf(undefined, true) : a.status })) };
   }
 
   settle(session: string, agent: string): Why | undefined {
     this.calls.push(`settle ${session} ${agent}`);
     const held = this.held.get(session);
+
+    if (held?.agents.some((a) => a.name === agent && a.status === "silent") === true) return { why: "it was not ready within 10 min" };
 
     if (held !== undefined) held.agents = held.agents.map((a) => (a.name === agent ? { ...a, status: "ready" } : a));
 

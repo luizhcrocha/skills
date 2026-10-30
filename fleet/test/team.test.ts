@@ -224,6 +224,16 @@ describe("stop", () => {
     expect(launcher.calls.filter((c) => c.startsWith("settle "))).toEqual([`settle ${at.session} web`]);
   });
 
+  test("an agent still silent at its start (its prompt not up: a trust or MCP question) is closed at once", () => {
+    const at = place();
+    const launcher = new FakeLauncher();
+    launcher.blockAtStart.add("ui");
+    team(at, launcher, "start", "ui");
+
+    expect(team(at, launcher, "stop", "ui").stdout).toStartWith("ui: stopped: tab w1:t1 closed at once: it waited on a prompt\n");
+    expect(launcher.calls.filter((c) => c.startsWith("settle "))).toEqual([]);
+  });
+
   test("an agent whose opening is unsent but no longer asks is waited for", () => {
     const at = place();
     const launcher = new FakeLauncher();

@@ -13,7 +13,8 @@ import { describe, expect, test } from "bun:test";
 import * as Option from "effect/Option";
 
 import { asArray, asObject, asString, parseObject, type JsonOut } from "../src/json.ts";
-import { parseAgent, type Agent } from "../src/team/agents.ts";
+import { parseAgent, type Agent, type Why } from "../src/team/agents.ts";
+import type { Look } from "../src/team/launcher.ts";
 import { claudeArgv, rexLauncher, rexRunner, type Ran, type RexRunner } from "../src/team/rex.ts";
 import { tmp } from "./support.ts";
 
@@ -148,12 +149,23 @@ describe("rex's calls", () => {
     expect(launcher.prompt("skills", "ui", "two\nlines")).toEqual({ why: "a prompt holding a line break would be sent in parts" });
   });
 
-  test("a look gives the windows as tabs and each block as an agent, with what its program says", () => {
-    for (const [state, status] of [["idle", "ready"], ["done", "ready"], ["working", "working"], ["blocked", "asking"], [undefined, "unknown"]] as const) {
+  test("a look gives the windows as tabs and each block as an agent, with what its program says, a value rex's schema does not name as idle", () => {
+    for (const [state, status] of [["idle", "ready"], ["done", "ready"], ["error", "ready"], ["sleeping", "ready"], ["working", "working"], ["blocked", "asking"]] as const) {
       const rex = fakeRex(statusIs(state));
 
       expect(rexLauncher({ state: tmp("fleet-team-state-"), run: rex.run, ...FAST }).look("skills")).toEqual({ tabs: [{ handle: "window:1", label: "ui" }], agents: [{ name: "ui", tab: "window:1", status }] });
     }
+  });
+
+  test("a look takes a program that runs and has said nothing as waiting on a prompt, as a start does; one that ended as unknown", () => {
+    const look = (exit: string): Look | Why => {
+      const rex = fakeRex((words) => statusIs(undefined)(words) ?? (words.endsWith("process") ? { code: 0, stdout: `{"last_exit":${exit}}`, stderr: "" } : undefined));
+
+      return rexLauncher({ state: tmp("fleet-team-state-"), run: rex.run, ...FAST }).look("skills");
+    };
+
+    expect(look("null")).toEqual({ tabs: [{ handle: "window:1", label: "ui" }], agents: [{ name: "ui", tab: "window:1", status: "asking" }] });
+    expect(look('{"exit_code":0}')).toEqual({ tabs: [{ handle: "window:1", label: "ui" }], agents: [{ name: "ui", tab: "window:1", status: "unknown" }] });
   });
 
   test("settle waits a bounded time and says so when it gives up", () => {

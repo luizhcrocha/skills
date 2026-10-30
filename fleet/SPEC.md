@@ -4447,14 +4447,17 @@ says `all`; `attach` takes none.
   (`flock`) throughout.
 - **stop.** Waits, at most 10 minutes, until the agent is ready (its block's `program_status`, asked twice a
   second), then closes its tab (`rex window close`); `--force` closes at once, and a wait that gives up says so. An agent
-  waiting on a prompt (its opening unsent, or `asking`) is closed at once, without the wait, which would hold
+  waiting on a prompt at its start (its opening unsent, and `asking`, as a silent start is) is closed at once,
+  and a second `start` refuses it at once, without the wait, which would hold
   the team's lock for the 10 minutes (`ui: stopped: tab w1:t1 closed at once: it waited on a prompt`). An
   agent not marked is refused (`ui: fleet team did not start it in session skills; left as it is`); a
   session that cannot be read is refused and the mark kept. When the last marked tab is closed, the session
   was started by `fleet team` and no tab is left in it, the session is killed (`rex kill <its ID>`); the rex
   server is never stopped.
-- **list.** One line per agent: `running here: session S, tab T, <status>` (status `ready`, `working`,
-  `asking` or `unknown`: the program status `idle` and `done`, `working`, `blocked`, anything else or none),
+- **list.** One line per agent: `running here: session S, tab T, <status>` (status `ready` for the program
+  status `idle`, `done`, `error` (its turn ended; it takes the next prompt) and any state rex's schema does not
+  name (idle, as the schema says); `working`; `asking` for `blocked`, or for no state while its program runs, as
+  a start reads it; `unknown` for no state once its program ended, or when rex cannot say),
   `running here, not started by fleet
   team: <where>`, `running elsewhere: <where>`, or `not running`.
 - **attach.** Shows the team's session in the Rex app (`rex do session.select session_id=<ID>`, the app

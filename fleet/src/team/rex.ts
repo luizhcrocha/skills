@@ -5,9 +5,7 @@
  * no shell quoting in between (the terminal block's `command`). Handles are rex's IDs, which rex never reuses:
  * the session's for a session, the window's for a tab. Claude Code reports its state to the terminal (the
  * program status protocol, OSC 7501), which `program_status` reads back: idle or done is ready, working is
- * working, blocked is asking. It reports nothing before its prompt is up, so a start that stays silent while
- * its program runs is taken as waiting on a prompt in its tab (trust, an MCP server's approval).
- * Claude Code 2.1.314 in a trusted folder said idle 1.6 s after it started, with no prompt sent (2026-10-30).
+ * working, blocked is asking ({@link statusOf}).
  */
 import { spawnSync } from "node:child_process";
 import { join } from "node:path";
@@ -78,20 +76,20 @@ export function claudeArgv(agent: Agent, systemFile: string | undefined): string
   ];
 }
 
-/** A program's reported state, in `fleet team`'s words; undefined when it reported none. */
-function statusOf(state: string | undefined): Status | undefined {
+/** A program's state in `fleet team`'s words, from the state it last reported (undefined: none) and whether it
+ * still runs. Claude Code reports nothing before its prompt is up, so one that runs and has said nothing waits on
+ * a prompt in its tab (trust, an MCP server's approval). An error ended its turn, and it takes the next prompt;
+ * a state rex's schema does not name is idle, as the schema says. */
+export function statusOf(state: string | undefined, running: boolean): Status {
   switch (state) {
     case undefined:
-      return undefined;
-    case "idle":
-    case "done":
-      return "ready";
+      return running ? "asking" : "unknown";
     case "working":
       return "working";
     case "blocked":
       return "asking";
     default:
-      return "unknown";
+      return "ready";
   }
 }
 
@@ -183,11 +181,11 @@ export function rexLauncher(options: RexOptions): Launcher {
     return mine[0] ?? { why: `no block is labelled ${agent}` };
   };
 
-  /** What the block's program last said of itself (its root record); undefined when it said nothing. */
-  const reported = (sid: string, block: string): { readonly status: Status | undefined } | Why => {
+  /** The state the block's program last said it is in (its root record's); undefined when it said nothing. */
+  const reported = (sid: string, block: string): { readonly state: string | undefined } | Why => {
     const answer = rex(["block", "call", "-s", sid, "-b", block, "program_status"]);
 
-    return "why" in answer ? answer : { status: statusOf(asString(rowsOf(answer.result, "records").find((r) => r["id"] === undefined)?.["state"])) };
+    return "why" in answer ? answer : { state: asString(rowsOf(answer.result, "records").find((r) => r["id"] === undefined)?.["state"]) };
   };
 
   /** How the block's program exited, in a phrase; undefined while it runs. */
@@ -198,6 +196,18 @@ export function rexLauncher(options: RexOptions): Launcher {
     const last = asObject(answer.result["last_exit"]);
 
     return { ended: last === undefined ? undefined : (asString(last["error"]) ?? `exit ${String(asNumber(last["exit_code"]) ?? "unknown")}`) };
+  };
+
+  /** The block's program's state now; unknown when rex cannot say. */
+  const statusNow = (sid: string, block: string): Status => {
+    const said = reported(sid, block);
+
+    if ("why" in said) return "unknown";
+
+    if (said.state !== undefined) return statusOf(said.state, true);
+    const end = exited(sid, block);
+
+    return "why" in end ? "unknown" : statusOf(undefined, end.ended === undefined);
   };
 
   /** The last lines the block shows, for a start that failed. */
@@ -265,10 +275,11 @@ export function rexLauncher(options: RexOptions): Launcher {
 
       for (const deadline = Date.now() + startMs; Date.now() < deadline; sleepMs(pollMs)) {
         const said = reported(sid, block);
+        const status = "why" in said || said.state === undefined ? undefined : statusOf(said.state, true);
 
-        if (!("why" in said) && said.status === "ready") return tab;
+        if (status === "ready") return tab;
 
-        if (!("why" in said) && said.status === "asking") return { blocked: tab };
+        if (status === "asking") return { blocked: tab };
         const end = "why" in said ? { ended: said.why } : exited(sid, block);
 
         if ("why" in end) return end;
@@ -320,11 +331,7 @@ export function rexLauncher(options: RexOptions): Launcher {
         return handle === undefined || label === undefined ? [] : [{ handle, label }];
       });
 
-      const agents = blocks.map((b): Seen => {
-        const said = reported(sid, b.id);
-
-        return { name: b.label, tab: b.window, status: ("why" in said ? undefined : said.status) ?? "unknown" };
-      });
+      const agents = blocks.map((b): Seen => ({ name: b.label, tab: b.window, status: statusNow(sid, b.id) }));
 
       return { tabs, agents } satisfies Look;
     },
@@ -343,7 +350,7 @@ export function rexLauncher(options: RexOptions): Launcher {
 
         if ("why" in said) return said;
 
-        if (said.status === "ready") return undefined;
+        if (said.state !== undefined && statusOf(said.state, true) === "ready") return undefined;
       }
 
       return { why: `it was not ready within ${String(settleMs / 60_000)} min` };
