@@ -6,8 +6,9 @@
  */
 import type { Agent, Why } from "./agents.ts";
 
-/** An agent's states, in `fleet team`'s words: ready for a prompt, in a turn, waiting on a person, or not known. */
-export const STATUSES = ["ready", "working", "asking", "unknown"] as const;
+/** An agent's states, in `fleet team`'s words: ready for a prompt, in a turn, waiting on a person, its program
+ * ended (its tab kept), or not known. */
+export const STATUSES = ["ready", "working", "asking", "ended", "unknown"] as const;
 
 /** One agent's state. */
 export type Status = (typeof STATUSES)[number];
@@ -15,6 +16,9 @@ export type Status = (typeof STATUSES)[number];
 /** The adapter's name for a tab or a running session: opaque to `fleet team`, which stores and compares it, and
  * shown to people as it is. */
 export type Handle = string;
+
+/** What a settle waited for: the agent ready, or its program ended. */
+export type Settled = Extract<Status, "ready" | "ended">;
 
 /** One tab of a session. */
 export interface Tab {
@@ -68,8 +72,9 @@ export interface Launcher {
   prompt(session: string, agent: string, text: string): Why | undefined;
   /** The tabs and agents of `session`. */
   look(session: string): Look | Why;
-  /** Wait, for a bounded time, until agent `agent` is ready; the Why says when it gave up. */
-  settle(session: string, agent: string): Why | undefined;
+  /** Wait, for a bounded time, until agent `agent` is ready or its program has ended: which; the Why says when it
+   * gave up. */
+  settle(session: string, agent: string): Settled | Why;
   /** Close tab `tab` of `session`, and what runs in it. */
   close(session: string, tab: Handle): Why | undefined;
   /** Stop session `name`, only while `handle` (from {@link Launcher.open}) still names it; else refuse. */

@@ -126,6 +126,33 @@ describe("start", () => {
     expect(team(at, launcher, "start", "ui").stdout).toBe(`ui: already running in session ${at.session}, tab w1:t1; left as it is\n`);
   });
 
+  test("an agent whose program ended in the tab it started has that tab closed and starts again", () => {
+    const at = place();
+    const launcher = new FakeLauncher();
+    team(at, launcher, "start", "ui");
+    launcher.exit(at.session, "ui");
+
+    expect(team(at, launcher, "start", "ui")).toEqual({
+      code: 0,
+      stdout: `ui: its program in tab w1:t1 had ended; the tab is closed\nui: started in session ${at.session}, tab w1:t2; its ledger is ${LEDGER(at, "ui")}\n`,
+      stderr: "",
+    });
+    expect(launcher.calls.filter((c) => c.startsWith("close ") || c.startsWith("settle "))).toEqual([`close ${at.session} w1:t1`]);
+  });
+
+  test("an agent whose program ends while its unsent opening waits has its tab closed and starts again", () => {
+    const at = place();
+    const launcher = new FakeLauncher();
+    launcher.blockAtStart.add("ui");
+    team(at, launcher, "start", "ui");
+    launcher.blockAtStart.delete("ui");
+    launcher.answer(at.session, "ui");
+    launcher.endWhileSettling.add("ui");
+
+    expect(team(at, launcher, "start", "ui").stdout).toBe(`ui: its program in tab w1:t1 had ended; the tab is closed\nui: started in session ${at.session}, tab w1:t2; its ledger is ${LEDGER(at, "ui")}\n`);
+    expect(launcher.prompts).toEqual([`ui: /tstack:coordinator Your ledger is ${LEDGER(at, "ui")}.`]);
+  });
+
   test("team.json names the session", () => {
     const at = place();
     writeFileSync(join(at.repo, ".fleet", "team.json"), '{"session": "skills"}');
@@ -246,6 +273,22 @@ describe("stop", () => {
     expect(launcher.calls.filter((c) => c.startsWith("settle "))).toEqual([`settle ${at.session} ui`]);
   });
 
+  test("an agent whose program ended is listed so and closed at once, without the wait; one that ends during the wait is closed then", () => {
+    const at = place();
+    const launcher = new FakeLauncher();
+    team(at, launcher, "start", "ui");
+    launcher.exit(at.session, "ui");
+
+    expect(team(at, launcher, "list").stdout).toBe(`ui  running here: session ${at.session}, tab w1:t1, ended\n`);
+    expect(team(at, launcher, "stop", "ui").stdout).toBe(`ui: stopped: tab w1:t1 closed at once: its program had ended\nsession ${at.session} stopped: fleet team started it and nothing is left in it\n`);
+    expect(launcher.calls.filter((c) => c.startsWith("settle "))).toEqual([]);
+
+    team(at, launcher, "start", "ui");
+    launcher.endWhileSettling.add("ui");
+
+    expect(team(at, launcher, "stop", "ui").stdout).toStartWith("ui: stopped: tab w1:t2 closed once its program ended\n");
+  });
+
   test("--force closes at once, and a session it did not start is left running", () => {
     const at = place();
     const launcher = new FakeLauncher().seed(basename(at.repo));
@@ -332,14 +375,21 @@ describe("list and attach", () => {
   });
 });
 
+/** Another repo of `at`'s folder name, with a ui agent, trusted. */
+function twinOf(at: Place): Place {
+  const twin = join(tmp("fleet-team-twin-"), basename(at.repo));
+  mkdirSync(join(twin, ".fleet", "agents"), { recursive: true });
+  writeFileSync(join(twin, ".fleet", "agents", "ui.json"), '{"fleet": {"role": "coordinator"}}');
+  writeFileSync(at.claude, JSON.stringify({ projects: { [at.repo]: { hasTrustDialogAccepted: true }, [twin]: { hasTrustDialogAccepted: true } } }));
+
+  return { ...at, repo: twin };
+}
+
 describe("safety", () => {
   test("another repo of the same folder name is refused while this one's team runs, saying how to name its own; free once it stops", () => {
     const at = place();
-    const twin = join(tmp("fleet-team-twin-"), basename(at.repo));
-    mkdirSync(join(twin, ".fleet", "agents"), { recursive: true });
-    writeFileSync(join(twin, ".fleet", "agents", "ui.json"), '{"fleet": {"role": "coordinator"}}');
-    writeFileSync(at.claude, JSON.stringify({ projects: { [at.repo]: { hasTrustDialogAccepted: true }, [twin]: { hasTrustDialogAccepted: true } } }));
-    const other: Place = { ...at, repo: twin };
+    const other = twinOf(at);
+    const twin = other.repo;
     const launcher = new FakeLauncher();
     team(at, launcher, "start", "ui");
     const why = `team: session ${at.session} is the team of ${at.repo}, which fleet team runs; name this repo's in its .fleet/team.json ("session")\n`;
@@ -351,6 +401,16 @@ describe("safety", () => {
 
     expect(team(other, launcher, "start").stdout).toBe(`started session ${at.session}\nui: started in session ${at.session}, tab w1:t2; its ledger is ${LEDGER(at, "ui")}\n`);
     expect(team(at, launcher, "list")).toEqual({ code: 1, stdout: "", stderr: `team: session ${at.session} is the team of ${twin}, which fleet team runs; name this repo's in its .fleet/team.json ("session")\n` });
+  });
+
+  test("another repo's marks that no longer hold (after a reboot, or its session closed in the Rex app) leave the session free", () => {
+    const at = place();
+    const other = twinOf(at);
+    team(at, new FakeLauncher(), "start", "ui");
+    const rebooted = new FakeLauncher();
+
+    expect(team(other, rebooted, "start")).toEqual({ code: 0, stdout: `started session ${at.session}\nui: started in session ${at.session}, tab w1:t1; its ledger is ${LEDGER(at, "ui")}\n`, stderr: "" });
+    expect(team(at, rebooted, "list").stderr).toBe(`team: session ${at.session} is the team of ${other.repo}, which fleet team runs; name this repo's in its .fleet/team.json ("session")\n`);
   });
 
   test("after a reboot, a restored shell tab with the marked tab's id and label is not its agent: stop closes nothing and start leaves it as a stranger's", () => {

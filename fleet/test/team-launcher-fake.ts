@@ -1,13 +1,14 @@
 /**
  * A launcher in memory, for `fleet team`'s tests: sessions with tabs and agents, every call recorded. A tab that
  * starts an agent sees it working; one that blocks at its start stays silent, as Claude Code does before its
- * prompt is up, and is read through rex's rule (rex.ts's statusOf) until answered. `settle` lets a working agent
- * finish (ready) and gives up on a silent one. Each session instance has its own handle, so a session seeded again
+ * prompt is up, and is read through rex's rule (rex.ts's statusOf) until answered. An agent's program may end,
+ * its tab kept ({@link FakeLauncher.exit}). `settle` lets a working agent finish (ready), says when its program
+ * ended, and gives up on a silent one. Each session instance has its own handle, so a session seeded again
  * (after a reboot) is not the one `open` started. Sessions not this fake's own are given with
  * {@link FakeLauncher.seed}.
  */
 import type { Why } from "../src/team/agents.ts";
-import type { Blocked, Handle, Launch, Launcher, Look, Opened, Seen, Status, Tab } from "../src/team/launcher.ts";
+import type { Blocked, Handle, Launch, Launcher, Look, Opened, Seen, Settled, Status, Tab } from "../src/team/launcher.ts";
 import { statusOf } from "../src/team/rex.ts";
 
 /** An agent as the fake holds it: its status, or silent while it runs having reported nothing. */
@@ -33,6 +34,8 @@ export class FakeLauncher implements Launcher {
   readonly launches = new Map<string, Launch>();
   /** The agents whose start blocks on a prompt in their tab (a new folder's trust question) until {@link answer}. */
   readonly blockAtStart = new Set<string>();
+  /** The agents whose program ends while a settle waits on them. */
+  readonly endWhileSettling = new Set<string>();
   private readonly held = new Map<string, Held>();
   private next = 1;
   private instances = 0;
@@ -85,9 +88,18 @@ export class FakeLauncher implements Launcher {
 
   /** The user answers the prompt agent `agent` blocked on in `session`: it is ready. */
   answer(session: string, agent: string): void {
+    this.become(session, agent, "ready");
+  }
+
+  /** Agent `agent`'s program in `session` ends, its tab kept. */
+  exit(session: string, agent: string): void {
+    this.become(session, agent, "ended");
+  }
+
+  private become(session: string, agent: string, status: Status): void {
     const held = this.held.get(session);
 
-    if (held !== undefined) held.agents = held.agents.map((a) => (a.name === agent ? { ...a, status: "ready" } : a));
+    if (held !== undefined) held.agents = held.agents.map((a) => (a.name === agent ? { ...a, status } : a));
   }
 
   prompt(session: string, agent: string, text: string): Why | undefined {
@@ -102,18 +114,18 @@ export class FakeLauncher implements Launcher {
 
     if (held === undefined) return { why: `no session ${session}` };
 
-    return { tabs: [...held.tabs], agents: held.agents.map((a): Seen => ({ ...a, status: a.status === "silent" ? statusOf(undefined, true) : a.status })) };
+    return { tabs: [...held.tabs], agents: held.agents.map((a): Seen => ({ ...a, status: a.status === "silent" ? statusOf(undefined) : a.status })) };
   }
 
-  settle(session: string, agent: string): Why | undefined {
+  settle(session: string, agent: string): Settled | Why {
     this.calls.push(`settle ${session} ${agent}`);
-    const held = this.held.get(session);
+    const status = this.held.get(session)?.agents.find((a) => a.name === agent)?.status;
 
-    if (held?.agents.some((a) => a.name === agent && a.status === "silent") === true) return { why: "it was not ready within 10 min" };
+    if (status === "silent") return { why: "it was not ready within 10 min" };
+    const settled: Settled = status === "ended" || this.endWhileSettling.has(agent) ? "ended" : "ready";
+    this.become(session, agent, settled);
 
-    if (held !== undefined) held.agents = held.agents.map((a) => (a.name === agent ? { ...a, status: "ready" } : a));
-
-    return undefined;
+    return settled;
   }
 
   close(session: string, tab: Handle): Why | undefined {

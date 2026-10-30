@@ -4,9 +4,10 @@
  * window and block labelled with the agent's name, the block running the agent's command line as given, with
  * no shell quoting in between (the terminal block's `command`). Handles are rex's IDs, which rex never reuses:
  * the session's for a session, the window's for a tab. A program that fails within the start's wait keeps its
- * block, for the start to read why and close it; one that exits after closes it, as rex does by default. Claude Code reports its state to the terminal (the
- * program status protocol, OSC 7501), which `program_status` reads back: idle or done is ready, working is
- * working, blocked is asking ({@link statusOf}).
+ * block, ended, for the start, a look and a settle to see; one that exits 0, or later, takes its block with it,
+ * as rex does by default. Claude Code reports its state to the terminal (the program status protocol, OSC 7501),
+ * which `program_status` reads back, its last report kept after the program ends: idle or done is ready, working
+ * is working, blocked is asking ({@link statusOf}); a program that ended has ended, whatever it last reported.
  */
 import { spawnSync } from "node:child_process";
 import { join } from "node:path";
@@ -77,14 +78,14 @@ export function claudeArgv(agent: Agent, systemFile: string | undefined): string
   ];
 }
 
-/** A program's state in `fleet team`'s words, from the state it last reported (undefined: none) and whether it
- * still runs. Claude Code reports nothing before its prompt is up, so one that runs and has said nothing waits on
- * a prompt in its tab (trust, an MCP server's approval). An error ended its turn, and it takes the next prompt;
- * a state rex's schema does not name is idle, as the schema says. */
-export function statusOf(state: string | undefined, running: boolean): Status {
+/** A running program's state in `fleet team`'s words, from the state it last reported (undefined: none). Claude
+ * Code reports nothing before its prompt is up, so one that has said nothing waits on a prompt in its tab (trust,
+ * an MCP server's approval). An error ended its turn, and it takes the next prompt; a state rex's schema does not
+ * name is idle, as the schema says. */
+export function statusOf(state: string | undefined): Status {
   switch (state) {
     case undefined:
-      return running ? "asking" : "unknown";
+      return "asking";
     case "working":
       return "working";
     case "blocked":
@@ -207,21 +208,27 @@ export function rexLauncher(options: RexOptions): Launcher {
     return { ended: last === undefined ? undefined : (asString(last["error"]) ?? `exit ${String(asNumber(last["exit_code"]) ?? "unknown")}`) };
   };
 
-  /** The block's program now: the state it last reported (undefined: none, while it runs), or how it ended. */
+  /** The block's program now: how it ended, else the state it last reported (undefined: none). */
   const programOf = (sid: string, block: string): { readonly state: string | undefined } | { readonly ended: string } | Why => {
-    const said = reported(sid, block);
-
-    if ("why" in said || said.state !== undefined) return said;
     const end = exited(sid, block);
 
-    return "why" in end ? end : end.ended === undefined ? said : { ended: end.ended };
+    if ("why" in end) return end;
+
+    return end.ended === undefined ? reported(sid, block) : { ended: end.ended };
   };
 
   /** The block's program's state now; unknown when rex cannot say. */
   const statusNow = (sid: string, block: string): Status => {
     const now = programOf(sid, block);
 
-    return "why" in now ? "unknown" : "ended" in now ? statusOf(undefined, false) : statusOf(now.state, true);
+    return "why" in now ? "unknown" : "ended" in now ? "ended" : statusOf(now.state);
+  };
+
+  /** Whether rex lists the session's blocks and `block` is not among them. */
+  const gone = (sid: string, block: string): boolean => {
+    const blocks = blocksOf(sid);
+
+    return !("why" in blocks) && !blocks.some((b) => b.id === block);
   };
 
   /** The last lines the block shows, for a start that failed. */
@@ -294,6 +301,7 @@ export function rexLauncher(options: RexOptions): Launcher {
         const now = programOf(sid, block);
 
         if ("why" in now) {
+          if (gone(sid, block)) return { why: "it ended before it was ready, its tab gone with it (rex closes the tab of a program that exits 0)" };
           failed = now;
           continue;
         }
@@ -307,7 +315,7 @@ export function rexLauncher(options: RexOptions): Launcher {
           return { why: `it ended before it was ready (${now.ended})${shown === "" ? "" : `: ${shown}`}` };
         }
 
-        const status = now.state === undefined ? undefined : statusOf(now.state, true);
+        const status = now.state === undefined ? undefined : statusOf(now.state);
 
         if (status === "ready") return tab;
 
@@ -365,11 +373,13 @@ export function rexLauncher(options: RexOptions): Launcher {
       const { sid, block } = found;
 
       for (const deadline = Date.now() + settleMs; Date.now() < deadline; sleepMs(pollMs)) {
-        const said = reported(sid, block.id);
+        const now = programOf(sid, block.id);
 
-        if ("why" in said) return said;
+        if ("why" in now) return now;
 
-        if (said.state !== undefined && statusOf(said.state, true) === "ready") return undefined;
+        if ("ended" in now) return "ended";
+
+        if (now.state !== undefined && statusOf(now.state) === "ready") return "ready";
       }
 
       return { why: `it was not ready within ${String(settleMs / 60_000)} min` };

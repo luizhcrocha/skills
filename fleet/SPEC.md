@@ -4405,15 +4405,21 @@ says `all`; `attach` takes none.
   `start` refuses with how to go on: `fleet team attach`, answer it (nothing answers it for the user), then
   `fleet team start <name>` again, which sends the opening once the agent is ready, or says it still waits.
   The refusal names it a startup prompt (trust, an MCP server's approval, ...).
-  A start whose program ends first (`rex block call <block> process`: its `last_exit`) closes its tab and says
-  how it ended and the block's last lines. The block's `exit.quick_exit_threshold_ms` is the start's wait, so
-  rex keeps the block of a program that fails within it for the start to read (rex's default, 250 ms, let a
-  claude that failed later take its block, and the start said rex's `not found`); a program that exits later
-  closes its tab, as rex does by default. A rex call that fails while the agent starts is asked again until the
+  A start whose program ends first (`rex block call <block> process`: its `last_exit`, read before
+  `program_status`, which keeps the program's last report after it ends) closes its tab and says how it ended
+  and the block's last lines, whatever the program reported before (a claude that reports `error`, then exits,
+  has ended). The block's `exit.quick_exit_threshold_ms` is the start's wait, so rex keeps the block of a
+  program that fails within it for the start to read (rex's default, 250 ms, let a claude that failed later
+  take its block, and the start said rex's `not found`); a program that exits 0, or exits after the wait, takes
+  its tab with it, as rex does by default. A start whose block is gone (a rex call fails and the block is no
+  longer listed) fails at once (`it ended before it was ready, its tab gone with it (rex closes the tab of a
+  program that exits 0)`). Any other rex call that fails while the agent starts is asked again until the
   wait ends; when the wait's last call failed, the tab is closed and rex's error said. An agent already running in
   the session is reported and left: in the tab this command started (`ui: already running in session skills,
   tab w1:t2; left as it is`), or as an agent of its name or a tab labelled with it that `fleet team` did not
-  start (said so). One running elsewhere is refused, saying where: another
+  start (said so). An agent whose program ended in the tab this command started (a claude that failed within
+  the 2 minutes after its start keeps its tab), or ends while its unsent opening waits, has that tab closed
+  and is started again (`ui: its program in tab w1:t1 had ended; the tab is closed`). One running elsewhere is refused, saying where: another
   session with an agent of its name or a tab labelled with it, or a fleet the registry serves by its
   name or from its ledger. HOME unset is refused. `machine` other than `local` is refused: an agent
   away from this machine needs a launcher on that machine, which is not built.
@@ -4448,12 +4454,19 @@ says `all`; `attach` takes none.
   agent's while it is labelled with the agent's name and holds a block labelled with it, and the session is the
   one started while rex still runs that ID under that label. A mark that no longer holds is dropped; `start` drops the
   session's when it reuses another instance. `start` and `stop` hold `REGISTRY/team/<session>/team.lock`
-  (`flock`) throughout. The marks also name the repo whose team it is: while they hold a session or a tab,
-  every command from another repo of the same session name (two folders called `skills`) is refused (`session
-  skills is the team of <repo>, which fleet team runs; name this repo's in its .fleet/team.json ("session")`),
-  so the session's label in the Rex app stays the plain name.
-- **stop.** Waits, at most 10 minutes, until the agent is ready (its block's `program_status`, asked twice a
-  second), then closes its tab (`rex window close`); `--force` closes at once, and a wait that gives up says so. An agent
+  (`flock`) throughout. The marks also name the repo whose team it is: while they still hold (the session they
+  name is the instance rex runs, or a tab is still its agent's, as above), every command from another repo of
+  the same session name (two folders called `skills`) is refused (`session skills is the team of <repo>, which
+  fleet team runs; name this repo's in its .fleet/team.json ("session")`), so the session's label in the Rex
+  app stays the plain name. Another repo's marks that no longer hold (after a reboot, or its session closed in
+  the Rex app) leave the session free: this repo starts from no marks, and its next write replaces them. A
+  marks.json without `repo` (written before marks named it) is adopted once: taken as the repo that runs
+  `fleet team` on it, which names itself there at its next write.
+- **stop.** Waits, at most 10 minutes, until the agent is ready (its block's `process`, then its
+  `program_status`, asked twice a second), then closes its tab (`rex window close`); `--force` closes at once,
+  and a wait that gives up says so. An agent whose program has ended is closed at once (`ui: stopped: tab
+  w1:t1 closed at once: its program had ended`), and one whose program ends during the wait is closed then
+  (`closed once its program ended`). An agent
   waiting on a prompt at its start (its opening unsent, and `asking`, as a silent start is) is closed at once,
   and a second `start` refuses it at once, without the wait, which would hold
   the team's lock for the 10 minutes (`ui: stopped: tab w1:t1 closed at once: it waited on a prompt`). An
@@ -4464,7 +4477,8 @@ says `all`; `attach` takes none.
 - **list.** One line per agent: `running here: session S, tab T, <status>` (status `ready` for the program
   status `idle`, `done`, `error` (its turn ended; it takes the next prompt) and any state rex's schema does not
   name (idle, as the schema says); `working`; `asking` for `blocked`, or for no state while its program runs, as
-  a start reads it; `unknown` for no state once its program ended, or when rex cannot say),
+  a start reads it; `ended` once its program ended, rex keeping its tab, whatever it last reported; `unknown`
+  when rex cannot say),
   `running here, not started by fleet
   team: <where>`, `running elsewhere: <where>`, or `not running`. A session of the team's name that runs but
   cannot be read, or sessions that cannot be listed, refuse with the launcher's reason: only no such session is
@@ -4473,7 +4487,8 @@ says `all`; `attach` takes none.
   connected, or the one `REX_CLIENT` or `-C` names); rex has no terminal client on Linux.
 - **The seam.** `team/launcher.ts`: sessions, open-or-reuse (the started session's handle), whether a handle
   still names the running session, a tab for an agent (cwd, label, the agent's definition; the tab's handle),
-  a prompt, the tabs and agents with their status, a bounded settle, close, end (by handle), attach. Handles
+  a prompt, the tabs and agents with their status, a bounded settle (ready, or its program ended), close, end
+  (by handle), attach. Handles
   are the adapter's, opaque to `fleet team`; the command line, the system prompt file and the multiplexer's
   words stay in the adapter. Rex (`team/rex.ts`, every call through one runner, which its tests replace with a
   fake) is the one real adapter; `fleet team`'s tests use a fake launcher. Managed Agents would be one more

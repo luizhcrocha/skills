@@ -1,7 +1,7 @@
 /**
  * The rex adapter (src/team/rex.ts). On a fake runner that records each `rex` call and answers as rex does: the
  * session made empty, an agent's window and its command line, a start that is ready, asks, stays silent or
- * ends, a prompt, a look, the bounded settle, end by handle. On real rex, with FLEET_TEST_REX=1: a throwaway
+ * ends, a prompt, a look, the bounded settle, a program that ended, end by handle. On real rex, with FLEET_TEST_REX=1: a throwaway
  * session `fleet-team-smoke-<random>` whose tabs run sh, not claude, reporting their state as Claude Code does;
  * every session it made is killed.
  */
@@ -140,6 +140,23 @@ describe("rex's calls", () => {
     expect(rex.calls.at(-1)).toBe(`window close -s ${SID} window:1`);
   });
 
+  test("a program that reported a state, then ended, has ended: its start fails saying how, and its tab is closed", () => {
+    const rex = fakeRex((words) => statusIs("error")(words) ?? (words.endsWith("process") ? { code: 0, stdout: '{"last_exit":{"exit_code":1,"error":"exit status 1"}}', stderr: "" } : undefined));
+
+    expect(rexLauncher({ state: tmp("fleet-team-state-"), run: rex.run, ...FAST }).tab("skills", { cwd: "/r", label: "ui", agent: agent() })).toEqual({ why: "it ended before it was ready (exit status 1)" });
+    expect(rex.calls.at(-1)).toBe(`window close -s ${SID} window:1`);
+  });
+
+  test("a program whose block is gone while it starts (rex closes the tab of one that exits 0) fails at once, saying so", () => {
+    const gone: Ran = { code: 3, stdout: "", stderr: 'Error: block target "block:1" not found\n' };
+    const rex = fakeRex((words) => (words.endsWith("program_status") || words.endsWith("process") ? gone : words.includes("block ls") ? { code: 0, stdout: '{"blocks":[]}', stderr: "" } : undefined));
+
+    expect(rexLauncher({ state: tmp("fleet-team-state-"), run: rex.run, ...FAST, startMs: 2000 }).tab("skills", { cwd: "/r", label: "ui", agent: agent() })).toEqual({
+      why: "it ended before it was ready, its tab gone with it (rex closes the tab of a program that exits 0)",
+    });
+    expect(rex.calls.filter((c) => c.startsWith("block call"))).toHaveLength(1);
+  });
+
   test("a rex call that fails while the agent starts is asked again until the start's wait ends, then its tab is closed, saying rex's error", () => {
     let fails = 1;
     const flaky = fakeRex((words) => (words.endsWith("program_status") && fails-- > 0 ? { code: 1, stdout: "", stderr: "Error: connection reset\n" } : statusIs("idle")(words)));
@@ -173,21 +190,29 @@ describe("rex's calls", () => {
     }
   });
 
-  test("a look takes a program that runs and has said nothing as waiting on a prompt, as a start does; one that ended as unknown", () => {
-    const look = (exit: string): Look | Why => {
-      const rex = fakeRex((words) => statusIs(undefined)(words) ?? (words.endsWith("process") ? { code: 0, stdout: `{"last_exit":${exit}}`, stderr: "" } : undefined));
+  test("a look takes a program that runs and has said nothing as waiting on a prompt, as a start does; one that ended as ended, whatever it last said", () => {
+    const look = (exit: string, said?: string): Look | Why => {
+      const rex = fakeRex((words) => statusIs(said)(words) ?? (words.endsWith("process") ? { code: 0, stdout: `{"last_exit":${exit}}`, stderr: "" } : undefined));
 
       return rexLauncher({ state: tmp("fleet-team-state-"), run: rex.run, ...FAST }).look("skills");
     };
 
     expect(look("null")).toEqual({ tabs: [{ handle: "window:1", label: "ui" }], agents: [{ name: "ui", tab: "window:1", status: "asking" }] });
-    expect(look('{"exit_code":0}')).toEqual({ tabs: [{ handle: "window:1", label: "ui" }], agents: [{ name: "ui", tab: "window:1", status: "unknown" }] });
+    expect(look('{"exit_code":1,"error":"exit status 1"}')).toEqual({ tabs: [{ handle: "window:1", label: "ui" }], agents: [{ name: "ui", tab: "window:1", status: "ended" }] });
+    expect(look('{"exit_code":1,"error":"exit status 1"}', "idle")).toEqual({ tabs: [{ handle: "window:1", label: "ui" }], agents: [{ name: "ui", tab: "window:1", status: "ended" }] });
   });
 
   test("settle waits a bounded time and says so when it gives up", () => {
     const rex = fakeRex(statusIs("working"));
 
     expect(rexLauncher({ state: tmp("fleet-team-state-"), run: rex.run, ...FAST, settleMs: 120 }).settle("skills", "ui")).toEqual({ why: "it was not ready within 0.002 min" });
+  });
+
+  test("settle says at once when the agent is ready, or its program has ended", () => {
+    expect(rexLauncher({ state: tmp("fleet-team-state-"), run: fakeRex(statusIs("idle")).run, ...FAST }).settle("skills", "ui")).toBe("ready");
+    const rex = fakeRex((words) => statusIs("working")(words) ?? (words.endsWith("process") ? { code: 0, stdout: '{"last_exit":{"exit_code":1,"error":"exit status 1"}}', stderr: "" } : undefined));
+
+    expect(rexLauncher({ state: tmp("fleet-team-state-"), run: rex.run, ...FAST, settleMs: 600_000 }).settle("skills", "ui")).toBe("ended");
   });
 
   test("open reuses a session of its name, else makes one empty and hands back its ID; end kills only that one", () => {
@@ -232,7 +257,7 @@ function reporting(state: string, word: string): readonly string[] {
 
 describe.skipIf(Bun.which("rex") === null || process.env["FLEET_TEST_REX"] !== "1")("rex", () => {
   test(
-    "a throwaway session takes tabs that are ready, ask or end, a prompt, a look, a settle, and is killed",
+    "a throwaway session takes tabs that are ready, ask, end, or fail after they were ready, a prompt, a look, a settle, and is killed",
     () => {
       const session = `fleet-team-smoke-${Math.random().toString(36).slice(2, 10)}`;
       const run = rexRunner();
@@ -265,14 +290,22 @@ describe.skipIf(Bun.which("rex") === null || process.env["FLEET_TEST_REX"] !== "
 
         expect(launcher.tab(session, { cwd: "/tmp", label: "x", agent: agent('{"fleet": {"role": "coordinator"}}', "x") })).toEqual({ why: "it ended before it was ready (exit status 3): broken here" });
 
+        command = ["/bin/sh", "-c", "printf '\\033]7501;state=idle\\033\\\\'; sleep 1; exit 4"];
+        const dying = launcher.tab(session, { cwd: "/tmp", label: "dying", agent: agent('{"fleet": {"role": "coordinator"}}', "dying") });
+
+        expect(dying).toMatchObject({ label: "dying" });
+        Bun.sleepSync(1500);
         const look = launcher.look(session);
 
-        if ("why" in look || "why" in ui || "blocked" in ui || !("blocked" in web)) throw new Error(`look: ${JSON.stringify(look)}`);
-        expect(look.tabs.map((t) => t.label)).toEqual(["ui", "web"]);
+        if ("why" in look || "why" in ui || "blocked" in ui || !("blocked" in web) || "why" in dying || "blocked" in dying) throw new Error(`look: ${JSON.stringify(look)}`);
+        expect(look.tabs.map((t) => t.label)).toEqual(["ui", "web", "dying"]);
         expect(look.agents).toEqual([
           { name: "ui", tab: ui.handle, status: "ready" },
           { name: "web", tab: web.blocked.handle, status: "asking" },
+          { name: "dying", tab: dying.handle, status: "ended" },
         ]);
+        expect(launcher.settle(session, "dying")).toBe("ended");
+        expect(launcher.close(session, dying.handle)).toBeUndefined();
 
         expect(launcher.prompt(session, "ui", "hello there")).toBeUndefined();
         Bun.sleepSync(300);
@@ -281,7 +314,7 @@ describe.skipIf(Bun.which("rex") === null || process.env["FLEET_TEST_REX"] !== "
         const shown = run(["capture", "-s", handle, "-b", block ?? "", "--trim"]);
 
         expect("why" in shown ? shown.why : shown.stdout).toContain(`arg=[it's a "quoted" word]\nhello there\ngot=hello there`);
-        expect(launcher.settle(session, "ui")).toBeUndefined();
+        expect(launcher.settle(session, "ui")).toBe("ready");
 
         expect(launcher.close(session, web.blocked.handle)).toBeUndefined();
         expect(launcher.close(session, ui.handle)).toBeUndefined();

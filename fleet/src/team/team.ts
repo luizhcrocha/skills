@@ -5,7 +5,8 @@
  * `<state>/marks.json` by the launcher's handles: the session when it started it, and each agent's tab. A mark is
  * trusted only while it still holds: a tab still labelled with the agent's name and running an agent of that
  * name, a session the launcher says is still the instance it started. It closes only what is marked and holds:
- * a tab or session someone else opened is never closed. `start`
+ * a tab or session someone else opened is never closed. A marked tab whose program ended is closed: by `stop` at
+ * once, by `start` before it starts its agent again. `start`
  * and `stop` hold `<state>/team.lock` throughout, so two of them never drive the session at once.
  */
 import { existsSync, realpathSync } from "node:fs";
@@ -18,7 +19,7 @@ import { asObject, asString, parseObject } from "../json.ts";
 import { withLockAt } from "../lock.ts";
 import type { Entry } from "../registry.ts";
 import { openingOf, type Agent, type Team, type Why } from "./agents.ts";
-import type { Handle, Launcher, Look, Tab } from "./launcher.ts";
+import type { Handle, Launcher, Look, Settled, Tab } from "./launcher.ts";
 import { fixedHomes, isAgentsEntry, ledgerOf } from "./ledger.ts";
 
 /** What the commands work on. */
@@ -76,15 +77,33 @@ function writeMarks(ground: Ground, marks: Marks): Why | undefined {
   return writeOrWhy(marksPath(ground), `${JSON.stringify({ repo: ground.team.repo, session: marks.session, agents }, null, 2)}\n`);
 }
 
-/** Why the team's session is another repo's: one whose folder has the same name, its marks still holding a
- * session or a tab; undefined when it is this repo's or free. */
-export function heldElsewhere(ground: Ground): Why | undefined {
+/** The marks this repo works from: its own (marks naming no repo are taken as its own), none when another repo's
+ * no longer hold, or why the session is another repo's: one whose folder has the same name, its marks still
+ * holding the session or a tab. */
+function ownMarks(ground: Ground): Marks | Why {
   const marks = readMarks(ground);
-  const held = marks.session !== undefined || Object.keys(marks.agents).length > 0;
 
-  return marks.repo === undefined || !held || realOf(marks.repo) === realOf(ground.team.repo)
-    ? undefined
-    : { why: `session ${ground.team.session} is the team of ${marks.repo}, which fleet team runs; name this repo's in its .fleet/team.json ("session")` };
+  if (marks.repo === undefined || realOf(marks.repo) === realOf(ground.team.repo)) return marks;
+
+  if (!holds(ground, marks)) return { repo: ground.team.repo, session: undefined, agents: {}, unsent: [] };
+
+  return { why: `session ${ground.team.session} is the team of ${marks.repo}, which fleet team runs; name this repo's in its .fleet/team.json ("session")` };
+}
+
+/** Why the team's session is another repo's ({@link ownMarks}); undefined when it is this repo's or free. */
+export function heldElsewhere(ground: Ground): Why | undefined {
+  const marks = ownMarks(ground);
+
+  return "why" in marks ? marks : undefined;
+}
+
+/** Whether `marks` still hold: the session they name still the instance running, or a tab still its agent's. */
+function holds(ground: Ground, marks: Marks): boolean {
+  if (marks.session !== undefined && ground.launcher.owns(ground.team.session, marks.session)) return true;
+  const names = Object.keys(marks.agents);
+  const look = names.length === 0 ? undefined : lookOf(ground, ground.team.session);
+
+  return names.some((name) => ourTab(marks, look, name) !== undefined);
 }
 
 function withoutAgent(marks: Marks, name: string): Marks {
@@ -171,13 +190,13 @@ export function startTeam(ground: Ground, agents: readonly Agent[], before: Befo
 }
 
 function startLocked(ground: Ground, agents: readonly Agent[], before: BeforeStart): Said {
-  const other = heldElsewhere(ground);
+  const own = ownMarks(ground);
 
-  if (other !== undefined) return { lines: [], refused: [other.why] };
+  if ("why" in own) return { lines: [], refused: [own.why] };
   const session = ground.team.session;
   const lines: string[] = [];
   const refused: string[] = [];
-  let marks = readMarks(ground);
+  let marks = own;
   let opened = false;
 
   const save = (next: Marks): void => {
@@ -193,40 +212,56 @@ function startLocked(ground: Ground, agents: readonly Agent[], before: BeforeSta
       continue;
     }
 
-    const here = lookOf(ground, session);
-    const waiting = marks.unsent.includes(agent.name) ? ourTab(marks, here, agent.name) : undefined;
+    let here = lookOf(ground, session);
+    const mine = ourTab(marks, here, agent.name);
+    let status = mine === undefined ? undefined : here?.agents.find((a) => a.name === agent.name && a.tab === mine.handle)?.status;
 
-    if (waiting !== undefined) {
-      const status = here?.agents.find((a) => a.name === agent.name)?.status;
-
+    if (mine !== undefined && status !== "ended" && marks.unsent.includes(agent.name)) {
       if (status === "asking") {
-        refused.push(`${agent.name}: still waits on a prompt in its tab ${waiting.handle}: run \`fleet team attach\`, answer it, then \`fleet team start ${agent.name}\` again`);
+        refused.push(`${agent.name}: still waits on a prompt in its tab ${mine.handle}: run \`fleet team attach\`, answer it, then \`fleet team start ${agent.name}\` again`);
         continue;
       }
 
-      const ready = ground.launcher.settle(session, agent.name);
+      const settled = ground.launcher.settle(session, agent.name);
 
-      if (ready !== undefined) {
-        refused.push(`${agent.name}: its opening was not sent: ${ready.why}`);
+      if (settled === "ready") {
+        const ledger = ledgerOf(agent, ground.known(), ground.home);
+
+        if ("why" in ledger) {
+          refused.push(ledger.why);
+          continue;
+        }
+
+        const said = sendOpening(ground, agent, mine.handle, ledger.ledger);
+
+        if ("refused" in said) refused.push(said.refused);
+        else {
+          lines.push(said.line);
+          save({ ...marks, unsent: marks.unsent.filter((n) => n !== agent.name) });
+        }
+
         continue;
       }
 
-      const ledger = ledgerOf(agent, ground.known(), ground.home);
-
-      if ("why" in ledger) {
-        refused.push(ledger.why);
+      if (settled !== "ended") {
+        refused.push(`${agent.name}: its opening was not sent: ${settled.why}`);
         continue;
       }
 
-      const said = sendOpening(ground, agent, waiting.handle, ledger.ledger);
+      status = settled;
+    }
 
-      if ("refused" in said) refused.push(said.refused);
-      else {
-        lines.push(said.line);
-        save({ ...marks, unsent: marks.unsent.filter((n) => n !== agent.name) });
+    if (mine !== undefined && status === "ended") {
+      const closed = ground.launcher.close(session, mine.handle);
+
+      if (closed !== undefined) {
+        refused.push(`${agent.name}: its program in tab ${mine.handle} has ended, and the tab could not be closed: ${closed.why}`);
+        continue;
       }
 
-      continue;
+      save(withoutAgent(marks, agent.name));
+      lines.push(`${agent.name}: its program in tab ${mine.handle} had ended; the tab is closed`);
+      here = lookOf(ground, session);
     }
 
     const already = runningHere(ground, marks, here, agent);
@@ -309,13 +344,13 @@ export function stopTeam(ground: Ground, agents: readonly Agent[], force: boolea
 }
 
 function stopLocked(ground: Ground, agents: readonly Agent[], force: boolean): Said {
-  const other = heldElsewhere(ground);
+  const own = ownMarks(ground);
 
-  if (other !== undefined) return { lines: [], refused: [other.why] };
+  if ("why" in own) return { lines: [], refused: [own.why] };
   const session = ground.team.session;
   const lines: string[] = [];
   const refused: string[] = [];
-  let marks = readMarks(ground);
+  let marks = own;
 
   const save = (next: Marks): void => {
     marks = next;
@@ -347,13 +382,16 @@ function stopLocked(ground: Ground, agents: readonly Agent[], force: boolean): S
       continue;
     }
 
-    const blocked = marks.unsent.includes(agent.name) && look.agents.some((a) => a.tab === tab.handle && a.status === "asking");
-    const settled = force || blocked ? undefined : ground.launcher.settle(session, agent.name);
+    const status = look.agents.find((a) => a.tab === tab.handle)?.status;
+    const blocked = marks.unsent.includes(agent.name) && status === "asking";
+    const settled: Settled | Why = force || blocked || status === "ended" ? "ready" : ground.launcher.settle(session, agent.name);
 
-    if (settled !== undefined) {
+    if (settled !== "ready" && settled !== "ended") {
       refused.push(`${agent.name}: did not become ready: ${settled.why}; --force closes it at once`);
       continue;
     }
+
+    const how = force ? "" : blocked ? " at once: it waited on a prompt" : status === "ended" ? " at once: its program had ended" : settled === "ended" ? " once its program ended" : " once it was ready";
 
     const closed = ground.launcher.close(session, tab.handle);
 
@@ -363,7 +401,7 @@ function stopLocked(ground: Ground, agents: readonly Agent[], force: boolean): S
     }
 
     save(withoutAgent(marks, agent.name));
-    lines.push(`${agent.name}: stopped: tab ${tab.handle} closed${force ? "" : blocked ? " at once: it waited on a prompt" : " once it was ready"}`);
+    lines.push(`${agent.name}: stopped: tab ${tab.handle} closed${how}`);
   }
 
   if (marks.session !== undefined && Object.keys(marks.agents).length === 0 && lookOf(ground, session)?.tabs.length === 0) {
@@ -383,11 +421,10 @@ function stopLocked(ground: Ground, agents: readonly Agent[], force: boolean): S
 
 /** Where each of `agents` runs: here, elsewhere (where), or not at all; refused when the launcher cannot say. */
 export function listTeam(ground: Ground, agents: readonly Agent[]): Said {
-  const other = heldElsewhere(ground);
+  const marks = ownMarks(ground);
 
-  if (other !== undefined) return { lines: [], refused: [other.why] };
+  if ("why" in marks) return { lines: [], refused: [marks.why] };
   const session = ground.team.session;
-  const marks = readMarks(ground);
   const sessions = ground.launcher.sessions();
 
   if ("why" in sessions) return { lines: [], refused: [`the sessions could not be read: ${sessions.why}`] };
