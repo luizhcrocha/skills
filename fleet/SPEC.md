@@ -28,7 +28,8 @@ Contents: [Environment](#environment) · [state.py](#statepy-the-ledger-cli) ·
 [The other scripts](#the-other-scripts) · [`fleet serve`](#fleet-serve-the-fleets-host) · [Heartbeats](#heartbeats) ·
 [Listening hooks](#listening-hooks) · [The wake](#the-wake) · [The news](#the-news-fleet-news) ·
 [1Password locked](#1password-locked-fleet-secrets) ·
-[Workspaces](#workspaces-fleet-ws) · [The preview](#the-preview-fleet-preview) · [The advisor](#the-advisor-fleet-advisor) · [Waste](#waste-fleet-waste) · [Files by writer](#files-by-writer) ·
+[Workspaces](#workspaces-fleet-ws) · [The preview](#the-preview-fleet-preview) · [The advisor](#the-advisor-fleet-advisor) · [The team](#the-team-fleet-team) ·
+[Waste](#waste-fleet-waste) · [Files by writer](#files-by-writer) ·
 [Oracle traces](#oracle-traces) · [The model](#the-model-based-test) · [Open](#open)
 
 ## Environment
