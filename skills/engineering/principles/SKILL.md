@@ -14,7 +14,7 @@ Adapted from poteto's pstack, MIT (synced through `upstreams.toml`; local edits 
 - **Laziness Protocol** ([laziness-protocol.md](laziness-protocol.md)). Refactoring, sizing a diff, or tempted to add an abstraction, a layer or signal threading: bias to deletion and the smallest change that solves it.
 - **Foundational Thinking** ([foundational-thinking.md](foundational-thinking.md)). Before writing logic: core types and data structures, scaffold before feature, what concurrent actors share.
 - **Redesign from First Principles** ([redesign-from-first-principles.md](redesign-from-first-principles.md)). A new requirement meets an existing design: redesign as if it had been there from day one.
-- **Attack the Premise** ([attack-the-premise.md](attack-the-premise.md)). Two fixes sharing one premise failed the same gate: census the actors, then question the premise.
+- **Attack the Premise** ([attack-the-premise.md](attack-the-premise.md)). Two fixes sharing one premise failed the same gate: write the premise down and test it directly.
 - **Subtract Before You Add** ([subtract-before-you-add.md](subtract-before-you-add.md)). Sequencing an addition, refactor or rewrite: remove dead weight first.
 - **Minimize Reader Load** ([minimize-reader-load.md](minimize-reader-load.md)). Code that is hard to trace: count layers and hidden state, collapse one-caller wrappers.
 - **Outcome-Oriented Execution** ([outcome-oriented-execution.md](outcome-oriented-execution.md)). Planned rewrites and migrations: converge on the target, no throwaway compatibility states.
@@ -34,6 +34,7 @@ Adapted from poteto's pstack, MIT (synced through `upstreams.toml`; local edits 
 ## Verification
 
 - **Prove It Works** ([prove-it-works.md](prove-it-works.md)). Before declaring done: check the real artifact, not a proxy or "it compiles".
+- **Explain the Number** ([explain-the-number.md](explain-the-number.md)). Before you measure, or trust, report or act on a measured number: find what limits it and rule out that it measured something else.
 - **Fix Root Causes** ([fix-root-causes.md](fix-root-causes.md)). Debugging: reproduce first, ask why until the root cause.
 - **Sequence Work into Verifiable Units** ([sequence-verifiable-units.md](sequence-verifiable-units.md)). Multi-step work and how commits stack: small units, each ending in a check.
 - **Test Behavior, Not Implementation** ([test-behavior-not-implementation.md](test-behavior-not-implementation.md)). Writing, changing or keeping a test: call it as users do, assert a literal expected value.

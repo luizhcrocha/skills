@@ -51,6 +51,7 @@
     "./skills/engineering/create-formal-verification-skill",
     "./skills/engineering/maintain-formal-verification-skill",
     "./skills/engineering/statechart",
+    "./skills/engineering/benchmark-checklist",
     "./skills/engineering/to-issues",
     "./skills/engineering/to-spec",
     "./skills/engineering/triage",
