@@ -96,20 +96,13 @@ Something another fleet should know (a schema changed, a shared tool's version m
 
 ### A standing approval for every fleet
 
-When the user wants a kind of routine act to stop asking on every fleet, ask once on your page and record it in every ledger. Each fleet's approval is checked against your decision, so the user answers once, not once per fleet.
+When the user wants a kind of routine act to stop asking on every fleet, each team records it from the owner's own answer on that team's page: a team's cloud refuses an approval whose ref names another fleet's card, so no approval is copied from your page.
 
-1. One grilling, one yes/no question per approval. Each question states the rule's exact wording (what `--rule` will say, word for word) and its limits, and its yes option says how to undo it. The limits: spend over a stated cap (none stated: none allowed), a change of anyone's access, deleting data, and anything irreversible are still asked every time. To undo it: Revoke on any fleet's page revokes it there, and you can revoke it everywhere at once. Never two rules in one question: an approval is backed by one question's answer.
+1. Agree the rule's exact wording with the user on your page (a decision when it is a choice), with its limits: spend over a stated cap (none stated: none allowed), a change of anyone's access, deleting data, and anything irreversible are still asked every time. One rule per approval.
+2. Tell each fleet it concerns, with the wording word for word: each coordinator opens a card on its own page with `approval_question` and `approval_rule` set to that wording (the coordinator's DASHBOARD.md, "The user approves a kind of act once", and its PROGRAMS.md, "The owner answers on the card"), and the owner answers yes there. Only that answer backs the team's approval.
+3. The fleets record acts under it as notices, which reach you as fyi news.
 
-   ```nu
-   fleet state <dir> grill g-standing --title "Standing approvals for every fleet" --ask "Landing | May every fleet land without asking, under the rule \"land a change on master that passed the full gate and the review rule\"? Still asked: spend over a cap, access changes, data deletion, anything irreversible. | a | <why>" --option "Q1 a: yes | landings stop asking; Revoke on a fleet's page, or a revoke everywhere, undoes it" --option "Q1 b: no | every landing asks, as now"
-   ```
-
-   The same for each other rule (`--ask` and its `--option`s again, Q2, Q3), for example "deploy to the staging targets you named" (name the targets in the rule) and "re-run a job you already approved, on new data or after a fix".
-2. Wait for the answer (`fleet chat <dir> wait <ref>`), record each question's answer as given (`--answer "Q1: (a) yes"`), and close the grilling (`--done`).
-3. For each question answered yes, run `fleet fleets approval add --all --rule "<the rule's exact wording>" --ref manager/<ref>:Q1`. It checks the answer once (decided, asked on your page, the user's own message in your chat, the question answered with a plain yes in your ledger and in the user's own words, nothing after it, else it refuses and quotes the answer: ask again with a plain yes or no), then gives each fleet the machine's next K and prints one line per fleet. A fleet that already has an approval from that ref is skipped, so run it again when a new fleet starts. `--fleets a,b` limits it to those fleets.
-4. Post the rule to the news (`--kind fyi`, to all): the fleets record acts under it as notices, which reach you as fyi news.
-
-To revoke it everywhere (the user says so on your page, or a Revoke on one page meant all): `fleet fleets approval revoke --ref manager/<ref>:Q1 --reason "revoked on the page (#N)"`. One fleet's Revoke stays that fleet's: its coordinator revokes its own K.
+To revoke it: the owner revokes it on each team's page (Revoke), and that team's coordinator records it. Nothing revokes it everywhere at once.
 
 ## What the user writes on your page
 
