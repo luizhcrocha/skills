@@ -216,6 +216,12 @@ describe("rex's calls", () => {
 
     expect(rexLauncher({ state: tmp("fleet-team-state-"), run: rex.run, ...FAST }).close("skills", "window:7")).toEqual({ why: 'rex window close: window target "window:7" not found' });
   });
+
+  test("a failed rex call that said nothing says its exit code", () => {
+    const rex = fakeRex((words) => (words === "ls --json" ? { code: 4, stdout: "", stderr: "\n" } : undefined));
+
+    expect(rexLauncher({ state: tmp("fleet-team-state-"), run: rex.run, ...FAST }).sessions()).toEqual({ why: "rex ls --json: exit 4" });
+  });
 });
 
 /** A command that reports `state` to the terminal as Claude Code does (OSC 7501), then prints its argument and

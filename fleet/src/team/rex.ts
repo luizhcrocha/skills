@@ -125,7 +125,11 @@ export function rexLauncher(options: RexOptions): Launcher {
 
     if ("why" in ran) return ran;
 
-    if (ran.code !== 0) return { why: `rex ${args.slice(0, 2).join(" ")}: ${ran.stderr.trim().split("\n")[0]?.replace(/^Error: /, "") ?? `exit ${String(ran.code)}`}` };
+    if (ran.code !== 0) {
+      const said = ran.stderr.trim().split("\n")[0]?.replace(/^Error: /, "") ?? "";
+
+      return { why: `rex ${args.slice(0, 2).join(" ")}: ${said === "" ? `exit ${String(ran.code)}` : said}` };
+    }
 
     return { result: Option.getOrUndefined(parseObject(ran.stdout)) ?? {} };
   };
