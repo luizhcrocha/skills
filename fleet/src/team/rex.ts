@@ -199,16 +199,21 @@ export function rexLauncher(options: RexOptions): Launcher {
     return { ended: last === undefined ? undefined : (asString(last["error"]) ?? `exit ${String(asNumber(last["exit_code"]) ?? "unknown")}`) };
   };
 
-  /** The block's program's state now; unknown when rex cannot say. */
-  const statusNow = (sid: string, block: string): Status => {
+  /** The block's program now: the state it last reported (undefined: none, while it runs), or how it ended. */
+  const programOf = (sid: string, block: string): { readonly state: string | undefined } | { readonly ended: string } | Why => {
     const said = reported(sid, block);
 
-    if ("why" in said) return "unknown";
-
-    if (said.state !== undefined) return statusOf(said.state, true);
+    if ("why" in said || said.state !== undefined) return said;
     const end = exited(sid, block);
 
-    return "why" in end ? "unknown" : statusOf(undefined, end.ended === undefined);
+    return "why" in end ? end : end.ended === undefined ? said : { ended: end.ended };
+  };
+
+  /** The block's program's state now; unknown when rex cannot say. */
+  const statusNow = (sid: string, block: string): Status => {
+    const now = programOf(sid, block);
+
+    return "why" in now ? "unknown" : "ended" in now ? statusOf(undefined, false) : statusOf(now.state, true);
   };
 
   /** The last lines the block shows, for a start that failed. */
@@ -275,26 +280,36 @@ export function rexLauncher(options: RexOptions): Launcher {
       if (window === undefined || block === undefined) return { why: "rex made a window but did not say its ID or its block's" };
       const tab: Tab = { handle: window, label: launch.label };
 
+      let failed: Why | undefined;
+
       for (const deadline = Date.now() + startMs; Date.now() < deadline; sleepMs(pollMs)) {
-        const said = reported(sid, block);
-        const status = "why" in said || said.state === undefined ? undefined : statusOf(said.state, true);
+        const now = programOf(sid, block);
+
+        if ("why" in now) {
+          failed = now;
+          continue;
+        }
+
+        failed = undefined;
+
+        if ("ended" in now) {
+          const shown = tail(sid, block);
+          rex(["window", "close", "-s", sid, window]);
+
+          return { why: `it ended before it was ready (${now.ended})${shown === "" ? "" : `: ${shown}`}` };
+        }
+
+        const status = now.state === undefined ? undefined : statusOf(now.state, true);
 
         if (status === "ready") return tab;
 
         if (status === "asking") return { blocked: tab };
-        const end = "why" in said ? { ended: said.why } : exited(sid, block);
-
-        if ("why" in end) return end;
-
-        if (end.ended !== undefined) {
-          const shown = tail(sid, block);
-          rex(["window", "close", "-s", sid, window]);
-
-          return { why: `it ended before it was ready (${end.ended})${shown === "" ? "" : `: ${shown}`}` };
-        }
       }
 
-      return { blocked: tab };
+      if (failed === undefined) return { blocked: tab };
+      rex(["window", "close", "-s", sid, window]);
+
+      return failed;
     },
 
     prompt(session, agent, text) {

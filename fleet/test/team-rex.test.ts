@@ -140,6 +140,21 @@ describe("rex's calls", () => {
     expect(rex.calls.at(-1)).toBe(`window close -s ${SID} window:1`);
   });
 
+  test("a rex call that fails while the agent starts is asked again until the start's wait ends, then its tab is closed, saying rex's error", () => {
+    let fails = 1;
+    const flaky = fakeRex((words) => (words.endsWith("program_status") && fails-- > 0 ? { code: 1, stdout: "", stderr: "Error: connection reset\n" } : statusIs("idle")(words)));
+
+    expect(rexLauncher({ state: tmp("fleet-team-state-"), run: flaky.run, ...FAST }).tab("skills", { cwd: "/r", label: "ui", agent: agent() })).toEqual({ handle: "window:1", label: "ui" });
+    expect(flaky.calls.filter((c) => c.startsWith("window close"))).toEqual([]);
+
+    for (const failing of ["program_status", "process"]) {
+      const rex = fakeRex((words) => (words.endsWith(failing) ? { code: 1, stdout: "", stderr: "Error: connection reset\n" } : statusIs(undefined)(words)));
+
+      expect(rexLauncher({ state: tmp("fleet-team-state-"), run: rex.run, ...FAST }).tab("skills", { cwd: "/r", label: "ui", agent: agent() })).toEqual({ why: "rex block call: connection reset" });
+      expect(rex.calls.at(-1)).toBe(`window close -s ${SID} window:1`);
+    }
+  });
+
   test("a prompt is typed into the agent's block, then Enter; one holding a line break is refused", () => {
     const rex = fakeRex(() => undefined);
     const launcher = rexLauncher({ state: tmp("fleet-team-state-"), run: rex.run, ...FAST });

@@ -4409,7 +4409,8 @@ says `all`; `attach` takes none.
   how it ended and the block's last lines. The block's `exit.quick_exit_threshold_ms` is the start's wait, so
   rex keeps the block of a program that fails within it for the start to read (rex's default, 250 ms, let a
   claude that failed later take its block, and the start said rex's `not found`); a program that exits later
-  closes its tab, as rex does by default. An agent already running in
+  closes its tab, as rex does by default. A rex call that fails while the agent starts is asked again until the
+  wait ends; when the wait's last call failed, the tab is closed and rex's error said. An agent already running in
   the session is reported and left: in the tab this command started (`ui: already running in session skills,
   tab w1:t2; left as it is`), or as an agent of its name or a tab labelled with it that `fleet team` did not
   start (said so). One running elsewhere is refused, saying where: another
