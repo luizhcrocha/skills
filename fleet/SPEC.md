@@ -4406,7 +4406,10 @@ says `all`; `attach` takes none.
   `fleet team start <name>` again, which sends the opening once the agent is ready, or says it still waits.
   The refusal names it a startup prompt (trust, an MCP server's approval, ...).
   A start whose program ends first (`rex block call <block> process`: its `last_exit`) closes its tab and says
-  how it ended and the block's last lines. An agent already running in
+  how it ended and the block's last lines. The block's `exit.quick_exit_threshold_ms` is the start's wait, so
+  rex keeps the block of a program that fails within it for the start to read (rex's default, 250 ms, let a
+  claude that failed later take its block, and the start said rex's `not found`); a program that exits later
+  closes its tab, as rex does by default. An agent already running in
   the session is reported and left: in the tab this command started (`ui: already running in session skills,
   tab w1:t2; left as it is`), or as an agent of its name or a tab labelled with it that `fleet team` did not
   start (said so). One running elsewhere is refused, saying where: another

@@ -81,7 +81,7 @@ function statusIs(state: string | undefined): (words: string) => Ran | undefined
 const FAST = { startMs: 300, settleMs: 300, pollMs: 50 } as const;
 
 describe("rex's calls", () => {
-  test("an agent's tab is a window of its own, labelled with it, running a new claude named after it, its system prompt in a file", () => {
+  test("an agent's tab is a window of its own, labelled with it, running a new claude named after it, its system prompt in a file, kept open by a failure within the start's wait", () => {
     const rex = fakeRex(statusIs("idle"));
     const state = tmp("fleet-team-state-");
     const tab = rexLauncher({ state, run: rex.run, ...FAST }).tab("skills", { cwd: "/r", label: "ui", agent: agent('{"system": "Run the UI fleet.", "fleet": {"role": "coordinator"}}') });
@@ -100,6 +100,7 @@ describe("rex's calls", () => {
           options: {
             command: ["claude", "--name", "ui", "--model", "opus", "--effort", "low", "--remote-control", "ui", "--append-system-prompt-file", `${state}/ui.system.md`],
             cwd: "/r",
+            exit: { quick_exit_threshold_ms: 300 },
           },
         },
       },

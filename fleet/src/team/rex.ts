@@ -3,7 +3,8 @@
  * made empty (`rex api call session.create`); each agent runs in a window of its own (`session.new_window`),
  * window and block labelled with the agent's name, the block running the agent's command line as given, with
  * no shell quoting in between (the terminal block's `command`). Handles are rex's IDs, which rex never reuses:
- * the session's for a session, the window's for a tab. Claude Code reports its state to the terminal (the
+ * the session's for a session, the window's for a tab. A program that fails within the start's wait keeps its
+ * block, for the start to read why and close it; one that exits after closes it, as rex does by default. Claude Code reports its state to the terminal (the
  * program status protocol, OSC 7501), which `program_status` reads back: idle or done is ready, working is
  * working, blocked is asking ({@link statusOf}).
  */
@@ -263,7 +264,8 @@ export function rexLauncher(options: RexOptions): Launcher {
 
       if ("why" in found) return found;
       const { sid } = found;
-      const layout = { block: { flavor: TERMINAL, label: launch.agent.name, options: { command: argv, cwd: launch.cwd } } };
+      const exit = { quick_exit_threshold_ms: startMs };
+      const layout = { block: { flavor: TERMINAL, label: launch.agent.name, options: { command: argv, cwd: launch.cwd, exit } } };
       const made = rex(["api", "call", "-s", sid, "session.new_window", "-"], JSON.stringify({ window_label: launch.label, focus: false, layout }));
 
       if ("why" in made) return { why: made.why };
