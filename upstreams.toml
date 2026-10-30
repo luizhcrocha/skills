@@ -178,6 +178,19 @@ map = [
   { from = "skills/architect/references/rationale-template.md", to = "skills/engineering/architect/references/rationale-template.md" },
   # create-verification-skill's feature-map example, verbatim (2026-09-30).
   { from = "skills/create-verification-skill/references", to = "skills/engineering/create-verification-skill/references" },
+  # statechart and the two formal-verification skills, verbatim,
+  # frontmatter included (user-invoked only). statechart's scripts/test (3.7 MB of corpus
+  # and fuzz tests) and package.json (a fast-check devDependency) stay upstream (2026-10-30).
+  { from = "skills/statechart/SKILL.md", to = "skills/engineering/statechart/SKILL.md" },
+  { from = "skills/statechart/references", to = "skills/engineering/statechart/references" },
+  { from = "skills/statechart/scripts/*.ts", to = "skills/engineering/statechart/scripts/{1}.ts" },
+  { from = "skills/statechart/scripts/statechart", to = "skills/engineering/statechart/scripts/statechart" },
+  { from = "skills/statechart/scripts/tsconfig.json", to = "skills/engineering/statechart/scripts/tsconfig.json" },
+  { from = "skills/statechart/scripts/backends", to = "skills/engineering/statechart/scripts/backends" },
+  { from = "skills/statechart/scripts/frontends", to = "skills/engineering/statechart/scripts/frontends" },
+  { from = "skills/statechart/scripts/passes", to = "skills/engineering/statechart/scripts/passes" },
+  { from = "skills/create-formal-verification-skill/SKILL.md", to = "skills/engineering/create-formal-verification-skill/SKILL.md" },
+  { from = "skills/maintain-formal-verification-skill/SKILL.md", to = "skills/engineering/maintain-formal-verification-skill/SKILL.md" },
   { from = "skills/poteto-mode/scripts/watch-pr", to = "skills/engineering/tuca-mode/scripts/watch-pr" },
   { from = "skills/poteto-mode/scripts/bootstrap.ts", to = "skills/engineering/tuca-mode/scripts/bootstrap.ts" },
   { from = "skills/poteto-mode/scripts/package.json", to = "skills/engineering/tuca-mode/scripts/package.json" },
