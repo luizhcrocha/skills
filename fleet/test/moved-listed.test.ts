@@ -148,6 +148,23 @@ describe("a moved team no server here serves", () => {
     expect(fleet(["fleets", "list"], env).stdout).not.toContain("scratch");
   });
 
+  test("`fleets list` names the project a joined team is of, and no project for a team of none", () => {
+    expect(fleet(["fleets", "list"], env).stdout).not.toContain("  project  ");
+    writeFileSync(join(root, "cloud.json"), JSON.stringify({ fleet: "skills", cloud: "https://fleet.example.dev", project: "tstack" }));
+
+    expect(fleet(["fleets", "list"], env).stdout).toContain(`  ledger   ${root}\n  project  tstack\n`);
+  });
+
+  test("`fleets list` says a team of an archived project is read-only and how its workspaces go", () => {
+    writeFileSync(join(root, "cloud.json"), JSON.stringify({ fleet: "skills", cloud: "https://fleet.example.dev", project: "tstack", archived: "2026-10-31T12:00:00.000Z" }));
+    const ran = fleet(["fleets", "list"], env);
+
+    expect(ran.code, ran.stderr).toBe(0);
+    expect(ran.stdout).toContain(
+      `  project  tstack, archived 2026-10-31T12:00:00.000Z: read-only; stop its agent with \`fleet team stop skills\` in its repo, and take its workspaces out by hand (the coordinator skill's PROGRAMS.md, "What stays on the old CLI")\n`,
+    );
+  });
+
   test("the manager's page lists it among the fleets, its cards linked to the cloud page", () => {
     const manager = servedManager();
     const coordinators = asArray(view(machine(env), cliLookups(), { project: "everything", role: "manager" }, manager)["coordinators"]) ?? [];
@@ -237,6 +254,13 @@ describe("fleet serve on a moved team's folder keeps it moved", () => {
     expect(ran.stdout).toContain(`  page     ${PAGE}\n`);
     expect(ran.stdout).not.toMatch(/^skills-29-10 /m);
     expect(ran.stdout).not.toContain(":7420");
+  });
+
+  test("`fleets list` names its project while a session serves it", () => {
+    writeFileSync(join(root, "cloud.json"), JSON.stringify({ fleet: "skills", cloud: "https://fleet.example.dev", project: "tstack" }));
+    expect(serve().code).toBe(0);
+
+    expect(fleet(["fleets", "list"], env).stdout).toContain(`  project  tstack\n`);
   });
 
   test("its previews are not addressed under the cloud page", () => {

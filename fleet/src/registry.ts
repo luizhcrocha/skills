@@ -49,6 +49,10 @@ export interface Entry {
   /** Set on a team moved to the cloud (fleet slice 3): read from its folder ({@link MOVED_MARKER}), never written. A
    * session registered for it (`fleet serve`) keeps it moved, under the marker's name and with its cloud page. */
   readonly moved?: true;
+  /** A moved team's project, from its marker: the host writes it into a joined team's. */
+  readonly project?: string;
+  /** When the moved team's project was archived, from its marker: the team is read-only from then. */
+  readonly archived?: string;
 }
 
 /** Where the registry is and what it reads beside it. */
@@ -189,7 +193,26 @@ function movedEntry(dir: string): Entry | undefined {
   const role = roleOf(readObject(join(dir, "state.json")));
   const since = asString(marker?.["since"]) ?? "";
 
-  return { id, dir, role, url, session: null, since, aliases: [], raw: { id, dir, role, url, since, moved: true }, moved: true };
+  return { id, dir, role, url, session: null, since, aliases: [], raw: { id, dir, role, url, since, moved: true }, moved: true, ...projectOf(marker) };
+}
+
+/** What a moved team's marker says of its project: {@link Entry.project} and {@link Entry.archived}. */
+interface ProjectMark {
+  project?: string;
+  archived?: string;
+}
+
+/** The `project` and `archived` that `from` (a moved team's marker, or its entry) names, each only when set. */
+function projectOf(from: { readonly project?: Json; readonly archived?: Json } | undefined): ProjectMark {
+  const mark: ProjectMark = {};
+  const project = trimmed(from?.project);
+  const archived = trimmed(from?.archived);
+
+  if (project !== undefined) mark.project = project;
+
+  if (archived !== undefined) mark.archived = archived;
+
+  return mark;
 }
 
 /** The team moved to the cloud whose folder is `dir`, when its folder holds {@link MOVED_MARKER}, with its cloud page. */
@@ -417,7 +440,7 @@ export class Registry {
         remove(path);
       } else {
         const away = movedEntry(entry.dir);
-        entries.push(away === undefined ? entry : { ...entry, url: away.url, moved: true });
+        entries.push(away === undefined ? entry : { ...entry, url: away.url, moved: true, ...projectOf(away) });
       }
     }
 

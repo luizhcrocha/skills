@@ -140,6 +140,8 @@ interface FleetView {
   readonly id: string;
   readonly role: string;
   readonly moved: boolean;
+  readonly project: string | undefined;
+  readonly archived: string | undefined;
   readonly status: string;
   readonly session: string | null;
   readonly active: string | undefined;
@@ -172,6 +174,8 @@ function fleetView(machine: Machine, e: Entry): FleetView {
     id: e.id,
     role: e.role,
     moved: e.moved === true,
+    project: e.project,
+    archived: e.archived,
     status: raw !== undefined && truthy(raw["status"]) ? str(raw["status"]) : "unknown",
     session: e.session,
     active: activeAt(e.dir, machine.config, asString(e.raw["session_id"])),
@@ -260,12 +264,18 @@ function waitingLines(waiting: readonly WaitingLine[]): string[] {
   return [`  waiting  ${waiting.length}`, ...columns(table)];
 }
 
+/** What a team of a project archived at `at` is now, and what its machine still has to do: the cloud stops nothing here. */
+function archivedText(team: string, at: string): string {
+  return `, archived ${at}: read-only; stop its agent with \`fleet team stop ${team}\` in its repo, and take its workspaces out by hand (the coordinator skill's PROGRAMS.md, "What stays on the old CLI")`;
+}
+
 function render(v: FleetView): string[] {
   const identity = [
     `${v.id}  (${v.role}, ${v.status}${v.moved ? ", moved to the cloud" : ""})`,
     `  session  ${v.session ?? "(not named yet)"}${v.active === undefined ? "" : `, last active ${v.active.slice(0, 16).replace("T", " ")}`}`,
     `  page     ${v.url}`,
     `  ledger   ${v.dir}`,
+    ...(v.project === undefined ? [] : [`  project  ${v.project}${v.archived === undefined ? "" : archivedText(v.id, v.archived)}`]),
     ...(v.now === "" ? [] : [`  now      ${v.now}`]),
     ...(v.chat.on ? [] : [`  chat     not read now${v.chat.unread > 0 ? `; ${v.chat.unread} message(s) from the user wait since #${v.chat.seen}` : ""}`]),
   ];
