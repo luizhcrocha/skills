@@ -4610,10 +4610,11 @@ says `all`; `attach` takes none. `add` takes its own arguments (below).
 - **list.** One line per agent: `running here: session S, tab T, <status>` (status `ready` for the program
   status `idle`, `done`, `error` (its turn ended; it takes the next prompt) and any state rex's schema does not
   name (idle, as the schema says); `working`; `asking` for `blocked`, or for no state while its program runs, as
-  a start reads it; `ended` once its program ended, rex keeping its tab, whatever it last reported; `unknown`
-  when rex cannot say),
+  a start reads it; `unknown` when rex cannot say),
   `running here, not started by fleet
-  team: <where>`, `running elsewhere: <where>`, or `not running`. A session of the team's name that runs but
+  team: <where>`, `running elsewhere: <where>`, `not running`, or, once its program ended, rex keeping its tab,
+  whatever it last reported, `not running: its program ended in session S, tab T; \`fleet team start ui\` closes
+  that tab and starts it again`. A session of the team's name that runs but
   cannot be read, or sessions that cannot be listed, refuse with the launcher's reason: only no such session is
   `not running`.
 - **add.** `fleet team add NAME --project ID --mission TEXT [--role {coordinator,manager}] [--no-start]

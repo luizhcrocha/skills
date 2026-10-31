@@ -281,7 +281,7 @@ describe("stop", () => {
     team(at, launcher, "start", "ui");
     launcher.exit(at.session, "ui");
 
-    expect(team(at, launcher, "list").stdout).toBe(`ui  running here: session ${at.session}, tab w1:t1, ended\n`);
+    expect(team(at, launcher, "list").stdout).toBe(`ui  not running: its program ended in session ${at.session}, tab w1:t1; \`fleet team start ui\` closes that tab and starts it again\n`);
     expect(team(at, launcher, "stop", "ui").stdout).toBe(`ui: stopped: tab w1:t1 closed at once: its program had ended\nsession ${at.session} stopped: fleet team started it and nothing is left in it\n`);
     expect(launcher.calls.filter((c) => c.startsWith("settle "))).toEqual([]);
 

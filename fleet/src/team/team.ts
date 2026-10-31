@@ -453,6 +453,8 @@ export function listTeam(ground: Ground, agents: readonly Agent[]): Said {
     if (tab !== undefined) {
       const status = here?.agents.find((a) => a.name === agent.name && a.tab === tab.handle)?.status ?? "unknown";
 
+      if (status === "ended") return `${agent.name}  not running: its program ended in session ${session}, tab ${tab.handle}; \`fleet team start ${agent.name}\` closes that tab and starts it again`;
+
       return `${agent.name}  running here: session ${session}, tab ${tab.handle}, ${status}`;
     }
 
