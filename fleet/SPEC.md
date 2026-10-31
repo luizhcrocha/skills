@@ -4590,7 +4590,9 @@ says `all`; `attach` takes none. `add` takes its own arguments (below).
   the same session name (two folders called `skills`) is refused (`session skills is the team of <repo>, which
   fleet team runs; name this repo's in its .fleet/team.json ("session")`), so the session's label in the Rex
   app stays the plain name. Another repo's marks that no longer hold (after a reboot, or its session closed in
-  the Rex app) leave the session free: this repo starts from no marks, and its next write replaces them. A
+  the Rex app) leave the session free: this repo starts from no marks, and its next write replaces them. When
+  rex cannot say whether they hold, every such command is refused and the marks stay (`session skills may be the
+  team of <repo>, and whether it still is could not be read (<rex's error>); nothing is done`). A
   marks.json without `repo` (written before marks named it) is adopted once: taken as the repo that runs
   `fleet team` on it, which names itself there at its next write.
 - **stop.** Waits, at most 10 minutes, until the agent is ready (its block's `process`, then its

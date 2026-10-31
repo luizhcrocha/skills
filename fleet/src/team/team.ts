@@ -4,7 +4,8 @@
  * closes a tab once its agent is ready; `list` says where each agent runs. What `fleet team` started is marked in
  * `<state>/marks.json` by the launcher's handles: the session when it started it, and each agent's tab. A mark is
  * trusted only while it still holds: a tab still labelled with the agent's name and running an agent of that
- * name, a session the launcher says is still the instance it started. It closes only what is marked and holds:
+ * name, a session the launcher says is still the instance it started. A launcher that cannot say is no proof a
+ * mark stopped holding, so it stays, and another repo's bind. It closes only what is marked and holds:
  * a tab or session someone else opened is never closed. A marked tab whose program ended is closed: by `stop` at
  * once, by `start` before it starts its agent again. `start`
  * and `stop` hold `<state>/team.lock` throughout, so two of them never drive the session at once.
@@ -79,13 +80,16 @@ function writeMarks(ground: Ground, marks: Marks): Why | undefined {
 
 /** The marks this repo works from: its own (marks naming no repo are taken as its own), none when another repo's
  * no longer hold, or why the session is another repo's: one whose folder has the same name, its marks still
- * holding the session or a tab. */
+ * holding the session or a tab, or the launcher unable to say they do not. */
 function ownMarks(ground: Ground): Marks | Why {
   const marks = readMarks(ground);
 
   if (marks.repo === undefined || realOf(marks.repo) === realOf(ground.team.repo)) return marks;
+  const held = holds(ground, marks);
 
-  if (!holds(ground, marks)) return { repo: ground.team.repo, session: undefined, agents: {}, unsent: [] };
+  if (held === false) return { repo: ground.team.repo, session: undefined, agents: {}, unsent: [] };
+
+  if (held !== true) return { why: `session ${ground.team.session} may be the team of ${marks.repo}, and whether it still is could not be read (${held.why}); nothing is done` };
 
   return { why: `session ${ground.team.session} is the team of ${marks.repo}, which fleet team runs; name this repo's in its .fleet/team.json ("session")` };
 }
@@ -97,13 +101,24 @@ export function heldElsewhere(ground: Ground): Why | undefined {
   return "why" in marks ? marks : undefined;
 }
 
-/** Whether `marks` still hold: the session they name still the instance running, or a tab still its agent's. */
-function holds(ground: Ground, marks: Marks): boolean {
-  if (marks.session !== undefined && ground.launcher.owns(ground.team.session, marks.session)) return true;
-  const names = Object.keys(marks.agents);
-  const look = names.length === 0 ? undefined : lookOf(ground, ground.team.session);
+/** Whether `marks` still hold: the session they name still the instance running, or a tab still its agent's; why
+ * not known when the launcher cannot say, which is never a no. A session that does not run holds nothing. */
+function holds(ground: Ground, marks: Marks): boolean | Why {
+  const { session } = ground.team;
+  const sessions = ground.launcher.sessions();
 
-  return names.some((name) => ourTab(marks, look, name) !== undefined);
+  if ("why" in sessions) return sessions;
+
+  if (!sessions.includes(session)) return false;
+  const owned = marks.session === undefined ? false : ground.launcher.owns(session, marks.session);
+
+  if (owned !== false) return owned;
+  const names = Object.keys(marks.agents);
+
+  if (names.length === 0) return false;
+  const look = ground.launcher.look(session);
+
+  return "why" in look ? look : names.some((name) => ourTab(marks, look, name) !== undefined);
 }
 
 function withoutAgent(marks: Marks, name: string): Marks {
@@ -299,7 +314,7 @@ function startLocked(ground: Ground, agents: readonly Agent[], before: BeforeSta
       if (open.started !== undefined) {
         lines.push(`started session ${session}`);
         save({ repo: ground.team.repo, session: open.started, agents: {}, unsent: [] });
-      } else if (marks.session !== undefined && !ground.launcher.owns(session, marks.session)) save({ ...marks, session: undefined });
+      } else if (marks.session !== undefined && ground.launcher.owns(session, marks.session) === false) save({ ...marks, session: undefined });
     }
 
     const made = ground.launcher.tab(session, { cwd: ground.team.repo, label: agent.name, agent });
@@ -405,7 +420,7 @@ function stopLocked(ground: Ground, agents: readonly Agent[], force: boolean): S
   }
 
   if (marks.session !== undefined && Object.keys(marks.agents).length === 0 && lookOf(ground, session)?.tabs.length === 0) {
-    if (!ground.launcher.owns(session, marks.session)) save({ ...marks, session: undefined });
+    if (ground.launcher.owns(session, marks.session) === false) save({ ...marks, session: undefined });
     else {
       const ended = ground.launcher.end(session, marks.session);
 

@@ -5,11 +5,14 @@
  * its tab kept ({@link FakeLauncher.exit}). `settle` lets a working agent finish (ready), says when its program
  * ended, and gives up on a silent one. Each session instance has its own handle, so a session seeded again
  * (after a reboot) is not the one `open` started. Sessions not this fake's own are given with
- * {@link FakeLauncher.seed}.
+ * {@link FakeLauncher.seed}. A call named in {@link FakeLauncher.failing} answers as rex does when it cannot say.
  */
 import type { Why } from "../src/team/agents.ts";
 import type { Blocked, Handle, Launch, Launcher, Look, Opened, Seen, Settled, Status, Tab } from "../src/team/launcher.ts";
 import { statusOf } from "../src/team/rex.ts";
+
+/** What a read says when the launcher cannot say. */
+const FAILED: Why = { why: "rex ls: connection reset" };
 
 /** An agent as the fake holds it: its status, or silent while it runs having reported nothing. */
 interface Running {
@@ -36,6 +39,8 @@ export class FakeLauncher implements Launcher {
   readonly blockAtStart = new Set<string>();
   /** The agents whose program ends while a settle waits on them. */
   readonly endWhileSettling = new Set<string>();
+  /** The reads that cannot answer, by the launcher's method. */
+  readonly failing = new Set<"sessions" | "owns" | "look">();
   private readonly held = new Map<string, Held>();
   private next = 1;
   private instances = 0;
@@ -54,7 +59,7 @@ export class FakeLauncher implements Launcher {
   }
 
   sessions(): readonly string[] | Why {
-    return [...this.held.keys()];
+    return this.failing.has("sessions") ? FAILED : [...this.held.keys()];
   }
 
   open(name: string): Opened {
@@ -67,8 +72,8 @@ export class FakeLauncher implements Launcher {
     return { started: instance };
   }
 
-  owns(name: string, handle: Handle): boolean {
-    return this.held.get(name)?.instance === handle;
+  owns(name: string, handle: Handle): boolean | Why {
+    return this.failing.has("owns") ? FAILED : this.held.get(name)?.instance === handle;
   }
 
   tab(session: string, launch: Launch): Tab | Blocked | Why {
@@ -110,6 +115,7 @@ export class FakeLauncher implements Launcher {
   }
 
   look(session: string): Look | Why {
+    if (this.failing.has("look")) return FAILED;
     const held = this.held.get(session);
 
     if (held === undefined) return { why: `no session ${session}` };
@@ -142,7 +148,9 @@ export class FakeLauncher implements Launcher {
   end(name: string, handle: Handle): Why | undefined {
     this.calls.push(`end ${name}`);
 
-    if (!this.owns(name, handle)) return { why: `session ${name} is not the instance fleet team started` };
+    const owned = this.owns(name, handle);
+
+    if (owned !== true) return owned === false ? { why: `session ${name} is not the instance fleet team started` } : owned;
     this.held.delete(name);
 
     return undefined;

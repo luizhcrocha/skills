@@ -121,7 +121,8 @@ export function rexLauncher(options: RexOptions): Launcher {
   const settleMs = options.settleMs ?? SETTLE_MS;
   const pollMs = options.pollMs ?? POLL_MS;
 
-  const rex = (args: readonly string[], input?: string): { readonly result: JsonObject } | Why => {
+  /** What rex printed for `args`, or why it failed. */
+  const printed = (args: readonly string[], input?: string): { readonly stdout: string } | Why => {
     const ran = run(args, input);
 
     if ("why" in ran) return ran;
@@ -132,20 +133,30 @@ export function rexLauncher(options: RexOptions): Launcher {
       return { why: `rex ${args.slice(0, 2).join(" ")}: ${said === "" ? `exit ${String(ran.code)}` : said}` };
     }
 
-    return { result: Option.getOrUndefined(parseObject(ran.stdout)) ?? {} };
+    return { stdout: ran.stdout };
   };
 
+  const rex = (args: readonly string[], input?: string): { readonly result: JsonObject } | Why => {
+    const out = printed(args, input);
+
+    return "why" in out ? out : { result: Option.getOrUndefined(parseObject(out.stdout)) ?? {} };
+  };
+
+  /** The sessions rex runs; why when it fails, or prints what no list can be read from, which is never no sessions. */
   const listed = (): readonly { readonly id: string; readonly label: string }[] | Why => {
-    const answer = rex(["ls", "--json"]);
+    const out = printed(["ls", "--json"]);
 
-    return "why" in answer
-      ? answer
-      : rowsOf(answer.result, "sessions").flatMap((s) => {
-          const id = asString(s["session_id"]);
-          const label = asString(s["label"]);
+    if ("why" in out) return out;
+    const answer = Option.getOrUndefined(parseObject(out.stdout));
 
-          return id === undefined || label === undefined ? [] : [{ id, label }];
-        });
+    if (answer === undefined) return { why: "rex ls --json: it printed no JSON object" };
+
+    return rowsOf(answer, "sessions").flatMap((s) => {
+      const id = asString(s["session_id"]);
+      const label = asString(s["label"]);
+
+      return id === undefined || label === undefined ? [] : [{ id, label }];
+    });
   };
 
   /** The ID of the one session labelled `name`. */
@@ -247,10 +258,10 @@ export function rexLauncher(options: RexOptions): Launcher {
     return writeOrWhy(file, agent.system) ?? claudeArgv(agent, file);
   };
 
-  const owns = (name: string, handle: Handle): boolean => {
+  const owns = (name: string, handle: Handle): boolean | Why => {
     const sessions = listed();
 
-    return !("why" in sessions) && sessions.some((s) => s.id === handle && s.label === name);
+    return "why" in sessions ? sessions : sessions.some((s) => s.id === handle && s.label === name);
   };
 
   return {
@@ -396,7 +407,11 @@ export function rexLauncher(options: RexOptions): Launcher {
     },
 
     end(name, handle) {
-      if (!owns(name, handle)) return { why: `session ${name} runs, but not as the session fleet team started; left running` };
+      const owned = owns(name, handle);
+
+      if (owned === false) return { why: `session ${name} runs, but not as the session fleet team started; left running` };
+
+      if (owned !== true) return owned;
       const killed = rex(["kill", handle]);
 
       return "why" in killed ? { why: killed.why } : undefined;

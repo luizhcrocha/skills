@@ -415,6 +415,58 @@ describe("safety", () => {
     expect(team(at, rebooted, "list").stderr).toBe(`team: session ${at.session} is the team of ${other.repo}, which fleet team runs; name this repo's in its .fleet/team.json ("session")\n`);
   });
 
+  test("another repo's marks are not read as free while the launcher cannot say: each command is refused and the marks stay", () => {
+    const at = place();
+    const other = twinOf(at);
+    const launcher = new FakeLauncher();
+    team(at, launcher, "start", "ui");
+    const marks = join(at.registry, "team", at.session, "marks.json");
+    const written = readFileSync(marks, "utf8");
+    const unsure = (why: string): Ran => ({ code: 1, stdout: "", stderr: `team: session ${at.session} may be the team of ${at.repo}, and whether it still is could not be read (${why}); nothing is done\n` });
+
+    for (const failing of ["sessions", "owns"] as const) {
+      launcher.failing.add(failing);
+
+      for (const argv of [["start", "ui"], ["stop", "ui"], ["list"], ["attach"]]) expect({ failing, ran: team(other, launcher, ...argv) }).toEqual({ failing, ran: unsure("rex ls: connection reset") });
+
+      launcher.failing.delete(failing);
+    }
+
+    const another = new FakeLauncher().seed(at.session);
+    another.failing.add("look");
+
+    expect(team(other, another, "start", "ui")).toEqual(unsure("rex ls: connection reset"));
+    expect(readFileSync(marks, "utf8")).toBe(written);
+    expect(launcher.calls.filter((c) => c.startsWith("close ") || c.startsWith("end "))).toEqual([]);
+  });
+
+  test("a session's mark stays while the launcher cannot say the instance still runs: stop then ends it", () => {
+    const at = place({ ui: '{"fleet": {"role": "coordinator"}}', api: '{"fleet": {"role": "coordinator"}}' });
+    const launcher = new FakeLauncher();
+    team(at, launcher, "start", "ui");
+    launcher.failing.add("owns");
+    team(at, launcher, "start", "api");
+    launcher.failing.delete("owns");
+    team(at, launcher, "stop", "all");
+
+    expect(launcher.calls).toContain(`end ${at.session}`);
+  });
+
+  test("a stop whose last tab closes while the launcher cannot say the instance still runs leaves the session running and its mark: end refuses, and a later stop ends it", () => {
+    const at = place();
+    const launcher = new FakeLauncher();
+    team(at, launcher, "start", "ui");
+    launcher.failing.add("owns");
+
+    expect(team(at, launcher, "stop", "ui")).toEqual({ code: 1, stdout: "ui: stopped: tab w1:t1 closed once it was ready\n", stderr: "team: rex ls: connection reset\n" });
+    expect(launcher.sessions()).toEqual([at.session]);
+    expect(JSON.parse(readFileSync(join(at.registry, "team", at.session, "marks.json"), "utf8")).session).toBeString();
+    launcher.failing.delete("owns");
+
+    expect(team(at, launcher, "stop", "ui").stdout).toBe(`session ${at.session} stopped: fleet team started it and nothing is left in it\n`);
+    expect(launcher.sessions()).toEqual([]);
+  });
+
   test("after a reboot, a restored shell tab with the marked tab's id and label is not its agent: stop closes nothing and start leaves it as a stranger's", () => {
     const at = place();
     team(at, new FakeLauncher(), "start", "ui");

@@ -63,8 +63,9 @@ export interface Launcher {
   sessions(): readonly string[] | Why;
   /** Session `name` running, started when it was not. */
   open(name: string): Opened | Why;
-  /** Whether `handle`, from {@link Launcher.open}, still names the instance of session `name` that runs now. */
-  owns(name: string, handle: Handle): boolean;
+  /** Whether `handle`, from {@link Launcher.open}, still names the instance of session `name` that runs now, or
+   * why it cannot say. */
+  owns(name: string, handle: Handle): boolean | Why;
   /** A new tab in `session` running `launch.agent`, named after it; returns once it is ready for its first prompt,
    * or, its tab kept, once its start blocks on a prompt in it. Any other failure closes the tab. */
   tab(session: string, launch: Launch): Tab | Blocked | Why;

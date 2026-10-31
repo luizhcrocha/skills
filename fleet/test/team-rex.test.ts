@@ -202,6 +202,27 @@ describe("rex's calls", () => {
     expect(look('{"exit_code":1,"error":"exit status 1"}', "idle")).toEqual({ tabs: [{ handle: "window:1", label: "ui" }], agents: [{ name: "ui", tab: "window:1", status: "ended" }] });
   });
 
+  test("owns says why when rex cannot say, and end stops nothing then", () => {
+    const rex = fakeRex((words) => (words === "ls --json" ? { code: 1, stdout: "", stderr: "Error: connection reset\n" } : undefined));
+    const launcher = rexLauncher({ state: tmp("fleet-team-state-"), run: rex.run, ...FAST });
+
+    expect(launcher.owns("skills", SID)).toEqual({ why: "rex ls --json: connection reset" });
+    expect(launcher.end("skills", SID)).toEqual({ why: "rex ls --json: connection reset" });
+    expect(rex.calls).not.toContain(`kill ${SID}`);
+  });
+
+  test("an exit 0 that prints no JSON is rex not saying, which no read takes for no sessions", () => {
+    const rex = fakeRex((words) => (words === "ls --json" ? { code: 0, stdout: "rex: waking the daemon\n", stderr: "" } : undefined));
+    const launcher = rexLauncher({ state: tmp("fleet-team-state-"), run: rex.run, ...FAST });
+    const said = { why: "rex ls --json: it printed no JSON object" };
+
+    expect(launcher.sessions()).toEqual(said);
+    expect(launcher.owns("skills", SID)).toEqual(said);
+    expect(launcher.open("skills")).toEqual(said);
+    expect(launcher.end("skills", SID)).toEqual(said);
+    expect(rex.calls.filter((c) => c !== "ls --json")).toEqual([]);
+  });
+
   test("settle waits a bounded time and says so when it gives up", () => {
     const rex = fakeRex(statusIs("working"));
 
