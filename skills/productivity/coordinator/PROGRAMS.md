@@ -152,7 +152,9 @@ opens. It refuses there too a call no page ask can hold (whyNoAsk, DASHBOARD.md'
 /abs/x.sh`, a script by a relative path), a program given by its path (`/abs/deploy.sh`), a wrapper (`env`,
 `timeout`, `sudo`), an assignment that changes what runs (`PATH=`, `BASH_ENV=`), inline code (`node -e`), and any
 program a page ask does not know. Open a script call from the machine: run it as a Bash call of its own, and when
-auto mode refuses it, the hook opens its card with the files it runs. When the hook knows no open card for your
+auto mode refuses it, the hook opens its card with the files it runs. A card that opens leaves you a note beside a
+later tool call with its id, for your call or a worker's: read the `decisions` row with that id, not a search of
+`state.json`. When the hook knows no open card for your
 refused call (a pipe, which no exact rule clears, anything above, a fleet that refused or never answered the card,
 a queued card), it leaves you a note: why, and the call that gets one (`bash /abs/x.sh 2>&1` for `bash /abs/x.sh
 2>&1 | tail -4`), the same call again, or the terminal. The hook runs in the background, so the note comes beside a

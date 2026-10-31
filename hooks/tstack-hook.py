@@ -2152,17 +2152,20 @@ def _noted_caller(hook, agent_id):
     return "main" if hook.env.get("FLEET_WORKER") else None
 
 
-def _owe_note(hook, r, d, draft_id, told, no_card=None, kind=None):
+def _owe_note(hook, r, d, draft_id, told, no_card=None, kind=None, worker=None):
     """Remember the note for the caller whose call was refused: one file per draft, so two refusals at once (the
     event runs async) both stay owed. `told` is whether the CLI reached the host with its line. `no_card` is why a
     moved fleet's hook has no card it knows is open, and `kind` which case that is (_own_note): the host's main
     thread, which hears no line of the CLI there, is owed its note too, so it never tells the user a card is on the
-    page that is not. A queued card is the host's note alone: the worker's says nothing of cards."""
+    page that is not. A queued card is the host's note alone: the worker's says nothing of cards. A card that opened
+    (`opened`) is too, whoever's call it holds, `worker` naming the worker, and a subagent with no ledger row said to be
+    one: the main thread gets the card's id, and a session that is itself a worker owes no host a note here."""
     caller = _noted_caller(hook, r.agent_id)
-    own = caller is None and no_card is not None
+    opened = kind == "opened" and not hook.env.get("FLEET_WORKER")
+    own = opened or (caller is None and no_card is not None)
     if own:
         caller = "main"
-    if not caller or not hook.session_id or (kind == "queued" and not own):
+    if not caller or not hook.session_id or (kind in ("queued", "opened") and not own):
         return
     if own and kind == "call" and _card_shape(r):
         kind = "shape"
@@ -2173,8 +2176,9 @@ def _owe_note(hook, r, d, draft_id, told, no_card=None, kind=None):
         tmp = path.with_name(f".{path.name}.{os.getpid()}")
         tmp.write_text(json.dumps({"at": fleet_now(hook.env), "tool": r.tool, "reason": _one_line(r.reason, 120),
                                    "id": draft_id, "host": fleet_role(read_ledger(d)), "told": bool(told),
-                                   **({"own": True, "kind": kind or "hook", "why": _one_line(no_card, 300),
-                                       "shape": _card_shape(r) if kind == "shape" else None} if own else {})}))
+                                   **({"own": True, "kind": kind or "hook", "why": _one_line(no_card or "", 300),
+                                       "shape": _card_shape(r) if kind == "shape" else None,
+                                       "worker": worker, "subagent": bool(r.agent_id)} if own else {})}))
         os.replace(tmp, path)
     except OSError as e:
         log(hook.data_dir, f"{hook.event} fleet_permission_denied: the note for the refused worker cannot be kept ({e})")
@@ -2247,14 +2251,21 @@ OWN_NEXT = {
 
 
 def _own_note(note):
-    """The note for the host's own refused call that a moved fleet's hook knows no open card for: why, and what to
-    do by its kind. A known absence says nothing is on the page, and gives the call that gets a card (_card_shape),
+    """The note for a refused call on a moved fleet, to the host's main thread. A card that opened gives its id, so
+    the host reads that one row. Else the hook knows no open card for the host's own call, and says why and what to
+    do by its kind: a known absence says nothing is on the page, and gives the call that gets a card (_card_shape),
     the shape every card's call takes, a rerun, or the terminal; an unknown fate (no answer, a queued card, the hook
     failing) gives the check that says whether a card is open."""
     tool = _one_line(note.get("tool") or "tool", 80)
     kind = note.get("kind")
     why = note.get("why") or "no reason was kept"
-    refused = f"Fleet: auto mode refused your {tool} call ({_one_line(note.get('reason') or '', 120)})"
+    worker = note.get("worker")
+    whose = f"{worker}'s" if isinstance(worker, str) and worker else "a subagent's" if note.get("subagent") else "your"
+    refused = f"Fleet: auto mode refused {whose} {tool} call ({_one_line(note.get('reason') or '', 120)})"
+    if kind == "opened":
+        card = _one_line(note.get("id") or "", 60)
+        return (f"{refused}, and the plugin's hook opened permission card {card} on the page for the user. The "
+                f"`decisions` row with that id says how it stands, and no other row does.")
     if kind == "queued":
         return (f"{refused}, and the plugin's hook opened its permission card, which the fleet queued: {why}. It "
                 f"shows on the page once the fleet's link is back. {CARD_OPEN_CHECK}")
@@ -2402,8 +2413,9 @@ def _open_refusal_program(hook, d, r, ledger, worker, refusal_id):
     root, which the host needs to apply an allow-once grant. Narrowed against decision 51: only a Bash call an exact
     rule can hold (the old CLI's whyNoRule) and an Agent spawn get a card. Another tool's call (WebFetch, Write…)
     gets none, since Claude Code matches no `Tool(<json>)` rule and the grant would never let it through: the user
-    allows it in the terminal. A call no card can hold, one that may carry a credential (whose text and cause stay
-    out of the cloud), or a card the fleet refused, is an important `blocked` event for the host instead; nothing is
+    allows it in the terminal. A card that opens leaves the session's main thread a note with its id. A call no card
+    can hold, one that may carry a credential (whose text and cause stay out of the cloud), or a card the fleet
+    refused, is an important `blocked` event for the host instead; nothing is
     asked of the user for it, and the host hears of it from the ledger, not a chat line, so the refused worker's note
     says the host was not told at once. When fleet-run cannot take the refusal at all (it exits 2, 4 or 5 twice,
     outlasts CLI_TIMEOUT_S, or cannot be started), the note is owed the same way, and the failure is raised for the log."""
@@ -2427,6 +2439,8 @@ def _open_refusal_program(hook, d, r, ledger, worker, refusal_id):
             else:
                 if isinstance(outcome, dict) and outcome.get("status") == "queued":
                     _owe_note(hook, r, d, refusal_id, told=False, no_card="the fleet's link is down", kind="queued")
+                else:
+                    _owe_note(hook, r, d, refusal_id, told=False, kind="opened", worker=worker)
                 return
         if no_card is None:
             no_card, kind = _why_no_card(r), _no_card_kind(r)

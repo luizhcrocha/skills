@@ -7611,7 +7611,7 @@ class MovedRefusalTest(MovedFleet, RefusalCase):
         self.assertEqual(card["title"], f"Allow a2 to run `{self.PUSH}`?")
         self.assertEqual([o["id"] for o in card["options"]], ["allow-once", "deny"])
         self.assertIn("runs exactly the call shown above, once", card["options"][0]["consequence"])
-        self.assertEqual(self.owed(), [], "the card asks the user: no draft is owed to the worker")
+        self.assertIsNone(self.after(agent_id="ab12cd34"), "the card asks the user: no draft is owed to the worker")
 
     DEPLOY_SHA = "a1b6fafd9142ebdcce0d5c6e70cd43370623b45b01757b83c6263e8bd67dc326"  # sha256 of b"echo deploy\n"
 
@@ -7673,15 +7673,47 @@ class MovedRefusalTest(MovedFleet, RefusalCase):
         [op] = self.programs()[-1]["ops"]
         self.assertEqual(op["record"]["kind"], "decision")
         self.assertEqual(op["set"]["refusal"]["runs"], [f"1 {self.DEPLOY_SHA} {script}"])
-        self.assertIsNone(self.after(agent_id=None))
+        self.assertIn(f"opened permission card {op['record']['key']}", self.after(agent_id=None))
 
-    def test_the_hosts_script_call_opens_its_card_and_owes_it_no_note(self):
+    def test_the_hosts_script_call_opens_its_card_and_tells_it_the_cards_id(self):
         script = self.script("deploy-ship2.sh")
-        self.refuse(command=f"bash {script}", reason="[Deploy]")
+        command = f"bash {script}"
+        self.refuse(command=command, reason="[Deploy]")
         [op] = self.programs()[-1]["ops"]
         self.assertEqual((op["record"]["kind"], op["set"]["refusal"]["runs"]),
                          ("decision", [f"1 {self.DEPLOY_SHA} {script}"]))
+        note = self.after(agent_id=None)
+        self.assertIn("auto mode refused your Bash call ([Deploy])", note)
+        self.assertIn(f"opened permission card {op['record']['key']} on the page", note)
+        self.assertIsNone(self.after(agent_id=None), "told once")
+
+    def test_a_workers_card_gives_the_main_thread_its_id_and_the_worker_no_word_of_it(self):
+        self.refuse(agent_id="ab12cd34")
+        self.assertIsNone(self.after(agent_id="ab12cd34"))
+        note = self.after(agent_id=None)
+        self.assertIn("auto mode refused a2's Bash call ([Git Destructive])", note)
+        self.assertIn(f"opened permission card {self.expected_id('ab12cd34', self.PUSH)} on the page", note)
+
+    def test_a_card_for_a_subagent_with_no_ledger_row_is_told_as_a_subagents_call_never_the_main_threads(self):
+        """The main thread read "refused your Bash call" for a call it never made, and could run it again."""
+        self.refuse(agent_id="deadbeef00")
+        self.assertIsNone(self.after(agent_id="deadbeef00"))
+        note = self.after(agent_id=None)
+        self.assertIn("auto mode refused a subagent's Bash call ([Git Destructive])", note)
+        self.assertNotIn("your", note)
+        self.assertIn(f"opened permission card {self.expected_id('deadbeef00', self.PUSH)} on the page", note)
+
+    def test_a_card_opened_for_a_worker_running_as_its_own_session_owes_that_session_no_note(self):
+        self.refuse(env={"FLEET_WORKER": "a2"})
+        self.assertEqual(len(self.programs()), 1)
         self.assertEqual(self.owed(), [])
+
+    def test_a_card_that_opens_says_where_to_read_it_and_nothing_of_a_missing_card(self):
+        self.refuse(command="just deploy")
+        note = self.after(agent_id=None)
+        self.assertNotIn("no permission card", note)
+        self.assertNotIn("may have opened", note)
+        self.assertIn("`decisions` row with that id says how it stands", note)
 
     def test_every_refused_host_call_with_no_card_is_told_so(self):
         """A pipe into more than an output filter, a call no page ask binds, another tool's call, a credential, a
