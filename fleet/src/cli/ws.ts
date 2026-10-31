@@ -86,7 +86,7 @@ import {
   type HookRun,
   type HookSubject,
 } from "../ws/hook.ts";
-import { badWorkspaceName, changes, jj, literal, unintegratedRevset, why, workspaceNames, workspaceRoot, type Change } from "../ws/jj.ts";
+import { badWorkspaceName, besideRevset, changes, jj, literal, unintegratedRevset, why, workspaceNames, workspaceRoot, type Change } from "../ws/jj.ts";
 import { adopt, collect, discard, listing, restore, trashHome, type Note } from "../ws/trash.ts";
 import { findDecision } from "../ledger/numbers.ts";
 import { readObject } from "../registry.ts";
@@ -652,7 +652,8 @@ function handOver(
 
     if (parent === undefined || changes(r.repo, `${literal(r.id)}@-`)?.length !== 1) return yield* refuse(`workspace ${r.id}'s @ has no single parent; give -r BASE`);
     const stamp = stampOf(machine.now());
-    const handovers = [...(asArray(row["handovers"]) ?? []), { from: r.agent, at: stamp }];
+    // The base it had goes with the handover: a stack on it stays beside the workspace whatever -r names.
+    const handovers = [...(asArray(row["handovers"]) ?? []), { from: r.agent, at: stamp, base: r.base }];
     // A workspace added out of the preview stays out for the lane's next worker, whose work is of the same
     // kind: the row keeps its `preview`.
     const was = row["preview"] === OUT;
@@ -816,7 +817,10 @@ function list(machine: Machine, root: string, raw: JsonObject): Effect.Effect<nu
       const ahead = changes(r.repo, unintegratedRevset(r.id, tip.change)) ?? [];
       const conflicted = tip.conflict || ahead.some((c) => c.conflict);
       const lead = ahead.length === 0 ? "nothing ahead of the stack" : `${ahead.length} change(s) ahead of the stack: ${ahead.map(described).join("; ")}`;
-      out.out(`    @ ${described(tip)}${conflicted ? ", conflicted" : ""}; ${lead}\n`);
+      const beside = besideOf(raw, r, tip.change, workspaceNames(r.repo) ?? []);
+      const listed = beside.changes === undefined || beside.changes.length === 0 ? "" : `; ${beside.changes.length} change(s) beside its @: ${beside.changes.map(described).join("; ")}`;
+      const near = beside.unread === undefined ? listed : `; ${beside.unread}`;
+      out.out(`    @ ${described(tip)}${conflicted ? ", conflicted" : ""}; ${lead}${near}\n`);
       const lane = asArray(row?.["lane"])?.flatMap((e) => asString(e) ?? []) ?? [];
       const strayed = lane.length === 0 || ahead.length === 0 ? [] : outsideLane(r.repo, unintegratedRevset(r.id, tip.change), lane);
 
@@ -942,19 +946,48 @@ function keepBecause(root: string, raw: JsonObject, r: Recorded): string | undef
   const read = aheadOf(raw, r);
 
   if ("kept" in read) return read.kept;
-  const { ahead } = read;
+  const { ahead, beside } = read;
+  const own = ahead.length > 0 ? [`${ahead.length} change(s) not in the stack: ${ahead.map(described).join("; ")}`] : [];
+  const listed = beside.changes === undefined || beside.changes.length === 0 ? [] : [`${beside.changes.length} change(s) beside its @, not in the stack: ${beside.changes.map(described).join("; ")} (\`fleet ws trash --card\` lets it go; they stay in jj)`];
+  const held = [...own, ...(beside.unread === undefined ? listed : [beside.unread])];
 
-  return ahead.length > 0 ? `${ahead.length} change(s) not in the stack: ${ahead.map(described).join("; ")}` : undefined;
+  return held.length > 0 ? held.join("; ") : undefined;
 }
 
-/** What `r` holds that the stack does not, or why it must stay before that is asked: its worker is live, its
- * directory is not that jj workspace, or jj could not snapshot it or say what it holds. Snapshots it. */
-function aheadOf(raw: JsonObject, r: Recorded): { readonly ahead: Change[] } | { readonly kept: string } {
+/** The change ids a stack beside `r` can stand on: its base now and the ones its handovers replaced. */
+function basesOf(r: Recorded): string[] {
+  const earlier = (asArray(r.row["handovers"]) ?? []).flatMap((h) => asString(asObject(h)?.["base"]) ?? []);
+
+  return [r.base, ...earlier].filter((b) => /^[k-z]+$/u.test(b));
+}
+
+/** What stands beside a workspace's @ and is in no stack, or why that cannot be told. */
+type Beside = { readonly changes: Change[]; readonly unread?: never } | { readonly changes?: never; readonly unread: string };
+
+/** {@link Beside} for `r`, whose @ has change `change` ({@link besideRevset}). `names` are the workspaces jj knows. */
+function besideOf(raw: JsonObject, r: Recorded, change: string, names: readonly string[]): Beside {
+  const bases = basesOf(r);
+  const there = bases.length === 0 ? [] : changes(r.repo, bases.map((b) => `change_id(${b})`).join(" | "));
+
+  if (there?.length === 0) return { unread: "the ledger records no base jj still has, so a stack beside it cannot be ruled out" };
+  const others = recorded(raw).filter((x) => x.repo === r.repo && x.id !== r.id && names.includes(x.id));
+  const near = { owners: others.filter((x) => !x.preview).map((x) => x.id), previews: others.filter((x) => x.preview).map((x) => x.id) };
+  const found = there === undefined ? undefined : changes(r.repo, besideRevset(r.id, change, bases, near));
+
+  return found === undefined ? { unread: "jj could not say what stands beside it" } : { changes: found };
+}
+
+/** What `r` holds that the stack does not and what stands beside it, or why it must stay before that is asked: its
+ * worker is live, its directory is not that jj workspace, or jj could not snapshot it or say what it holds. Snapshots it. */
+function aheadOf(raw: JsonObject, r: Recorded): { readonly ahead: Change[]; readonly beside: Beside } | { readonly kept: string } {
   const row = agentRow(raw, r.agent);
   const status = asString(row?.["status"]);
 
   if (status !== undefined && LIVE.has(status)) return { kept: `its worker ${r.agent} is ${status}` };
-  const known = (workspaceNames(r.repo) ?? []).includes(r.id);
+  const names = workspaceNames(r.repo);
+
+  if (names === undefined && isDir(r.repo)) return { kept: `jj could not list the workspaces of ${r.repo}` };
+  const known = (names ?? []).includes(r.id);
 
   if (isDir(r.path)) {
     const at = known ? workspaceRoot(r.repo, r.id) : undefined;
@@ -968,11 +1001,11 @@ function aheadOf(raw: JsonObject, r: Recorded): { readonly ahead: Change[] } | {
     if (failed !== undefined) return { kept: `jj could not snapshot it: ${failed}` };
   }
 
-  if (!known) return { ahead: [] };
+  if (!known) return { ahead: [], beside: { changes: [] } };
   const tip = changes(r.repo, `${literal(r.id)}@`)?.[0];
   const ahead = tip === undefined ? undefined : changes(r.repo, unintegratedRevset(r.id, tip.change));
 
-  return ahead === undefined ? { kept: "jj could not say what it holds" } : { ahead };
+  return tip === undefined || ahead === undefined ? { kept: "jj could not say what it holds" } : { ahead, beside: besideOf(raw, r, tip.change, names ?? []) };
 }
 
 /** What `prune --apply` would do now, for a fleet that stops (`fleet serve --stop`, `set --status done`):
@@ -1123,7 +1156,15 @@ function prune(machine: Machine, root: string, raw: JsonObject, argv: readonly s
         }
       }
 
-      const known = (workspaceNames(r.repo) ?? []).includes(r.id);
+      const names = workspaceNames(r.repo);
+
+      if (names === undefined && isDir(r.repo)) {
+        kept += 1;
+        out.err(`ws: kept ${r.id}: jj could not list the workspaces of ${r.repo}; nothing is moved or deleted\n`);
+        continue;
+      }
+
+      const known = (names ?? []).includes(r.id);
       // The preview's merge commit goes with it: nothing else descends from it.
       const tip = known ? tipOf(r) : undefined;
       const done = discard(home, noteOf(machine, root, raw, r, tip), machine.now(), known);
@@ -1183,7 +1224,8 @@ function prune(machine: Machine, root: string, raw: JsonObject, argv: readonly s
 const THROWAWAY = "THROWAWAY";
 
 /** Why `r` must stay even on a card's yes: prune's own checks (a live worker, a directory that is not that
- * workspace, a snapshot that failed), then any change not in the stack that is neither empty nor THROWAWAY. */
+ * workspace, a snapshot that failed), then any change of its own not in the stack that is neither empty nor
+ * THROWAWAY. What stands beside it does not count: that stays in jj whoever goes. */
 function keepOnCard(raw: JsonObject, r: Recorded): string | undefined {
   const read = aheadOf(raw, r);
 
@@ -1290,7 +1332,10 @@ function trashNamed(machine: Machine, root: string, raw: JsonObject, argv: reado
       }
     }
 
-    const known = (workspaceNames(r.repo) ?? []).includes(r.id);
+    const names = workspaceNames(r.repo);
+
+    if (names === undefined && isDir(r.repo)) return yield* refuse(`kept ${name}: jj could not list the workspaces of ${r.repo}; nothing is moved or deleted`);
+    const known = (names ?? []).includes(r.id);
     const tip = known ? tipOf(r) : undefined;
     const status = statusOf(raw, r.agent);
     const reason = `its worker ${r.agent} ${status === undefined ? "has no row" : `is ${status}`} and its changes are ${THROWAWAY} or empty`;

@@ -760,7 +760,7 @@ workspaces[]? {id (the jj workspace's name), ws_id? (`<repo's basename>-<id>-<ha
                FLEET_WS_ID; absent on a row from before it), agent (its worker now), path, repo (the default
                workspace's root), base (change id), added, status (active|pruned), pruned?, card? (the card a `trash NAME --card ID` moved it on),
                preview? ("out": added out of the combined preview, `ws add --no-preview`),
-               handovers[]? {from (the worker that held it before), at},
+               handovers[]? {from (the worker that held it before), at, base (the row's base until then)},
                hook? {command (".fleet/ws-add" | "devenv-run --prepare"), at, exit (null: timed out, killed,
                interrupted, or could not start), seconds, timed_out?, interrupted? (the signal `add` got),
                error? (why it could not start, or what killed it)},
@@ -3864,7 +3864,7 @@ same `FLEET_WS_ID`, so a hook frees what it names in `pre-remove`.
   workspace is snapshotted (a stale one updated first), then WORKER gets a change of its own: `jj new
   BASE` when `-r` is given, else `jj new` on top of what the last holder left unless its `@` is empty and
   undescribed, so the next worker never amends the last one's change. The row's `agent` becomes WORKER,
-  `base` the new `@`'s parent, and `handovers` gains `{from: <the last holder>, at}`; a note event
+  `base` the new `@`'s parent, and `handovers` gains `{from: <the last holder>, at, base: <the row's base until then>}`; a note event
   (`Workspace a1 handed from a1 (done) to b1 at PATH, on <change>.`), the page rendered, and the same two
   lines printed (`workspace a1 for b1 at PATH, reused from a1, on <change>`, then the brief line). A
   workspace out of the preview stays out for its next holder (the row keeps `preview: "out"`; `add` says
@@ -3922,10 +3922,10 @@ same `FLEET_WS_ID`, so a hook frees what it names in `pre-remove`.
   lane out of the shared working copy as <change> (N file(s)).`), prints `split a1: <change>: <files>`.
   One split per finished worker gives one described change per worker, in the order they were split.
 - `fleet ws DIR list`: per active workspace (in a shared fleet with none, a line saying so), its worker and the worker's status and last-seen, then
-  its `@` (empty, conflicted) and what it holds ahead of the stack, and the files those changes touch
-  that are in none of the worker's lane entries (`outside its lane (src/): README: stop it ...`; an
-  entry holds what it covers by the lane rule of [Warnings](#warnings) 6: a glob's `*` stays in its
-  segment). Read with
+  its `@` (empty, conflicted), what it holds ahead of the stack, what stands beside its `@` (`1 change(s) beside its
+  @: ...`, prune's rule 3), and the files the changes it holds touch that are in none of the worker's lane entries
+  (`outside its lane (src/): README: stop it ...`, on `::@` alone, as a stack beside it is no edit of the worker's;
+  an entry holds what it covers by the lane rule of [Warnings](#warnings) 6: a glob's `*` stays in its segment). Read with
   `--ignore-working-copy`: a worker's files are never snapshotted under it while it works.
 - `fleet ws DIR prune [--apply | --dry-run] [--hook-timeout S]`: a workspace goes when (1) its worker's row is not
   running, queued or blocked (done, failed, stopped, or no row: gone); (2) its directory, if it is
@@ -3933,7 +3933,17 @@ same `FLEET_WS_ID`, so a hook frees what it names in `pre-remove`.
   at that repo's store; (3) after a snapshot of its files (a stale workspace is updated first: jj then
   keeps its unsnapshotted files in a copy of its change) nothing is ahead of the stack:
   `(::(NAME@ | change_id(<its change>)) ~ ::default@ ~ immutable()) ~ (empty() & description(exact:""))`
-  is empty (integrated, abandoned, or empty). Going, with `--apply`: first the repo's
+  is empty (integrated, abandoned, or empty), and nothing stands beside it: the same with
+  `(<bases> | NAME@-)+:: ~ ::(NAME@ | change_id(<its change>)) ~ ::<each other workspace of this fleet>@ ~ <each preview>@`
+  in place of the first term. `<bases>` are the row's `base` and the bases its `handovers` kept: `ws add` records
+  them and `@` can leave them, onto a newer trunk or past a parent that landed, so `@`'s parents alone miss a stack.
+  jj records no owner for a commit, so a stack `@` stepped away from is found only this way, and an unrelated stack
+  on the same base reads the same (`ws: kept a1: 1 change(s) beside its @, not in the stack: ... (\`fleet ws trash
+  --card\` lets it go; they stay in jj)`). A line counts as another's only when a workspace this ledger records reaches
+  it: a preview's merge owns nothing, and a workspace outside the ledger is no owner. A row with no base jj still has
+  keeps the workspace (`ws: kept a1: the ledger records no base jj still has, so a stack beside it cannot be ruled
+  out`). A repo jj cannot read keeps the workspace (`ws: kept a1: jj could not list the
+  workspaces of REPO`), unless the repo is gone, also when the list fails just before the move. Going, with `--apply`: first the repo's
   [pre-remove hook](#workspace-hooks), `.fleet/ws-pre-remove WORKSPACE`, in the workspace, when the repo has
   one and the folder is there. Any end but exit 0 keeps that workspace whole, folder, jj workspace and row
   (`ws: kept a1: .fleet/ws-pre-remove exited 2 in 0.1 s; nothing is moved or deleted`; the row gains
@@ -3960,14 +3970,15 @@ same `FLEET_WS_ID`, so a hook frees what it names in `pre-remove`.
   snapshots (ignored ones: `.env`, `.dev.vars`, build output, a worker's notes) out of reach of the
   worker, so it takes a second, deliberate command, `--apply`.
 - `fleet ws DIR trash NAME --card ID` (TypeScript only): one workspace prune keeps because it holds
-  prototype changes nobody lands, taken out as prune takes one out, on a card's yes. Before it, a kept
+  prototype changes nobody lands or only has a stack beside it, taken out as prune takes one out, on a card's yes.
+  The stack stays in jj either way. Before it, a kept
   prototype workspace needed a hand-run `jj workspace forget` and `mv` (casos-work's c18, 2026-10-19), which
   left an entry with no note that `restore` refused and gc kept forever. One NAME per call, no batch flag.
   Refused, with nothing moved (`ws: <why>`, exit 1): `default`, or a row whose path is its repo's root or
   holds a repo's store (`never the default workspace, nor a main checkout`); a NAME the ledger records as no
   active workspace, or the fleet's preview; the workspace that holds the command's own working directory;
-  rule (1) or (2) of prune; any change ahead of the stack (prune's revset, after the same snapshot) that is
-  neither empty nor described starting `THROWAWAY` (`ws: kept t1: 1 change(s) neither THROWAWAY nor empty:
+  a repo jj cannot list; rule (1) or (2) of prune; any change it holds ahead of the stack (prune's first revset, after
+  the same snapshot) that is neither empty nor described starting `THROWAWAY` (`ws: kept t1: 1 change(s) neither THROWAWAY nor empty:
   ...`); an ID that is not letters, digits and `-` (`a card ID is letters, digits and '-': ...`); and
   unless card ID is a yes. A yes is a permission card only: of DIR's own ledger, found by id or number as
   every command finds one (no `FLEET/ID`); whose call (`refusal.call`) is this very command,

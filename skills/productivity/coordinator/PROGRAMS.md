@@ -507,7 +507,7 @@ wake, unchanged), `fleet state <dir> show`, `fleet brief`, `fleet ws <dir> list`
 
 `fleet ws <dir> add`, `split`, `trash` and `prune --apply` write the ledger's workspace rows, which a moved team's ledger does
 not keep, so they are refused. So a moved team has no route yet to take out a workspace prune would keep for
-THROWAWAY changes (`trash NAME --card ID` is refused before it reads any card). Until it has one, ask the Manager
+THROWAWAY changes or a stack beside it (`trash NAME --card ID` is refused before it reads any card). Until it has one, ask the Manager
 for a one-time permission to take it out by hand (`jj --ignore-working-copy workspace forget <name>` from the
 default workspace, then the folder moved into the machine's trash), then run `fleet ws trash --adopt <entry> --repo <repo>`
 so `restore` and `gc` handle it. Make a worker's workspace with jj beside the repo's default workspace,

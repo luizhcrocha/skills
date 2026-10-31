@@ -61,6 +61,31 @@ function work(at: string, file: string, message: string): void {
   jj(at, "new");
 }
 
+/** The fleet CLI as a process of its own, on a jj that fails `workspace list` after the first `passes` of them. */
+function onFailingJj(passes: number, ...args: string[]) {
+  const real = Bun.which("jj");
+  const bin = join(base, "bin");
+  mkdirSync(bin, { recursive: true });
+  writeFileSync(
+    join(bin, "jj"),
+    `#!/bin/sh
+case " $* " in
+*" workspace list "*)
+  n=$(cat "${join(base, "lists")}" 2>/dev/null || echo 0)
+  echo $((n + 1)) >"${join(base, "lists")}"
+  if [ "$n" -ge ${passes} ]; then echo "Error: the store is locked" >&2; exit 1; fi
+  ;;
+esac
+exec "${real}" "$@"
+`,
+  );
+  chmodSync(join(bin, "jj"), 0o755);
+
+  const ran = Bun.spawnSync([FLEET, ...args], { env: { ...env, PATH: `${bin}:${env["PATH"] ?? ""}` }, stdout: "pipe", stderr: "pipe" });
+
+  return { code: ran.exitCode, stderr: ran.stderr.toString() };
+}
+
 /** The repo each test starts from, made once: a jj repo holds no path of its own, so a copy is a repo of its own. */
 let template: string;
 
@@ -167,6 +192,17 @@ describe("fleet ws list", () => {
     expect(ran.stdout).toContain("    outside its lane (src/): README: stop it and handle these edits before anything else runs on them\n");
     expect(ran.stdout).not.toContain("src/ok.ts:");
   });
+
+  test("a stack beside an empty @ is no edit of the worker's: it is listed beside, and never outside the lane", () => {
+    state("agent", "a1", "--task", "t", "--milestone", "m1", "--lane", "src/");
+    ws("add", "a1", "--repo", repo);
+    jj(repo, "new", "@-", "-m", "nobody: orphan");
+    writeFileSync(join(repo, "orphan.txt"), "o\n");
+    jj(repo, "new", "@-");
+    const ran = ws("list");
+    expect(ran.stdout).toMatch(/; nothing ahead of the stack; 1 change\(s\) beside its @: \w+ nobody: orphan\n/);
+    expect(ran.stdout).not.toContain("outside its lane");
+  });
 });
 
 describe("a workspace for a worker the ledger has not recorded", () => {
@@ -236,6 +272,208 @@ describe("fleet ws prune", () => {
     jj(repo, "rebase", "-r", "a2@-", "-B", "@");
     expect(ws("prune", "--apply").stdout).toContain(`pruned a2: ${open} is in the trash, repo/a2@20260105T090000Z`);
     expect(existsSync(open)).toBe(false);
+  });
+
+  /** What prune says for a workspace kept by only `line`, the one change beside its @. */
+  function keptBeside(line: string): RegExp {
+    return new RegExp(`^ws: kept a1: 1 change\\(s\\) beside its @, not in the stack: \\w+ ${line} \\(\`fleet ws trash --card\` lets it go; they stay in jj\\)\\n$`);
+  }
+
+  /** A done worker a1 with an empty workspace, and its folder. */
+  function idle(): string {
+    state("agent", "a1", "--task", "t", "--milestone", "m1");
+    ws("add", "a1", "--repo", repo);
+    state("agent", "a1", "--status", "done");
+
+    return join(base, "repo-a1");
+  }
+
+  /** A done worker a1 with the change "a1: reviewed" on its workspace's base, and its folder. */
+  function reviewed(): string {
+    state("agent", "a1", "--task", "t", "--milestone", "m1");
+    ws("add", "a1", "--repo", repo);
+    const at = join(base, "repo-a1");
+    work(at, "one.txt", "a1: reviewed");
+    state("agent", "a1", "--status", "done");
+
+    return at;
+  }
+
+  test("a stack beside the workspace's @ keeps it: a dry run, --apply, list and serve --stop's outlook all name it", () => {
+    const at = reviewed();
+    jj(at, "new", "@--"); // @ steps off the stack and is now its sibling: nothing under @ is ahead
+    expect(jj(repo, "log", "--no-graph", "-r", '::"a1"@ & description(substring:"a1: reviewed")', "-T", "description")).toBe("");
+    expect(ws("prune").stderr).toMatch(keptBeside("a1: reviewed"));
+    const ran = ws("prune", "--apply");
+    expect([ran.code, ran.stdout]).toEqual([1, "nothing to prune\n"]);
+    expect(existsSync(at)).toBe(true);
+    expect(workspaces().map((w) => w["status"])).toEqual(["active"]);
+    expect(ws("list").stdout).toMatch(/; nothing ahead of the stack; 1 change\(s\) beside its @: \w+ a1: reviewed\n/);
+    expect(fleet(["state", dir, "set", "--status", "done", "--no-render"], env).stderr).toMatch(/ws: prune keeps a1: 1 change\(s\) beside its @, not in the stack: \w+ a1: reviewed/);
+  });
+
+  test("a stack above the workspace's @ keeps it", () => {
+    const at = reviewed();
+    work(at, "two.txt", "a1: on top");
+    jj(at, "edit", "@--"); // @ goes back to the first change, "a1: on top" sits above it
+    expect(ws("prune", "--apply").stderr).toMatch(/^ws: kept a1: 1 change\(s\) not in the stack: \w+ a1: reviewed; 1 change\(s\) beside its @, not in the stack: \w+ a1: on top \(/);
+    expect(existsSync(at)).toBe(true);
+  });
+
+  test("a sibling stack nothing else reaches keeps it, whoever made it", () => {
+    const at = reviewed();
+    jj(at, "new", "@--");
+    jj(repo, "new", "@-", "-m", "nobody's");
+    writeFileSync(join(repo, "three.txt"), "three\n");
+    jj(repo, "new", "-r", "@-"); // the default workspace steps away: the stack is on no @ now
+    expect(ws("prune", "--apply").stderr).toContain("2 change(s) beside its @, not in the stack");
+    expect(existsSync(at)).toBe(true);
+  });
+
+  test("a stack another workspace's @ reaches is that workspace's: it keeps that one, not its sibling", () => {
+    state("agent", "a1", "--task", "t", "--milestone", "m1", "--status", "done");
+    state("agent", "a2", "--task", "t", "--milestone", "m1", "--status", "done");
+    ws("add", "a1", "--repo", repo);
+    ws("add", "a2", "--repo", repo);
+    const open = join(base, "repo-a2");
+    work(open, "two.txt", "a2: two");
+    const ran = ws("prune", "--apply");
+    expect(ran.stderr).toMatch(/^ws: kept a2: 1 change\(s\) not in the stack: \w+ a2: two\n$/);
+    expect(ran.stdout).toContain("pruned a1:");
+    expect(existsSync(open)).toBe(true);
+  });
+
+  test("a sibling already in the stack holds nothing back", () => {
+    const at = reviewed();
+    jj(at, "new", "@--");
+    jj(repo, "rebase", "-r", 'description(substring:"a1: reviewed")', "-B", "@");
+    expect(ws("prune", "--apply").stdout).toContain("pruned a1:");
+    expect(existsSync(at)).toBe(false);
+  });
+
+  test("a stack on the base keeps a workspace whose @ moved to a newer trunk: @'s parents no longer reach it", () => {
+    const at = reviewed();
+    work(repo, "trunk.txt", "trunk moved");
+    jj(at, "new", 'description(substring:"trunk moved")');
+    expect(ws("prune", "--apply").stderr).toMatch(keptBeside("a1: reviewed"));
+    expect(existsSync(at)).toBe(true);
+  });
+
+  test("a stack off @'s grandparent keeps it after one more change landed on the way", () => {
+    const at = reviewed();
+    jj(at, "new", "@--");
+    work(at, "x.txt", "a1: second");
+    jj(repo, "new", 'description(substring:"a1: second")');
+    expect(ws("prune", "--apply").stderr).toMatch(keptBeside("a1: reviewed"));
+    expect(existsSync(at)).toBe(true);
+  });
+
+  test("a side branch off the middle of the stack keeps it once the main line landed", () => {
+    const at = reviewed();
+    work(at, "two.txt", "a1: two");
+    jj(at, "new", 'description(substring:"a1: reviewed")', "-m", "a1: side");
+    writeFileSync(join(at, "side.txt"), "s\n");
+    jj(at, "new", 'description(substring:"a1: two")');
+    jj(repo, "new", 'description(substring:"a1: two")');
+    expect(ws("prune", "--apply").stderr).toMatch(keptBeside("a1: side"));
+    expect(existsSync(at)).toBe(true);
+  });
+
+  test("a stack off @'s parent keeps it when @ left the line of its base altogether", () => {
+    work(repo, "side.txt", "side");
+    state("agent", "a1", "--task", "t", "--milestone", "m1");
+    ws("add", "a1", "--repo", repo, "-r", 'description(substring:"side")');
+    const at = join(base, "repo-a1");
+    jj(repo, "new", 'description(substring:"side")-');
+    work(repo, "trunk.txt", "trunk moved");
+    jj(at, "new", 'description(substring:"trunk moved")');
+    work(at, "one.txt", "a1: reviewed");
+    jj(at, "new", 'description(substring:"trunk moved")');
+    state("agent", "a1", "--status", "done");
+    expect(ws("prune", "--apply").stderr).toMatch(keptBeside("a1: reviewed"));
+    expect(existsSync(at)).toBe(true);
+  });
+
+  test("a handover onto a newer trunk still counts the stack on the base the row had before", () => {
+    const at = reviewed();
+    work(repo, "trunk.txt", "trunk moved");
+    state("agent", "b1", "--task", "t", "--milestone", "m1", "--status", "done");
+    expect(ws("add", "b1", "--reuse", "a1", "-r", 'description(substring:"trunk moved")').code).toBe(0);
+    expect(ws("prune", "--apply").stderr).toMatch(/^ws: kept a1: 1 change\(s\) beside its @, not in the stack: \w+ a1: reviewed \(/);
+    expect(existsSync(at)).toBe(true);
+  });
+
+  /** The ledger with the row of workspace a1 changed by `edit`. */
+  function rewriteRow(edit: (row: JsonObject) => JsonObject): void {
+    const ledger = readJson(join(dir, "state.json"));
+    const rows = workspaces().map((row) => (row["id"] === "a1" ? edit(row) : row));
+    writeFileSync(join(dir, "state.json"), JSON.stringify({ ...ledger, workspaces: rows }));
+  }
+
+  test.each([
+    ["no base", ""],
+    ["a base jj no longer has", "kkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkk"],
+  ])("a row with %s keeps the workspace: what stands beside it cannot be told", (_case, gone) => {
+    const at = idle();
+    rewriteRow(({ base: _base, ...row }) => (gone === "" ? row : { ...row, base: gone }));
+    const ran = ws("prune", "--apply");
+    expect(ran.stderr).toBe(`ws: kept a1: the ledger records no base jj still has, so a stack beside it cannot be ruled out\n`);
+    expect(ran.code).toBe(1);
+    expect(existsSync(at)).toBe(true);
+    expect(ws("list").stdout).toContain("; the ledger records no base jj still has");
+  });
+
+  test("a stopped preview's merge owns nothing: it goes, and the stack it alone reached keeps its worker's workspace", () => {
+    const at = reviewed();
+    const preview = join(base, "repo-preview");
+    jj(repo, "workspace", "add", preview, "--name", "preview", "-r", "@-");
+    jj(preview, "new", "@-", 'description(substring:"a1: reviewed")', "-m", "preview: merge");
+    const ledger = readJson(join(dir, "state.json"));
+    const row = { id: "preview", kind: "preview", agent: null, path: preview, repo, base: "x", added: "2026-01-05T09:00:00+00:00", status: "active" };
+    writeFileSync(join(dir, "state.json"), JSON.stringify({ ...ledger, workspaces: [...workspaces(), row] }));
+    jj(at, "new", "@--");
+    const ran = ws("prune", "--apply");
+    expect(ran.stderr).toMatch(keptBeside("a1: reviewed"));
+    expect(ran.stdout).toContain("pruned preview:");
+    expect(existsSync(at)).toBe(true);
+    expect(jj(repo, "log", "--no-graph", "-r", 'description(substring:"preview: merge")', "-T", "description")).toBe("");
+  });
+
+  test("a workspace no ledger records owns nothing: the stack only it reaches keeps the worker's", () => {
+    const at = reviewed();
+    jj(at, "new", "@--");
+    jj(repo, "workspace", "add", join(base, "repo-other"), "--name", "other", "-r", 'description(substring:"a1: reviewed")');
+    expect(ws("prune", "--apply").stderr).toMatch(keptBeside("a1: reviewed"));
+    expect(existsSync(at)).toBe(true);
+  });
+
+  test("a list that fails between the check and the move keeps the workspace: the folder never goes without its forget", () => {
+    const at = idle();
+    const ran = onFailingJj(1, "ws", dir, "prune", "--apply");
+    expect(ran.stderr).toBe(`ws: kept a1: jj could not list the workspaces of ${repo}; nothing is moved or deleted\n`);
+    expect(ran.code).toBe(1);
+    expect(existsSync(at)).toBe(true);
+    expect(jj(repo, "workspace", "list", "-T", 'name ++ "\\n"')).toBe("a1\ndefault\n");
+  });
+
+  test("a repo jj cannot read keeps a workspace whose folder is gone: not known is not nothing ahead", () => {
+    const at = reviewed();
+    Bun.spawnSync(["rm", "-rf", at]);
+    const store = join(repo, ".jj");
+    const aside = join(base, "jj-aside");
+    Bun.spawnSync(["mv", store, aside]);
+    const ran = ws("prune", "--apply");
+    Bun.spawnSync(["mv", aside, store]);
+    expect(ran.code).toBe(1);
+    expect(ran.stderr).toBe(`ws: kept a1: jj could not list the workspaces of ${repo}\n`);
+    expect(workspaces().map((w) => w["status"])).toEqual(["active"]);
+  });
+
+  test("a recorded workspace whose repo is gone with it has nothing left to keep", () => {
+    const at = reviewed();
+    Bun.spawnSync(["rm", "-rf", at, repo]);
+    expect(ws("prune", "--apply").code).toBe(0);
+    expect(workspaces().map((w) => w["status"])).toEqual(["pruned"]);
   });
 
   test("a live worker's workspace stays, even when empty", () => {
@@ -1378,6 +1616,38 @@ describe("fleet ws DIR trash NAME --card ID: one workspace prune keeps, trashed 
     expect(asObject(lastEvent())?.["text"]).toBe(`Workspace t1 trashed under card d1: its changes are THROWAWAY or empty; ${at} moved to the trash (${id}).`);
     expect(fleet(["ws", "restore", id], env).code).toBe(0);
     expect(readFileSync(join(at, "proto.txt"), "utf8")).toBe("THROWAWAY: prototype of the page\n");
+  });
+
+  /** Worker t1's empty workspace, an orphan stack beside it on the same base, and its folder. */
+  function emptyBesideAnOrphan(): string {
+    state("agent", "t1", "--task", "t", "--milestone", "m1");
+    ws("add", "t1", "--repo", repo);
+    state("agent", "t1", "--status", "done");
+    jj(repo, "new", "@-", "-m", "nobody: orphan");
+    writeFileSync(join(repo, "orphan.txt"), "o\n");
+    jj(repo, "new", "@-");
+
+    return join(base, "repo-t1");
+  }
+
+  test("a stack only beside the workspace keeps it from prune and not from a card's yes, and stays in jj", () => {
+    const at = emptyBesideAnOrphan();
+    expect(ws("prune", "--apply").stderr).toMatch(/^ws: kept t1: 1 change\(s\) beside its @, not in the stack: \w+ nobody: orphan \(`fleet ws trash --card` lets it go; they stay in jj\)\n$/);
+    permission("d1", call("t1", "d1"), "allow-once");
+    const ran = ws("trash", "t1", "--card", "d1");
+    expect([ran.code, ran.stderr]).toEqual([0, ""]);
+    expect(existsSync(at)).toBe(false);
+    expect(jj(repo, "--ignore-working-copy", "log", "--no-graph", "-r", 'description(substring:"nobody: orphan")', "-T", "description")).toBe("nobody: orphan\n");
+  });
+
+  test("a list that fails between the check and the move refuses: the folder never goes without its forget", () => {
+    const at = emptyBesideAnOrphan();
+    permission("d1", call("t1", "d1"), "allow-once");
+    const ran = onFailingJj(1, "ws", dir, "trash", "t1", "--card", "d1");
+    expect(ran.stderr).toBe(`ws: kept t1: jj could not list the workspaces of ${repo}; nothing is moved or deleted\n`);
+    expect(ran.code).toBe(1);
+    expect(existsSync(at)).toBe(true);
+    expect(names()).toBe("default\nt1\n");
   });
 
   test("allow-kind with only whitespace after it is a yes too", () => {

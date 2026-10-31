@@ -85,10 +85,35 @@ export function literal(text: string): string {
   return JSON.stringify(text);
 }
 
-/** What a workspace holds that the stack does not: every commit reachable from the workspace's @, or
- * from another commit of the same change (the copy `workspace update-stale` keeps of a stale
- * workspace's unsnapshotted files), that is neither under the default workspace's @ nor immutable,
- * leaving out the empty commits with no description. */
+/** `revset` without what is in the stack, under the default workspace's @ or immutable, and without the empty
+ * commits with no description. */
+function outsideStack(revset: string): string {
+  return `(${revset} ~ ::default@ ~ immutable()) ~ (empty() & description(exact:""))`;
+}
+
+/** What a workspace holds that the stack does not: every commit reachable from its @, or from another commit of the
+ * same change (the copy `workspace update-stale` keeps of a stale workspace's unsnapshotted files). */
 export function unintegratedRevset(name: string, change: string): string {
-  return `(::(${literal(name)}@ | change_id(${change})) ~ ::default@ ~ immutable()) ~ (empty() & description(exact:""))`;
+  return outsideStack(`::(${literal(name)}@ | change_id(${change}))`);
+}
+
+/** A workspace's neighbours in the repo: what `besideRevset` leaves to them. */
+export interface Neighbours {
+  /** The fleet's other workspaces: a line one of their @ reaches is theirs. */
+  readonly owners: readonly string[];
+  /** The fleet's previews: their @ is a merge of other work, so it owns none of it and is nobody's change. */
+  readonly previews: readonly string[];
+}
+
+/** What stands beside a workspace and is in no stack: every line off its `bases` or @'s parents, past what
+ * {@link unintegratedRevset} holds. jj records no owner for a commit, so a stack @ stepped away from is found only
+ * here, and an unrelated one reads the same. @'s parents alone miss a stack once @ moved to a newer trunk or a parent
+ * landed. */
+export function besideRevset(name: string, change: string, bases: readonly string[], near: Neighbours): string {
+  const at = `${literal(name)}@`;
+  const lines = [...bases.map((b) => `change_id(${b})`), `${at}-`].join(" | ");
+  const owned = near.owners.map((o) => ` ~ ::${literal(o)}@`).join("");
+  const merges = near.previews.map((p) => ` ~ ${literal(p)}@`).join("");
+
+  return outsideStack(`((${lines})+:: ~ ::(${at} | change_id(${change}))${owned}${merges})`);
 }
