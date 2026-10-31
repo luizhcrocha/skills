@@ -4571,6 +4571,14 @@ says `all`; `attach` takes none. `add` takes its own arguments (below).
   itself) does not start; the others do, and `start` exits 1. A `TeamTaken` refusal says to rename the agent's
   file, as `start` has no `--team`. With such an agent, `start` settles the trust question and refuses a session
   another repo's team holds before it joins anything, so no cloud team is made for a start that cannot run.
+- **One name per machine.** A ledger is found by the agent's name alone, so before any trust question or join,
+  `start` refuses an agent whose ledger is another team's: its `cloud.json` names another project than the
+  file's `fleet.project` (or none, for an agent of a project: it would never join), or
+  `~/.local/state/fleet/teams.json`, which a local join writes, gives that team another repo (`notes: <ledger> is
+  the ledger of team notes (project tstack), not this agent's (project rex-trial): a team's name is one per
+  machine, so give this agent another (\`fleet fleets list\` lists the teams here)`). The same project and repo
+  is the agent's own: it starts there, with no join. An agent that joins from a repo with no identity (no origin
+  remote naming owner/name, not under `~/repos/<owner>/<name>`) is refused there too, before the trust.
 - **Yours.** `REGISTRY/team/<session>/marks.json` holds what `fleet team` started, by the launcher's handles:
   the session when it started it and each agent's tab, by rex's IDs (`session:<uuid>`, `window:<uuid>`), which
   rex never reuses. `stop` and the session's end act only on what is marked and still holds: a tab is its
@@ -4615,7 +4623,9 @@ says `all`; `attach` takes none. `add` takes its own arguments (below).
   in the repo the agent works in`), and a repo that is `/`, the home folder or a folder above it, by their
   realpaths, is refused before anything is written (`<repo> is / or the home folder, or a folder above it:
   ...`). The file is checked as `start` reads it before it is written: a bad name, a project that is no
-  project id or a mission that is not one line of plain text (above) is refused and nothing is written. A name
+  project id or a mission that is not one line of plain text (above) is refused and nothing is written. So is
+  a repo with no identity (`<repo> has no origin remote naming owner/name, ...`) and a name whose ledger is
+  another team's (one name per machine, above): nothing is trusted, joined or written. A name
   whose file exists is refused (`api: <file> exists already: \`fleet team start api\` starts it, or name
   another`) and the file left, unless the file is byte for byte what this add would write: a run killed before
   its start ended (the join waits up to 30 s and the start up to 2 min, past a caller's 120 s timeout) leaves

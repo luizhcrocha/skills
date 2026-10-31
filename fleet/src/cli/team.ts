@@ -7,7 +7,8 @@
  * (a run killed midway) starts it rather than refusing. start first makes sure Claude Code trusts the repo (team/trust.ts), asking
  * on the terminal unless `--trust`, and joins an agent of a project (`fleet.project`) whose ledger is not cut over to
  * the cloud yet, through the host service (cli/project.ts), the trust and the session's owner settled before any
- * team is made in the cloud. TypeScript only.
+ * team is made in the cloud. Before any trust or join, an agent whose ledger is another project's or repo's team
+ * (team/ledger.ts), or that joins from a repo with no identity, is refused. TypeScript only.
  */
 import { readSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -20,14 +21,14 @@ import { exists, isDir, isMoved, makeDirs, readText, remove, removeEmptyDir, str
 import { Out } from "../io.ts";
 import { parseAgent, readTeam, type Agent, type Role, type Team, type Why } from "../team/agents.ts";
 import type { Launcher } from "../team/launcher.ts";
-import { ledgerOf } from "../team/ledger.ts";
+import { heldByAnother, ledgerOf } from "../team/ledger.ts";
 import { rexLauncher } from "../team/rex.ts";
 import { heldElsewhere, listTeam, startTeam, stopTeam, type BeforeStart, type Ground, type Said } from "../team/team.ts";
 import { atOrAboveHome, claudeConfigOf, ensureTrusted, trustRootOf, type Asker, type Consent } from "../team/trust.ts";
 import { World, type Machine } from "../world.ts";
 import { opt, parseArgs, usageWidth, type CommandSpec } from "./args.ts";
 import { exitOf, printUsage } from "./exit.ts";
-import { awaitMoved, joinProject, JOIN_WAIT_MS, repoAt } from "./project.ts";
+import { awaitMoved, joinProject, JOIN_WAIT_MS, repoAt, type Repo } from "./project.ts";
 
 const USAGE = "usage: fleet team [-h] {start,stop,attach,list,add} [--force] [--trust] [NAME ...|all]\n";
 
@@ -48,10 +49,13 @@ folder or .fleet/team.json's "session". Run it in the repo or below it.
                            write .fleet/agents/NAME.json (at the repo's root when it has none yet;
                            never in / or the home folder): a coordinator unless --role, of project ID,
                            its opening carrying TEXT (one line of plain text, at most 2000 characters);
-                           then start NAME alone, as start does (--no-start: only the file). A start that
-                           gives it no tab removes the file and the folders add made, so add runs again
-                           once fixed; the same add again over a file it wrote that has no tab (a run
-                           killed midway) starts it. The join waits up to 30 s and the start up to 2 min
+                           then start NAME alone, as start does (--no-start: only the file). A repo
+                           with no owner/name, or a NAME whose ledger is another project's or repo's
+                           team (a name is one per machine), is refused before anything is trusted or
+                           written. A start that gives it no tab removes the file and the folders add
+                           made, so add runs again once fixed; the same add again over a file it wrote
+                           that has no tab (a run killed midway) starts it. The join waits up to 30 s
+                           and the start up to 2 min
 No NAME is every agent, for start and list.`;
 
 const COMMANDS = ["start", "stop", "attach", "list", "add"] as const;
@@ -123,13 +127,58 @@ function toJoin(machine: Machine, agent: Agent, home: string): { readonly projec
   return project === undefined || agent.fleet.machine !== "local" || "why" in ledger || isMoved(ledger.ledger) ? undefined : { project, ledger: ledger.ledger };
 }
 
+/** The agents of `agents` that may go on to the trust and the join, and why the others may not: a ledger that is
+ * another team's ({@link heldByAnother}), and for an agent {@link toJoin} names, a file that names its own ledger or
+ * a repo with no identity (`repo`). Nothing is trusted, joined or written before these hold. */
+function vetted(machine: Machine, agents: readonly Agent[], home: string, repo: () => Repo | Why): Joins {
+  const refused: string[] = [];
+  const ready: Agent[] = [];
+
+  const ours = (): string | undefined => {
+    const found = repo();
+
+    return "why" in found ? undefined : found.id;
+  };
+
+  for (const agent of agents) {
+    const ledger = ledgerOf(agent, machine.registry.known(), home);
+    const held = "why" in ledger ? undefined : heldByAnother(agent.name, ledger.ledger, home, agent.fleet.project, ours);
+
+    if (held !== undefined) {
+      refused.push(held.why);
+      continue;
+    }
+
+    const joining = toJoin(machine, agent, home);
+
+    if (joining !== undefined && agent.fleet.ledger !== undefined) {
+      refused.push(
+        `${agent.name}: names both fleet.ledger (${joining.ledger}, not cut over to the cloud) and fleet.project, and the join makes the team's folder itself: ` +
+          `drop fleet.ledger, or set it to the joined team's folder once \`fleet project ${agent.fleet.role === "manager" ? "manage" : "join"} ${joining.project}\` has printed it`,
+      );
+      continue;
+    }
+
+    const found = joining === undefined ? undefined : repo();
+
+    if (found !== undefined && "why" in found) {
+      refused.push(`${agent.name}: ${found.why}`);
+      continue;
+    }
+
+    ready.push(agent);
+  }
+
+  return { lines: [], refused, ready };
+}
+
 /**
- * Each agent {@link toJoin} names joins its project first, as its role, under its own name as the team's id, so
- * its ledger is the one {@link ledgerOf} finds, which the host makes and cuts over; the start waits at most
- * `waitMs` for that. An agent whose join is refused, that the registry gives another team, whose folder the host
- * named elsewhere, or whose file names its own ledger, does not start.
+ * Each agent {@link toJoin} names joins its project first, as its role, under its own name as the team's id, from
+ * `repo` ({@link vetted} found it), so its ledger is the one {@link ledgerOf} finds, which the host makes and cuts
+ * over; the start waits at most `waitMs` for that. An agent whose join is refused, that the registry gives another
+ * team, or whose folder the host named elsewhere, does not start.
  */
-function joinFirst(machine: Machine, team: Team, agents: readonly Agent[], home: string, waitMs: number): Effect.Effect<Joins> {
+function joinFirst(machine: Machine, team: Team, agents: readonly Agent[], home: string, waitMs: number, repo: () => Repo | Why): Effect.Effect<Joins> {
   return Effect.gen(function* () {
     const lines: string[] = [];
     const refused: string[] = [];
@@ -144,24 +193,15 @@ function joinFirst(machine: Machine, team: Team, agents: readonly Agent[], home:
       }
 
       const { project, ledger } = joining;
+      const found = repo();
 
-      if (agent.fleet.ledger !== undefined) {
-        refused.push(
-          `${agent.name}: names both fleet.ledger (${ledger}, not cut over to the cloud) and fleet.project, and the join makes the team's folder itself: ` +
-            `drop fleet.ledger, or set it to the joined team's folder once \`fleet project ${agent.fleet.role === "manager" ? "manage" : "join"} ${project}\` has printed it`,
-        );
-        continue;
-      }
-
-      const repo = repoAt(team.repo, home);
-
-      if ("why" in repo) {
-        refused.push(`${agent.name}: ${repo.why}`);
+      if ("why" in found) {
+        refused.push(`${agent.name}: ${found.why}`);
         continue;
       }
 
       const taken = `rename the agent's file, ${join(team.repo, ".fleet", "agents", `${agent.name}.json`)}, as its name is the team's id`;
-      const joined = yield* Effect.result(joinProject(machine, { project, role: agent.fleet.role, team: agent.name, repo, taken }));
+      const joined = yield* Effect.result(joinProject(machine, { project, role: agent.fleet.role, team: agent.name, repo: found, taken }));
 
       if (Result.isFailure(joined)) {
         refused.push(`${agent.name}: ${joined.failure.why}`);
@@ -193,11 +233,14 @@ function joinFirst(machine: Machine, team: Team, agents: readonly Agent[], home:
   });
 }
 
-/** Start `agents` of `ground`'s team: Claude Code's trust under `consent`, each agent's project joined first, then a
- * tab each. A refusal that stops every start is a failure; one agent's is said with the rest. */
-function startAgents(machine: Machine, ground: Ground, agents: readonly Agent[], consent: Consent, waitMs: number): Effect.Effect<Said, Refusal> {
+/** Start `agents` of `ground`'s team: the checks of {@link vetted}, then Claude Code's trust under `consent`, each
+ * agent's project joined, then a tab each. */
+function startAgents(machine: Machine, ground: Ground, agents: readonly Agent[], consent: Consent, waitMs: number): Effect.Effect<Said> {
   return Effect.gen(function* () {
     const { team, home } = ground;
+    let identity: Repo | Why | undefined;
+    const repo = (): Repo | Why => (identity ??= repoAt(team.repo, home));
+    const checked = vetted(machine, agents, home, repo);
 
     const before: BeforeStart = () => {
       const trusted = ensureTrusted({ root: trustRootOf(team.repo), config: claudeConfigOf(machine.env, home), home, consent });
@@ -208,22 +251,19 @@ function startAgents(machine: Machine, ground: Ground, agents: readonly Agent[],
     const early: string[] = [];
     let gate = before;
 
-    if (agents.some((agent) => toJoin(machine, agent, home) !== undefined)) {
-      const other = heldElsewhere(ground);
+    if (checked.ready.some((agent) => toJoin(machine, agent, home) !== undefined)) {
+      const other = heldElsewhere(ground) ?? before();
 
-      if (other !== undefined) return yield* refuse(other.why);
-      const ready = before();
+      if ("why" in other) return { lines: [], refused: [...checked.refused, other.why] };
 
-      if ("why" in ready) return yield* refuse(ready.why);
-
-      if (ready.line !== undefined) early.push(ready.line);
+      if (other.line !== undefined) early.push(other.line);
       gate = () => ({ line: undefined });
     }
 
-    const joins = yield* joinFirst(machine, team, agents, home, waitMs);
+    const joins = yield* joinFirst(machine, team, checked.ready, home, waitMs, repo);
     const started = startTeam(ground, joins.ready, gate);
 
-    return { lines: [...early, ...joins.lines, ...started.lines], refused: [...joins.refused, ...started.refused] };
+    return { lines: [...early, ...joins.lines, ...started.lines], refused: [...checked.refused, ...joins.refused, ...started.refused] };
   });
 }
 
@@ -290,6 +330,13 @@ function add(machine: Machine, argv: readonly string[], launcherAt: (state: stri
     const agent = parseAgent(name, text, home);
 
     if ("why" in agent) return yield* refuse(agent.why);
+    const identity = repoAt(repo, home);
+
+    if ("why" in identity) return yield* refuse(identity.why);
+    const ledger = ledgerOf(agent, machine.registry.known(), home);
+    const held = "why" in ledger ? ledger : heldByAnother(name, ledger.ledger, home, agent.fleet.project, () => identity.id);
+
+    if (held !== undefined) return yield* refuse(held.why);
     const resumed = exists(file) && readText(file) === text;
 
     if (exists(file) && !resumed) return yield* refuse(`${name}: ${file} exists already: \`fleet team start ${name}\` starts it, or name another`);
@@ -334,8 +381,7 @@ function add(machine: Machine, argv: readonly string[], launcherAt: (state: stri
     out.out(`${name}: ${what}${resumed ? "; starting it" : ""}\n`);
     const ground = groundOf(machine, team, launcherAt, home);
     const consent: Consent = args.flag("trust") ? { _tag: "Given" } : ask === undefined ? { _tag: "None", again: "`fleet team add` again with --trust" } : { _tag: "Ask", ask };
-    const started = yield* Effect.result(startAgents(machine, ground, team.agents.filter((a) => a.name === name), consent, waitMs));
-    const result: Said = Result.isFailure(started) ? { lines: [], refused: [started.failure.reason] } : started.success;
+    const result = yield* startAgents(machine, ground, team.agents.filter((a) => a.name === name), consent, waitMs);
 
     if (hasTab(ground, name) !== false) return yield* said(result);
     undo();

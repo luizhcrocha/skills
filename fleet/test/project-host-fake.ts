@@ -67,9 +67,15 @@ export function fakeHost(replies: Readonly<Record<string, Reply>>): FakeHost {
 export const ledgerAt = (home: string, id: string): string => join(home, ".local", "state", "fleet", id);
 
 /** What the host does before it answers a join: makes the team's folder (`dir`, else its fixed home) and, once its
- * lane cut it over, its cloud.json. */
-export function cutOver(home: string, id: string, dir = ledgerAt(home, id)): void {
+ * lane cut it over, its cloud.json naming `project`. */
+export function cutOver(home: string, id: string, dir = ledgerAt(home, id), project = "court"): void {
   mkdirSync(dir, { recursive: true });
-  writeFileSync(join(dir, "cloud.json"), JSON.stringify({ fleet: id, cloud: "https://fleet.example.dev", since: "2026-10-30T10:00:00Z", host: "office", run: "http://127.0.0.1:7633", project: "court" }));
+  writeFileSync(join(dir, "cloud.json"), JSON.stringify({ fleet: id, cloud: "https://fleet.example.dev", since: "2026-10-30T10:00:00Z", host: "office", run: "http://127.0.0.1:7633", project }));
+}
+
+/** The teams a local `fleet project join` recorded, as the host writes them in `~/.local/state/fleet/teams.json`. */
+export function listTeams(home: string, teams: readonly { readonly id: string; readonly project: string; readonly repo: string; readonly path: string }[]): void {
+  mkdirSync(join(home, ".local", "state", "fleet"), { recursive: true });
+  writeFileSync(join(home, ".local", "state", "fleet", "teams.json"), JSON.stringify({ teams }));
 }
 

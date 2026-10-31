@@ -17,7 +17,7 @@ import type { Asker } from "../src/team/trust.ts";
 import { recordingOut } from "../src/io.ts";
 import type { Json } from "../src/json.ts";
 import { World } from "../src/world.ts";
-import { cutOver, fakeHost, stopHosts, type FakeHost } from "./project-host-fake.ts";
+import { cutOver, fakeHost, ledgerAt, listTeams, stopHosts, type FakeHost } from "./project-host-fake.ts";
 import { baseEnv, machine, tmp, type Environment, type Ran } from "./support.ts";
 import { FakeLauncher } from "./team-launcher-fake.ts";
 
@@ -202,6 +202,7 @@ describe("start", () => {
     expect(ran.stderr).toBe("team: ui: runs on machine 'mac'; an agent away from this machine needs a launcher on that machine, which is not built; only local agents start\n");
     expect(ran.code).toBe(1);
   });
+
 
   test("a ledger the registry kept is named in the opening where it is, nothing moved", () => {
     const at = place();
@@ -645,10 +646,10 @@ function inProject(at: Place, host: FakeHost): Place {
 describe("an agent of a project", () => {
   afterEach(stopHosts);
 
-  async function start(at: Place, launcher: FakeLauncher, waitMs = 2_000): Promise<Ran> {
+  async function start(at: Place, launcher: FakeLauncher, waitMs = 2_000, argv: readonly string[] = ["start"]): Promise<Ran> {
     const { layer, recorded } = recordingOut();
     const world = Layer.succeed(World, machine(at.env));
-    const code = await Effect.runPromise(teamWith(["start"], () => launcher, at.repo, undefined, waitMs).pipe(Effect.provide(Layer.mergeAll(world, layer))));
+    const code = await Effect.runPromise(teamWith(argv, () => launcher, at.repo, undefined, waitMs).pipe(Effect.provide(Layer.mergeAll(world, layer))));
 
     return { code, stdout: recorded.stdout.join(""), stderr: recorded.stderr.join("") };
   }
@@ -757,6 +758,79 @@ describe("an agent of a project", () => {
 
     expect(ran).toEqual({ code: 1, stdout: "", stderr: expect.stringContaining(`which fleet team runs; name this repo's in its .fleet/team.json ("session")`) });
     expect(host.sent).toEqual([]);
+  });
+
+  test("an agent whose ledger is another project's team, or another repo's, is refused before the trust and the join", async () => {
+    const host = fakeHost({ "POST /projects/court/teams": { status: 201, body: TEAM("ui", "coordinator") } });
+    const at = inProject(place({ ui: '{"fleet": {"role": "coordinator", "project": "court"}}', ux: '{"fleet": {"role": "coordinator", "project": "court"}}' }), host);
+    cutOver(at.home, "ui", ledgerAt(at.home, "ui"), "tstack");
+    listTeams(at.home, [{ id: "ux", project: "court", repo: "luizhcrocha/skills", path: "/elsewhere" }]);
+    writeFileSync(at.claude, "{}");
+    const launcher = new FakeLauncher();
+    const ran = await start(at, launcher, 2_000, ["start", "--trust"]);
+
+    expect(ran).toEqual({
+      code: 1,
+      stdout: "",
+      stderr:
+        `team: ui: ${LEDGER(at, "ui")} is the ledger of team ui (project tstack), not this agent's (project court): a team's name is one per machine, so give this agent another (\`fleet fleets list\` lists the teams here)\n` +
+        `team: ux: ${LEDGER(at, "ux")} is the ledger of team ux (project court, repo luizhcrocha/skills), not this agent's (repo coelhorocha/custom-mcp-servers): a team's name is one per machine, so give this agent another (\`fleet fleets list\` lists the teams here)\n`,
+    });
+    expect(readFileSync(at.claude, "utf8")).toBe("{}");
+    expect(host.sent).toEqual([]);
+    expect(launcher.calls).toEqual([]);
+  });
+
+  test("an agent file's own ledger is not another repo's team that a join recorded under the agent's name", async () => {
+    const at = inProject(place({ ui: '{"fleet": {"role": "coordinator", "ledger": "~/own"}}' }), fakeHost({}));
+    listTeams(at.home, [{ id: "ui", project: "court", repo: "luizhcrocha/skills", path: "/elsewhere" }]);
+    const launcher = new FakeLauncher();
+    const ran = await start(at, launcher);
+
+    expect(ran.stderr).toBe("");
+    expect(launcher.prompts).toEqual([`ui: /tstack:coordinator Your ledger is ${join(at.home, "own")}.`]);
+  });
+
+  test("an agent of a project whose ledger moved to the cloud under no project is refused: it would never join", async () => {
+    const host = fakeHost({});
+    const at = inProject(place({ ui: '{"fleet": {"role": "coordinator", "project": "court"}}' }), host);
+    mkdirSync(LEDGER(at, "ui"), { recursive: true });
+    writeFileSync(join(LEDGER(at, "ui"), "cloud.json"), JSON.stringify({ fleet: "ui", cloud: "https://fleet.example.dev" }));
+    const launcher = new FakeLauncher();
+
+    expect(await start(at, launcher)).toEqual({
+      code: 1,
+      stdout: "",
+      stderr: `team: ui: ${LEDGER(at, "ui")} is the ledger of team ui (no project), not this agent's (project court): a team's name is one per machine, so give this agent another (\`fleet fleets list\` lists the teams here)\n`,
+    });
+    expect(launcher.calls).toEqual([]);
+  });
+
+  test("an agent whose ledger is its own project's and repo's team starts in it with no join", async () => {
+    const host = fakeHost({});
+    const at = inProject(place({ ui: '{"fleet": {"role": "coordinator", "project": "court"}}' }), host);
+    cutOver(at.home, "ui");
+    listTeams(at.home, [{ id: "ui", project: "court", repo: "coelhorocha/custom-mcp-servers", path: at.repo }]);
+    const launcher = new FakeLauncher();
+
+    expect((await start(at, launcher)).code).toBe(0);
+    expect(host.sent).toEqual([]);
+    expect(launcher.prompts).toEqual([`ui: /tstack:coordinator Your ledger is ${LEDGER(at, "ui")}.`]);
+  });
+
+  test("a repo with no owner/name identity is refused before the trust is written", async () => {
+    const host = fakeHost({ "POST /projects/court/teams": { status: 201, body: TEAM("ui", "coordinator") } });
+    const base = place({ ui: '{"fleet": {"role": "coordinator", "project": "court"}}' });
+    spawnSync("git", ["init", "-q"], { cwd: base.repo });
+    const at = { ...base, env: { ...base.env, FLEET_RUN_URL: host.origin } };
+    writeFileSync(at.claude, "{}");
+    const launcher = new FakeLauncher();
+    const ran = await start(at, launcher, 2_000, ["start", "--trust"]);
+
+    expect(ran).toEqual({ code: 1, stdout: "", stderr: `team: ui: ${at.repo} has no origin remote naming owner/name, and is not a folder ~/repos/<owner>/<name>: add its origin remote\n` });
+    expect(readFileSync(at.claude, "utf8")).toBe("{}");
+    expect(host.sent).toEqual([]);
+    expect(launcher.calls).toEqual([]);
   });
 
   test("a join that gives the agent another team than its name is refused: its ledger would not be the agent's", async () => {
@@ -1050,6 +1124,67 @@ describe("add", () => {
 
     expect(ran.code).toBe(0);
     expect(launcher.prompts).toEqual([`api: /tstack:tuca-mode Sync the court data. Your ledger is ${LEDGER(at, "api")}.`]);
+  });
+
+  test("a name whose ledger is another project's team is refused before anything is trusted, joined or written, naming its owner", async () => {
+    const host = fakeHost({ "POST /projects/court/teams": { status: 201, body: TEAM("notes", "coordinator") } });
+    const at = inProject(place(), host);
+    cutOver(at.home, "notes", ledgerAt(at.home, "notes"), "tstack");
+    writeFileSync(at.claude, "{}");
+    const launcher = new FakeLauncher();
+    const ran = await add(at, launcher, ["notes", "--project", "court", "--mission", "Sync the court data", "--trust"]);
+
+    expect(ran).toEqual({
+      code: 1,
+      stdout: "",
+      stderr: `team: notes: ${LEDGER(at, "notes")} is the ledger of team notes (project tstack), not this agent's (project court): a team's name is one per machine, so give this agent another (\`fleet fleets list\` lists the teams here)\n`,
+    });
+    expect(existsSync(fileOf(at, "notes"))).toBe(false);
+    expect(readFileSync(at.claude, "utf8")).toBe("{}");
+    expect(host.sent).toEqual([]);
+    expect(launcher.calls).toEqual([]);
+  });
+
+  test("a name whose team another repo joined is refused, naming that repo", async () => {
+    const host = fakeHost({});
+    const at = inProject(place(), host);
+    listTeams(at.home, [{ id: "api", project: "court", repo: "luizhcrocha/skills", path: "/elsewhere" }]);
+    const ran = await add(at, new FakeLauncher(), ["api", "--project", "court", "--mission", "Sync the court data"]);
+
+    expect(ran.code).toBe(1);
+    expect(ran.stderr).toBe(
+      `team: api: ${LEDGER(at, "api")} is the ledger of team api (project court, repo luizhcrocha/skills), not this agent's (repo coelhorocha/custom-mcp-servers): a team's name is one per machine, so give this agent another (\`fleet fleets list\` lists the teams here)\n`,
+    );
+    expect(existsSync(fileOf(at, "api"))).toBe(false);
+  });
+
+  test("a name whose ledger is this repo's team of the same project starts in it", async () => {
+    const host = fakeHost({});
+    const at = inProject(place(), host);
+    cutOver(at.home, "api");
+    listTeams(at.home, [{ id: "api", project: "court", repo: "coelhorocha/custom-mcp-servers", path: at.repo }]);
+    const launcher = new FakeLauncher();
+    const ran = await add(at, launcher, ["api", "--project", "court", "--mission", "Sync the court data"]);
+
+    expect(ran.code).toBe(0);
+    expect(host.sent).toEqual([]);
+    expect(launcher.prompts).toEqual([`api: /tstack:tuca-mode Sync the court data. Your ledger is ${LEDGER(at, "api")}.`]);
+  });
+
+  test("a repo with no owner/name identity is refused before anything is trusted or written", async () => {
+    const host = fakeHost({});
+    const base = place();
+    spawnSync("git", ["init", "-q"], { cwd: base.repo });
+    const at = { ...base, env: { ...base.env, FLEET_RUN_URL: host.origin } };
+    writeFileSync(at.claude, "{}");
+    const launcher = new FakeLauncher();
+    const ran = await add(at, launcher, ["api", "--project", "court", "--mission", "Sync the court data", "--trust"]);
+
+    expect(ran).toEqual({ code: 1, stdout: "", stderr: `team: ${at.repo} has no origin remote naming owner/name, and is not a folder ~/repos/<owner>/<name>: add its origin remote\n` });
+    expect(existsSync(fileOf(at, "api"))).toBe(false);
+    expect(readFileSync(at.claude, "utf8")).toBe("{}");
+    expect(host.sent).toEqual([]);
+    expect(launcher.calls).toEqual([]);
   });
 
   test("an agent whose start blocks on a prompt keeps its tab and its file: start sends its opening once it is answered", async () => {
