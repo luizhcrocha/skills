@@ -14,6 +14,7 @@ import tempfile
 import textwrap
 import time
 import unittest
+from dataclasses import replace
 from pathlib import Path
 from unittest import mock
 
@@ -76,11 +77,7 @@ class Runner(unittest.TestCase):
         cwd = os.getcwd()
         os.chdir(self.tmp)
         self.addCleanup(os.chdir, cwd)
-        for patch in (mock.patch.object(bun_files, "BUN", (str(fake),)), mock.patch.object(bun_files, "WEDGE_S", 1.0),
-                      mock.patch.object(bun_files, "save_cache", lambda _: None),
-                      mock.patch.object(bun_files, "load_cache", lambda: {})):
-            patch.start()
-            self.addCleanup(patch.stop)
+        self.seams = bun_files.Seams(bun=(str(fake),), wedge_s=1.0, load_cache=lambda: {}, save_cache=lambda _: None)
 
     def file(self, name: str, mode: str) -> None:
         (self.tmp / "test" / name).write_text(mode + "\n")
@@ -88,7 +85,7 @@ class Runner(unittest.TestCase):
     def run_all(self, *args: str, cpu_s: bun_files.CpuMeter = bun_files._cpu_s) -> tuple[int, str]:
         out = io.StringIO()
         with contextlib.redirect_stdout(out):
-            code = bun_files.main(["-j", "4", *args], cpu_s)
+            code = bun_files.main(["-j", "4", *args], replace(self.seams, cpu_s=cpu_s))
         return code, out.getvalue()
 
     def test_it_finds_buns_test_files_only(self):

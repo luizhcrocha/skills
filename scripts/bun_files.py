@@ -35,6 +35,7 @@ import sys
 import time
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from dataclasses import dataclass
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -91,12 +92,25 @@ def _zombie_children(pid: int) -> dict[str, str]:
 CpuMeter = Callable[[int], float | None]  # a pid's CPU seconds so far, None when it is gone
 
 
-class Wedge:
-    """run_limited's watch for one file: its reason when a zombie child has been held WEDGE_S seconds while the
-    process spun (Bun's spawnSync wedge) by `cpu_s`'s reading, else None."""
+@dataclass(frozen=True)
+class Seams:
+    """What a run takes from outside, which a test gives its own of: the command a file is run by, the seconds a
+    zombie child is held before it counts as a wedge, the CPU meter and the durations cache."""
 
-    def __init__(self, cpu_s: CpuMeter = _cpu_s) -> None:
-        self.cpu_s = cpu_s
+    bun: tuple[str, ...] = BUN
+    wedge_s: float = WEDGE_S
+    cpu_s: CpuMeter = _cpu_s
+    load_cache: Callable[[], dict[str, float]] = load_cache
+    save_cache: Callable[[dict[str, float]], None] = save_cache
+
+
+class Wedge:
+    """run_limited's watch for one file: its reason when a zombie child has been held `seams.wedge_s` seconds while
+    the process spun (Bun's spawnSync wedge) by `seams.cpu_s`'s reading, else None."""
+
+    def __init__(self, seams: Seams) -> None:
+        self.cpu_s = seams.cpu_s
+        self.wedge_s = seams.wedge_s
         self.seen: dict[str, tuple[float, float | None]] = {}  # zombie pid -> (when first seen, the CPU seconds then)
 
     def __call__(self, proc: subprocess.Popen) -> str | None:
@@ -104,28 +118,27 @@ class Wedge:
         zombies = _zombie_children(proc.pid)
         self.seen = {z: self.seen.get(z, (now, cpu)) for z in zombies}
         for z, (since, cpu_then) in self.seen.items():
-            if now - since >= WEDGE_S and cpu is not None and cpu_then is not None and cpu - cpu_then >= SPIN * (now - since):
+            if now - since >= self.wedge_s and cpu is not None and cpu_then is not None and cpu - cpu_then >= SPIN * (now - since):
                 return (f"its child {zombies[z]} stayed a zombie for {now - since:.0f}s while it spun "
                         f"({cpu - cpu_then:.0f} CPU seconds)")
         return None
 
 
-def run_file(path: str, args: list[str], limit: float, cpu_s: CpuMeter = _cpu_s) -> tuple[str, int, str, str]:
+def run_file(path: str, args: list[str], limit: float, seams: Seams) -> tuple[str, int, str, str]:
     """Run one file: (path, exit code, verdict, output). verdict is ok, failed, wedged or timed out."""
-    code, stopped, _, out = run_limited([*BUN, *args, f"./{path}"], limit, watch=Wedge(cpu_s), grace=0)
+    code, stopped, _, out = run_limited([*seams.bun, *args, f"./{path}"], limit, watch=Wedge(seams), grace=0)
     if stopped is None:
         return path, code, "ok" if code == 0 else "failed", out
     verdict, why = ("timed out", f"still running after {limit:g}s") if stopped == TIMEOUT else ("wedged", stopped)
     return path, code or 1, verdict, out + f"bun_files: {path} {verdict}: {why}; killed\n"
 
 
-def run_with_retry(path: str, args: list[str], limit: float,
-                   cpu_s: CpuMeter = _cpu_s) -> tuple[str, int, str, str, float]:
+def run_with_retry(path: str, args: list[str], limit: float, seams: Seams) -> tuple[str, int, str, str, float]:
     t0 = time.monotonic()
-    path, code, verdict, out = run_file(path, args, limit, cpu_s)
+    path, code, verdict, out = run_file(path, args, limit, seams)
     if verdict == "wedged":  # oven-sh/bun#34069: once more, in a fresh process
         first, failed_first = out, bool(FAILED_TEST.search(out))
-        path, code, again, out = run_file(path, args, limit, cpu_s)
+        path, code, again, out = run_file(path, args, limit, seams)
         out = first + f"bun_files: {path} ran again after Bun's spawnSync wedge (oven-sh/bun#34069)\n" + out
         if failed_first:
             verdict, code = f"failed, then wedged; the rerun {again}", 1
@@ -143,8 +156,8 @@ def _stop(signum: int, _frame) -> None:
     os._exit(128 + signum)
 
 
-def main(argv: list[str], cpu_s: CpuMeter = _cpu_s) -> int:
-    """The command line; `cpu_s` is the wedge watch's CPU meter."""
+def main(argv: list[str], seams: Seams = Seams()) -> int:
+    """The command line, over `seams`."""
     if "--" in argv:
         i = argv.index("--")
         argv, bun_args = argv[:i], argv[i + 1:]
@@ -164,7 +177,7 @@ def main(argv: list[str], cpu_s: CpuMeter = _cpu_s) -> int:
         return 1
     n = min(MOST, args.jobs) if args.jobs else jobs()
     where = os.path.relpath(os.getcwd(), Path(__file__).resolve().parent.parent)
-    cache = load_cache()
+    cache = seams.load_cache()
     found.sort(key=lambda f: cache.get(f"bun:{where}:{f}", 1.0), reverse=True)
     print(f"bun_files: {len(found)} files, {n} at a time, `bun test {' '.join(bun_args)}` each", flush=True)
     totals = {"pass": 0, "fail": 0, "skip": 0, "todo": 0}
@@ -173,7 +186,7 @@ def main(argv: list[str], cpu_s: CpuMeter = _cpu_s) -> int:
     before = [signal.signal(sig, _stop) for sig in signals]
     try:
         with ThreadPoolExecutor(max(1, n)) as pool:
-            for fut in as_completed([pool.submit(run_with_retry, f, bun_args, args.timeout, cpu_s) for f in found]):
+            for fut in as_completed([pool.submit(run_with_retry, f, bun_args, args.timeout, seams) for f in found]):
                 path, code, verdict, out, secs = fut.result()
                 durations[f"bun:{where}:{path}"] = round(secs, 2)
                 counts = {kind: int(num) for num, kind in COUNT.findall(out)}
@@ -190,7 +203,7 @@ def main(argv: list[str], cpu_s: CpuMeter = _cpu_s) -> int:
     finally:
         for sig, handler in zip(signals, before):
             signal.signal(sig, handler)
-    save_cache(durations)
+    seams.save_cache(durations)
     print("-" * 70)
     print(f"{totals['pass']} pass, {totals['fail']} fail, {totals['skip']} skip across {len(found)} files "
           f"in {time.monotonic() - t0:.1f}s")
