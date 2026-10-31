@@ -5473,13 +5473,43 @@ def push_attribution(hook):
                 f"(`jj describe -r {first} -m \"<the message without it>\"`, and the same for the others), then push again.")
 
 
+def _detached(hook, work):
+    """Run work() in a process of its own that keeps none of the hook's pipes, and return at once. Claude Code reads a
+    hook's output when the hook exits, so printing first and working on would not help: only an exit gets it read. A
+    child it did not start and that holds no pipe of its is no part of the hook."""
+    try:
+        if os.fork():
+            return
+    except OSError as e:
+        log(hook.data_dir, f"{hook.event} could not start a process of its own: {e}")
+        return
+    try:
+        os.setsid()
+        null = os.open(os.devnull, os.O_RDWR)
+        for fd in (0, 1, 2):
+            os.dup2(null, fd)
+        work()
+    except BaseException:  # noqa: BLE001 - nobody is left to tell
+        log(hook.data_dir, f"{hook.event} detached work failed\n{traceback.format_exc()}")
+    finally:
+        os._exit(0)
+
+
 def _log_denial(hook, lc, cli, given, text):
     """The denial as an important `blocked` event in the fleet's ledger (land-check's find_ledger: given, the moved
     fleet's folder the gate named, else $FLEET_DIR, else the served fleet among the session's processes; else the
-    session's own fleet folder)."""
-    import subprocess
+    session's own fleet folder). The ledger is found here, as the session's processes are this one's parents, and
+    written by a detached process: the write can take 50 s (two fleet-run calls of CLI_TIMEOUT_S), and past the hook's
+    30 s Claude Code discards its output and runs the call, so a denial waiting on its log is a push let through."""
     found = lc.find_ledger(given)
-    for d in [str(found.parent)] if found else fleet_dirs(hook)[:1]:
+    dirs = [str(found.parent)] if found else fleet_dirs(hook)[:1]
+    if dirs:
+        _detached(hook, lambda: _write_denial(hook, cli, dirs, text))
+
+
+def _write_denial(hook, cli, dirs, text):
+    import subprocess
+    for d in dirs:
         worker = _refused_worker(read_ledger(d) or {}, hook.input.get("agent_id"), hook.env)
         if moved(d):
             try:

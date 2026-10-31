@@ -13,6 +13,7 @@ import json
 import os
 import re
 import resource
+import select
 import shlex
 import shutil
 import statistics
@@ -5261,6 +5262,28 @@ class LandTurnGateTest(FleetCase):
         self.jj("config", "set", "--repo", "aliases.p", '["git", "push"]')
         subprocess.run(["git", "-C", str(self.work), "config", "alias.pub", "push origin HEAD:refs/heads/master"], check=True)
         self.calls = self.tmp / "cli-calls"
+        self.ledger = self.fleet / "state.json"
+        self.detached = []
+        self.addCleanup(self.logs_ended)
+
+    def hook(self, event, payload=None, raw=None, env=None):
+        """HookCase's, handing the hook the write end of a pipe: anything it leaves running keeps that end open, so the
+        read end's EOF says the hook's detached work has ended. The temporary folder goes only after that."""
+        read, write = os.pipe()
+        self.detached.append(read)
+        try:
+            return subprocess.run([str(HOOK), event], input=raw if raw is not None else json.dumps(payload or {}),
+                                  capture_output=True, text=True, env={**self.env, **(env or {})}, timeout=30,
+                                  pass_fds=(write,))
+        finally:
+            os.close(write)
+
+    def logs_ended(self):
+        while self.detached:
+            read = self.detached.pop()
+            ended, _, _ = select.select([read], [], [], 60)
+            os.close(read)
+            self.assertTrue(ended, "a denial's log did not end")
 
     def jj(self, *args, cwd=None):
         subprocess.run(["jj", *args], cwd=cwd or self.work, env={**os.environ, **self.env}, check=True,
@@ -5292,14 +5315,88 @@ class LandTurnGateTest(FleetCase):
         self.assertEqual(r.returncode, 0, r.stderr)
         return r
 
-    def denied(self, r):
+    def reason(self, r):
         self.assertTrue(r.stdout, f"not denied; stderr: {r.stderr}; log: {self.log()}")
         decision = json.loads(r.stdout)["hookSpecificOutput"]
         self.assertEqual(decision["permissionDecision"], "deny")
         return decision["permissionDecisionReason"]
 
+    def denied(self, r):
+        """The denial's reason, once its log ended: the hook logs out of its own process, after it answered."""
+        reason = self.reason(r)
+        self.logs_ended()
+        return reason
+
     def events(self):
-        return [e for e in json.loads((self.fleet / "state.json").read_text())["events"] if e.get("kind") == "blocked"]
+        return [e for e in json.loads(self.ledger.read_text())["events"] if e.get("kind") == "blocked"]
+
+    def held_log(self, name):
+        """A stand-in that starts as the denial's log would and waits for `go` before it says so in `logged`: how long
+        it holds the hook is how long a slow log would. `turn` answers at once, as a fleet without the turn."""
+        go, logged = self.tmp / "go", self.tmp / "logged"
+        stand_in = self.tmp / name
+        stand_in.write_text(f"""#!/bin/sh
+if [ "$1" = turn ]; then echo 'turn: p does not hold the landing turn (l1)' >&2; exit 1; fi
+n=0
+while [ ! -e {go} ] && [ $n -lt 1200 ]; do sleep 0.05; n=$((n + 1)); done
+: >{logged}
+""")
+        stand_in.chmod(0o755)
+        return stand_in, go, logged
+
+    def assert_denied_before_the_log(self, env, go, logged):
+        """The hook's answer is out, and the hook gone with its pipes closed (subprocess.run waits for both), while the
+        log has not finished; the log then ends on its own."""
+        started = time.monotonic()
+        r = self.push("jj git push --bookmark master", env=env)
+        took = time.monotonic() - started
+        self.assertIn("doesn't hold the landing turn", self.reason(r))
+        self.assertLess(took, 25, "the log held the hook's answer")
+        self.assertFalse(logged.exists())
+        go.touch()
+        self.logs_ended()
+        self.assertTrue(logged.exists())
+
+    def test_a_slow_log_does_not_hold_the_denial(self):
+        """Claude Code reads a hook's output when it exits, and past the hook's timeout discards it and runs the call:
+        a denial held by its log is a push let through."""
+        self.manager(("l1", "current", "infra"))
+        cli, go, logged = self.held_log("slow-fleet")
+        self.assert_denied_before_the_log({"TSTACK_FLEET_CLI": str(cli)}, go, logged)
+
+    def test_a_slow_program_does_not_hold_a_moved_fleets_denial(self):
+        MovedFleet.move(self)
+        self.manager(("l1", "current", "infra"))
+        cli, go, logged = self.held_log("slow-fleet")
+        self.assert_denied_before_the_log({"TSTACK_FLEET_CLI": str(cli), "TSTACK_FLEET_RUN": str(cli)}, go, logged)
+
+    @unittest.skipUnless(Path("/proc/self/fd").is_dir(), "reads the detached process's descriptors in /proc")
+    def test_the_denials_log_holds_none_of_the_hooks_pipes(self):
+        """Claude Code waits on the hook's stdout and stderr, and its stdin is one more pipe of the session's."""
+        self.manager(("l1", "current", "infra"))
+        seen = self.tmp / "descriptors"
+        cli = self.tmp / "fleet-stand-in"
+        cli.write_text(f"""#!/bin/sh
+if [ "$1" = turn ]; then echo 'turn: p does not hold the landing turn (l1)' >&2; exit 1; fi
+for fd in 0 1 2; do readlink /proc/$PPID/fd/$fd >>{seen}; done
+""")
+        cli.chmod(0o755)
+        self.denied(self.push("jj git push --bookmark master", env={"TSTACK_FLEET_CLI": str(cli)}))
+        self.assertEqual(seen.read_text().split(), ["/dev/null", "/dev/null", "/dev/null"])
+
+    def test_a_fleet_found_only_by_the_sessions_process_gets_its_denial_logged(self):
+        """Once the hook exits, the detached write has no session among its parents: the ledger is found before."""
+        self.env["XDG_STATE_HOME"] = str(self.tmp / "state")
+        home = self.tmp / "state" / "fleet" / "p"
+        home.mkdir(parents=True)
+        (home / "state.json").write_text((self.fleet / "state.json").read_text())
+        (self.fleet / "state.json").unlink()
+        self.ledger = home / "state.json"
+        self.register(home)
+        self.manager(("l1", "current", "infra"), ("l2", "pending", "p"))
+        self.denied(self.push("jj git push --bookmark master"))
+        [event] = self.events()
+        self.assertIn("Push gate: refused `jj git push --bookmark master`", event["text"])
 
     def test_a_push_without_the_turn_is_denied_and_logged(self):
         self.manager(("l1", "current", "infra"), ("l2", "pending", "p"))
@@ -5330,6 +5427,7 @@ class LandTurnGateTest(FleetCase):
         home.mkdir(parents=True)
         (home / "state.json").write_text((self.fleet / "state.json").read_text())
         (self.fleet / "state.json").unlink()
+        self.ledger = home / "state.json"
         self.register(home)
         self.manager(("l1", "current", "infra"), ("l2", "pending", "p"))
         self.denied(self.push("jj git push --bookmark master"))  # served: found by the session's process, remembered
