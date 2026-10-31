@@ -18,6 +18,7 @@ export interface Sent {
 export interface Reply {
   readonly status: number;
   readonly body: unknown;
+  readonly headers?: Readonly<Record<string, string>>;
   readonly before?: () => void;
 }
 
@@ -52,7 +53,7 @@ export function fakeHost(replies: Readonly<Record<string, Reply>>): FakeHost {
       if (reply === undefined) return Response.json({ error: "no such route" }, { status: 404 });
       reply.before?.();
 
-      return Response.json(reply.body, { status: reply.status });
+      return Response.json(reply.body, { status: reply.status, headers: reply.headers ?? {} });
     },
   });
 
@@ -65,9 +66,10 @@ export function fakeHost(replies: Readonly<Record<string, Reply>>): FakeHost {
 /** Team `id`'s ledger folder under `home`, where the host makes it. */
 export const ledgerAt = (home: string, id: string): string => join(home, ".local", "state", "fleet", id);
 
-/** What the host does before it answers a join: makes the team's folder and, once its lane cut it over, its cloud.json. */
-export function cutOver(home: string, id: string): void {
-  mkdirSync(ledgerAt(home, id), { recursive: true });
-  writeFileSync(join(ledgerAt(home, id), "cloud.json"), JSON.stringify({ fleet: id, cloud: "https://fleet.example.dev", since: "2026-10-30T10:00:00Z", host: "office", run: "http://127.0.0.1:7633" }));
+/** What the host does before it answers a join: makes the team's folder (`dir`, else its fixed home) and, once its
+ * lane cut it over, its cloud.json. */
+export function cutOver(home: string, id: string, dir = ledgerAt(home, id)): void {
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, "cloud.json"), JSON.stringify({ fleet: id, cloud: "https://fleet.example.dev", since: "2026-10-30T10:00:00Z", host: "office", run: "http://127.0.0.1:7633", project: "court" }));
 }
 

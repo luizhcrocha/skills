@@ -27,22 +27,37 @@ interface Place {
 }
 
 function place(host: FakeHost, remote: string | undefined = "git@github.com:CoelhoRocha/Custom-MCP-Servers.git"): Place {
+  return placeWith(host, (repo) => {
+    git(repo, "init", "-q");
+
+    if (remote !== undefined) git(repo, "remote", "add", "origin", remote);
+  });
+}
+
+/** A machine whose repo `setup` makes, given its folder. */
+function placeWith(host: FakeHost, setup: (repo: string) => void): Place {
   const home = tmp("fleet-project-home-");
   const repo = join(home, "repos", "coelhorocha", "custom-mcp-servers");
   mkdirSync(join(home, ".local", "state", "fleet-board"), { recursive: true });
   mkdirSync(join(repo, "src", "deep"), { recursive: true });
-  git(repo, "init", "-q");
-
-  if (remote !== undefined) git(repo, "remote", "add", "origin", remote);
+  setup(repo);
   const env = baseEnv(join(home, ".local", "state", "fleet-board"), { HOME: home, FLEET_RUN_URL: host.origin, CLAUDE_CODE_SESSION_ID: "sess-1" });
 
   return { home, repo, env };
 }
 
 function git(cwd: string, ...args: string[]): void {
-  const done = spawnSync("git", args, { cwd, encoding: "utf8" });
+  tool("git", cwd, args);
+}
 
-  if (done.status !== 0) throw new Error(`git ${args.join(" ")}: ${done.stderr}`);
+function jj(cwd: string, ...args: string[]): void {
+  tool("jj", cwd, args);
+}
+
+function tool(name: string, cwd: string, args: readonly string[]): void {
+  const done = spawnSync(name, args, { cwd, encoding: "utf8" });
+
+  if (done.status !== 0) throw new Error(`${name} ${args.join(" ")}: ${done.stderr}`);
 }
 
 const ledger = (at: Place, id: string): string => ledgerAt(at.home, id);
@@ -176,6 +191,42 @@ describe("join and manage", () => {
     expect(host.sent[0]?.body).toMatchObject({ repo: "luizhcrocha/fleet" });
   });
 
+  test("a jj remote with a push URL is named by its fetch URL", async () => {
+    let at: Place | undefined;
+    const host = fakeHost({ "POST /projects/court/teams": { status: 201, body: TEAM("api"), before: () => at !== undefined && cutOver(at.home, "api") } });
+    at = placeWith(host, (repo) => {
+      jj(repo, "git", "init", "--quiet");
+      jj(repo, "git", "remote", "add", "origin", "git@github.com:LuizHCRocha/Skills.git", "--push-url", "git@github.com:LuizHCRocha/Skills-Push.git");
+    });
+    await project(at, at.repo, ["join", "court", "--team", "api"]);
+
+    expect(host.sent[0]?.body).toMatchObject({ repo: "luizhcrocha/skills" });
+  });
+
+  test("a jj remote that names no owner/name falls through to git's origin", async () => {
+    let at: Place | undefined;
+    const host = fakeHost({ "POST /projects/court/teams": { status: 201, body: TEAM("api"), before: () => at !== undefined && cutOver(at.home, "api") } });
+    at = placeWith(host, (repo) => {
+      jj(repo, "git", "init", "--quiet", "--no-colocate");
+      git(repo, "init", "-q");
+      git(repo, "remote", "add", "origin", "https://github.com/LuizHCRocha/Fleet.git");
+      jj(repo, "git", "remote", "add", "origin", join(repo, "no!such"));
+    });
+    await project(at, at.repo, ["join", "court", "--team", "api"]);
+
+    expect(host.sent[0]?.body).toMatchObject({ repo: "luizhcrocha/fleet" });
+  });
+
+  test("the team's folder is the dir the host answers with, when it names one", async () => {
+    let at: Place | undefined;
+    const dir = join(tmp("fleet-project-dir-"), "api");
+    const host = fakeHost({ "POST /projects/court/teams": { status: 201, body: { ...TEAM("api"), dir }, before: () => at !== undefined && cutOver(at.home, "api", dir) } });
+    at = place(host);
+    const ran = await project(at, at.repo, ["join", "court", "--team", "api"]);
+
+    expect(ran).toEqual({ code: 0, stdout: `joined project court as team api (coelhorocha/custom-mcp-servers, coordinator)\nYour ledger is ${dir}.\n`, stderr: "" });
+  });
+
   test("outside a repo nothing is sent", async () => {
     const host = fakeHost({});
     const at = place(host);
@@ -196,8 +247,6 @@ describe("refusals", () => {
     ["join", "ManyTeams", { status: 409, body: { _tag: "ManyTeams", project: "court", repo: "coelhorocha/custom-mcp-servers", teams: ["api", "web"] } }, "this machine has several teams of project court for coelhorocha/custom-mcp-servers (api, web): name one with --team"],
     ["join", "TeamTaken", { status: 409, body: { _tag: "TeamTaken", team: "api" } }, "the team id api is taken by another project, repo or machine: name another with --team"],
     ["manage", "TeamNotManager", { status: 409, body: { _tag: "TeamNotManager", team: "api" } }, "the team api of this machine is a coordinator's team, not a manager team: name another with --team"],
-    ["archive", "NotArchived", { status: 409, body: { _tag: "NotArchived", project: "court" } }, "project court is still open, and only an archived project is deleted"],
-    ["archive", "DeclaredByFleets", { status: 409, body: { _tag: "DeclaredByFleets", project: "court", teams: ["api", "web"] } }, "project court still has teams the FLEETS var declares (api, web): it is deleted once FLEETS no longer names them"],
     ["join", "UnknownProject", { status: 404, body: { _tag: "UnknownProject", project: "court" } }, "the registry has no project court: `fleet project new` makes one"],
     ["new", "BadRegistryBody", { status: 400, body: { _tag: "BadRegistryBody", issue: "Expected a string, got 3" } }, "the registry refused what was sent: Expected a string, got 3"],
     ["archive", "NotAllowed", { status: 403, body: { _tag: "NotAllowed", who: "host" } }, "this machine may not: a project is archived by the machine that made it, or by the owner from its page"],
@@ -226,9 +275,22 @@ describe("refusals", () => {
     expect(down.code).toBe(1);
     expect(down.stderr).toStartWith(`project: nothing answers at ${gone.origin}: this machine's fleet-host is not running (`);
 
-    const off = await project({ ...at, env: { ...at.env, FLEET_RUN_URL: "https://example.com:7633" } }, at.repo, ["list"]);
+    for (const given of ["https://example.com:7633", "http://[::1]:7633", "http://localhost:7633"]) {
+      const off = await project({ ...at, env: { ...at.env, FLEET_RUN_URL: given } }, at.repo, ["list"]);
 
-    expect(off).toEqual({ code: 1, stdout: "", stderr: "project: FLEET_RUN_URL is https://example.com:7633; it is the host service's http address on 127.0.0.1 with its port\n" });
+      expect(off).toEqual({ code: 1, stdout: "", stderr: `project: FLEET_RUN_URL is ${given}; it is the host service's http address on 127.0.0.1 with its port\n` });
+    }
+  });
+
+  test("a host that answers with a redirect is not followed", async () => {
+    const elsewhere = fakeHost({ "POST /projects": { status: 201, body: PROJECT } });
+    const host = fakeHost({ "POST /projects": { status: 307, body: {}, headers: { location: `${elsewhere.origin}/projects` } } });
+    const at = place(host);
+    const ran = await project(at, at.repo, ["new", "Court integrations"]);
+
+    expect(ran.code).toBe(1);
+    expect(ran.stderr).toStartWith(`project: ${host.origin} answered with a redirect, which the host service never sends: another service listens there (`);
+    expect(elsewhere.sent).toEqual([]);
   });
 
   test("a command not among them is a usage error", async () => {
@@ -243,7 +305,7 @@ describe("refusals", () => {
 describe("archive and list", () => {
   const ARCHIVED = { ...PROJECT, state: "archived", archivedAt: "2026-10-30T12:00:00.000Z" };
 
-  test("archive says the project is read-only, and names this machine's team folders to prune", async () => {
+  test("archive says the project is read-only, and for each team here the agent to stop and that its workspaces go by hand", async () => {
     const host = fakeHost({
       "POST /projects/court/archive": { status: 200, body: ARCHIVED },
       "GET /projects": { status: 200, body: { machine: "office", projects: [ARCHIVED], teams: [TEAM("api"), { ...TEAM("other"), project: "tstack" }] } },
@@ -256,10 +318,10 @@ describe("archive and list", () => {
       code: 0,
       stdout:
         "project court archived 2026-10-30T12:00:00.000Z: read-only from now on; its pages and ledgers still read\n" +
-        `team api: stop its agent (\`fleet team stop NAME\` in its repo), then \`fleet ws ${ledger(at, "api")} prune --apply\`\n`,
+        "team api: stop its agent with `fleet team stop api` in its repo; no command takes out a moved team's workspaces yet, so take them out by hand as the coordinator skill's PROGRAMS.md says (\"What stays on the old CLI\")\n",
       stderr: "",
     });
-    expect(host.sent.map((s) => `${s.method} ${s.path} ${JSON.stringify(s.body)}`)).toEqual(["POST /projects/court/archive {}", "GET /projects undefined"]);
+    expect(host.sent.map((s) => `${s.method} ${s.path} ${s.type} ${JSON.stringify(s.body)}`)).toEqual(["POST /projects/court/archive application/json {}", "GET /projects null undefined"]);
   });
 
   test("list prints this machine's projects, each with its teams here", async () => {

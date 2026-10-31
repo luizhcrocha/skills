@@ -4,7 +4,8 @@
  * nearest folder up from here holding `.fleet/agents`. No NAME is every agent, for start and list; stop names
  * them, or `all`. attach takes none. start first makes sure Claude Code trusts the repo (team/trust.ts), asking
  * on the terminal unless `--trust`, and joins an agent of a project (`fleet.project`) whose ledger is not cut over to
- * the cloud yet, through the host service (cli/project.ts). TypeScript only.
+ * the cloud yet, through the host service (cli/project.ts), the trust and the session's owner settled before any
+ * team is made in the cloud. TypeScript only.
  */
 import { readSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -89,11 +90,20 @@ interface Joins extends Said {
   readonly ready: readonly Agent[];
 }
 
+/** The project `agent` joins before it starts and its ledger, when it is a local agent of a project whose ledger
+ * holds no cloud.json; else undefined. */
+function toJoin(machine: Machine, agent: Agent, home: string): { readonly project: string; readonly ledger: string } | undefined {
+  const project = agent.fleet.project;
+  const ledger = ledgerOf(agent, machine.registry.known(), home);
+
+  return project === undefined || agent.fleet.machine !== "local" || "why" in ledger || isMoved(ledger.ledger) ? undefined : { project, ledger: ledger.ledger };
+}
+
 /**
- * Each local agent of a project whose ledger holds no cloud.json joins the project first, as its role, under its
- * own name as the team's id, so its ledger is the one {@link ledgerOf} finds, which the host makes and cuts over;
- * the start waits at most `waitMs` for that. An agent whose join is refused, or that the registry gives another
- * team, does not start.
+ * Each agent {@link toJoin} names joins its project first, as its role, under its own name as the team's id, so
+ * its ledger is the one {@link ledgerOf} finds, which the host makes and cuts over; the start waits at most
+ * `waitMs` for that. An agent whose join is refused, that the registry gives another team, whose folder the host
+ * named elsewhere, or whose file names its own ledger, does not start.
  */
 function joinFirst(machine: Machine, team: Team, agents: readonly Agent[], home: string, waitMs: number): Effect.Effect<Joins> {
   return Effect.gen(function* () {
@@ -102,11 +112,20 @@ function joinFirst(machine: Machine, team: Team, agents: readonly Agent[], home:
     const ready: Agent[] = [];
 
     for (const agent of agents) {
-      const project = agent.fleet.project;
-      const ledger = ledgerOf(agent, machine.registry.known(), home);
+      const joining = toJoin(machine, agent, home);
 
-      if (project === undefined || agent.fleet.machine !== "local" || "why" in ledger || isMoved(ledger.ledger)) {
+      if (joining === undefined) {
         ready.push(agent);
+        continue;
+      }
+
+      const { project, ledger } = joining;
+
+      if (agent.fleet.ledger !== undefined) {
+        refused.push(
+          `${agent.name}: names both fleet.ledger (${ledger}, not cut over to the cloud) and fleet.project, and the join makes the team's folder itself: ` +
+            `drop fleet.ledger, or set it to the joined team's folder once \`fleet project ${agent.fleet.role === "manager" ? "manage" : "join"} ${project}\` has printed it`,
+        );
         continue;
       }
 
@@ -117,7 +136,8 @@ function joinFirst(machine: Machine, team: Team, agents: readonly Agent[], home:
         continue;
       }
 
-      const joined = yield* Effect.result(joinProject(machine, { project, role: agent.fleet.role, team: agent.name, repo }));
+      const taken = `rename the agent's file, ${join(team.repo, ".fleet", "agents", `${agent.name}.json`)}, as its name is the team's id`;
+      const joined = yield* Effect.result(joinProject(machine, { project, role: agent.fleet.role, team: agent.name, repo, taken }));
 
       if (Result.isFailure(joined)) {
         refused.push(`${agent.name}: ${joined.failure.why}`);
@@ -130,9 +150,15 @@ function joinFirst(machine: Machine, team: Team, agents: readonly Agent[], home:
       }
 
       lines.push(`${agent.name}: ${joined.success.line}`);
+      const dir = joined.success.dir ?? ledger;
 
-      if (!(yield* awaitMoved(ledger.ledger, waitMs))) {
-        refused.push(`${agent.name}: the host has not cut ${ledger.ledger} over to the cloud yet (no cloud.json after ${waitMs / 1000} s): \`fleet team start ${agent.name}\` again waits for it`);
+      if (dir !== ledger) {
+        refused.push(`${agent.name}: the host made team ${agent.name}'s folder at ${dir}, not ${ledger}: set fleet.ledger in ${agent.name}.json to ${dir}`);
+        continue;
+      }
+
+      if (!(yield* awaitMoved(ledger, waitMs))) {
+        refused.push(`${agent.name}: the host has not cut ${ledger} over to the cloud yet (no cloud.json after ${waitMs / 1000} s): \`fleet team start ${agent.name}\` again waits for it`);
         continue;
       }
 
@@ -204,10 +230,25 @@ function run(machine: Machine, argv: readonly string[], launcherAt: (state: stri
         return "why" in trusted ? trusted : { line: trusted._tag === "Written" ? trusted.line : undefined };
       };
 
-      const joins = yield* joinFirst(machine, team, agents, home, waitMs);
-      const started = startTeam(ground, joins.ready, before);
+      const early: string[] = [];
+      let gate = before;
 
-      return yield* said({ lines: [...joins.lines, ...started.lines], refused: [...joins.refused, ...started.refused] });
+      if (agents.some((agent) => toJoin(machine, agent, home) !== undefined)) {
+        const other = heldElsewhere(ground);
+
+        if (other !== undefined) return yield* refuse(other.why);
+        const ready = before();
+
+        if ("why" in ready) return yield* refuse(ready.why);
+
+        if (ready.line !== undefined) early.push(ready.line);
+        gate = () => ({ line: undefined });
+      }
+
+      const joins = yield* joinFirst(machine, team, agents, home, waitMs);
+      const started = startTeam(ground, joins.ready, gate);
+
+      return yield* said({ lines: [...early, ...joins.lines, ...started.lines], refused: [...joins.refused, ...started.refused] });
     }
 
     if (command === "stop") return yield* said(stopTeam(ground, agents, force));

@@ -72,8 +72,8 @@ const FIELDS = ["name", "description", "model", "system", "tools", "multiagent",
 /** The fields of its `fleet` block. */
 const FLEET_FIELDS = ["role", "opening", "remote_control", "machine", "ledger", "project"];
 
-/** A project's id, as the cloud's registry names it. */
-const PROJECT = /^[a-z0-9][a-z0-9-]{0,63}$/;
+/** A project's or a team's id, as the cloud's registry names them. */
+const FLEET_ID = /^[a-z0-9][a-z0-9-]{0,63}$/;
 
 /** A standing agent's name: its file, its block and its conversation's `--name`. */
 const NAME = /^[a-z][a-z0-9_-]{0,31}$/;
@@ -145,7 +145,7 @@ function parseFleet(raw: JsonObject, file: string, home: string): Agent["fleet"]
 
   if ("why" in project) return project;
 
-  if (project.text !== undefined && !PROJECT.test(project.text))
+  if (project.text !== undefined && !FLEET_ID.test(project.text))
     return { why: `${file}: fleet.project is '${project.text}'; it is a project's id (lower-case letters, digits and -), as \`fleet project list\` prints it` };
   const remote = block["remote_control"] === undefined ? true : asBoolean(block["remote_control"]);
 
@@ -176,6 +176,9 @@ export function parseAgent(name: string, text: string, home = ""): Agent | Why {
   const fleet = parseFleet(raw, file, home);
 
   if ("why" in fleet) return fleet;
+
+  if (fleet.project !== undefined && !FLEET_ID.test(name))
+    return { why: `${file}: an agent of a project (fleet.project) is named by lower-case letters, digits and - only: its name is its team's id; rename the file` };
   const model = parseModel(raw, file, ROLE_DEFAULTS[fleet.role].model);
 
   if ("why" in model) return model;

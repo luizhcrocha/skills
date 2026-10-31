@@ -7,12 +7,12 @@
  * said in words.
  */
 import { spawnSync } from "node:child_process";
-import { basename, dirname, join, relative, sep } from "node:path";
+import { basename, dirname, isAbsolute, join, relative, sep } from "node:path";
 
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 
-import { UsageError } from "../errors.ts";
+import { Refusal, UsageError } from "../errors.ts";
 import { exists, isMoved } from "../files.ts";
 import { Out } from "../io.ts";
 import { asArray, asObject, asString, parseObject, pyStr, type Json, type JsonObject } from "../json.ts";
@@ -67,17 +67,20 @@ export interface Repo {
   readonly id: string;
 }
 
-/** What a join asks: the project, the role, the team's id when one is named, the repo. */
+/** What a join asks: the project, the role, the team's id when one is named, the repo; `taken` is what to do when
+ * that id is another's (default: name another with --team). */
 export interface JoinAsk {
   readonly project: string;
   readonly role: Role;
   readonly team: string | undefined;
   readonly repo: Repo;
+  readonly taken?: string;
 }
 
-/** The team a join gave and what to say of it. */
+/** The team a join gave, its folder when the host named it, and what to say of it. */
 export interface Joined {
   readonly team: string;
+  readonly dir: string | undefined;
   readonly line: string;
 }
 
@@ -93,14 +96,14 @@ function hostOf(machine: Machine): { readonly origin: string } | Why {
   const text = given === undefined || given === "" ? HOST : given;
   const url = URL.parse(text);
 
-  return url !== null && url.protocol === "http:" && (url.hostname === "127.0.0.1" || url.hostname === "[::1]") && url.port !== ""
+  return url !== null && url.protocol === "http:" && url.hostname === "127.0.0.1" && url.port !== ""
     ? { origin: url.origin }
     : { why: `FLEET_RUN_URL is ${text}; it is the host service's http address on 127.0.0.1 with its port` };
 }
 
 /** `method path` asked of the host service at `origin`, with `body` as JSON; the reply, or why none came. */
 async function call(origin: string, method: "GET" | "POST", path: string, body?: JsonObject): Promise<Reply | Why> {
-  const init: RequestInit = { method, signal: AbortSignal.timeout(60_000) };
+  const init: RequestInit = { method, redirect: "error", signal: AbortSignal.timeout(60_000) };
 
   if (body !== undefined) {
     init.headers = { "content-type": "application/json" };
@@ -113,12 +116,18 @@ async function call(origin: string, method: "GET" | "POST", path: string, body?:
 
     return { status: response.status, body: Option.getOrUndefined(parseObject(text)), text };
   } catch (cause) {
-    return { why: `nothing answers at ${origin}: this machine's fleet-host is not running (${cause instanceof Error ? cause.message : String(cause)})` };
+    const said = cause instanceof Error ? cause.message : String(cause);
+
+    return cause instanceof Error && "code" in cause && cause.code === "UnexpectedRedirect"
+      ? { why: `${origin} answered with a redirect, which the host service never sends: another service listens there (${said})` }
+      : { why: `nothing answers at ${origin}: this machine's fleet-host is not running (${said})` };
   }
 }
 
+type Words = (body: JsonObject) => string;
+
 /** Each refusal the registry, the cloud's access or the host answers with, in words. */
-const REFUSALS = new Map<string, (body: JsonObject) => string>([
+const REFUSALS = new Map<string, Words>([
   [
     "ProjectExists",
     (b) =>
@@ -129,19 +138,22 @@ const REFUSALS = new Map<string, (body: JsonObject) => string>([
   ["ProjectArchived", (b) => `project ${str(b["project"])} is archived: it is read-only, and no team joins it`],
   ["HasManager", (b) => `project ${str(b["project"])} has a manager already, the team ${str(b["team"])} of another repo or machine`],
   ["ManyTeams", (b) => `this machine has several teams of project ${str(b["project"])} for ${str(b["repo"])} (${strs(b["teams"])}): name one with --team`],
-  ["TeamTaken", (b) => `the team id ${str(b["team"])} is taken by another project, repo or machine: name another with --team`],
   ["TeamNotManager", (b) => `the team ${str(b["team"])} of this machine is a coordinator's team, not a manager team: name another with --team`],
-  ["NotArchived", (b) => `project ${str(b["project"])} is still open, and only an archived project is deleted`],
-  ["DeclaredByFleets", (b) => `project ${str(b["project"])} still has teams the FLEETS var declares (${strs(b["teams"])}): it is deleted once FLEETS no longer names them`],
   ["UnknownProject", (b) => `the registry has no project ${str(b["project"])}: \`fleet project new\` makes one`],
   ["BadRegistryBody", (b) => `the registry refused what was sent: ${str(b["issue"])}`],
   ["NotAllowed", () => "this machine may not: a project is archived by the machine that made it, or by the owner from its page"],
 ]);
 
-/** Why the host service did not do what was asked, from its answer. */
-function refusalOf(reply: Reply): Why {
+/** A team id taken, and what to do about it. */
+const teamTaken =
+  (then: string): Words =>
+  (b) =>
+    `the team id ${str(b["team"])} is taken by another project, repo or machine: ${then}`;
+
+/** Why the host service did not do what was asked, from its answer; `more` words a refusal REFUSALS does not. */
+function refusalOf(reply: Reply, more: ReadonlyMap<string, Words>): Why {
   const tag = asString(reply.body?.["_tag"]);
-  const words = tag === undefined ? undefined : REFUSALS.get(tag);
+  const words = tag === undefined ? undefined : (more.get(tag) ?? REFUSALS.get(tag));
 
   if (words !== undefined && reply.body !== undefined) return { why: words(reply.body) };
   const error = asString(reply.body?.["error"]);
@@ -152,8 +164,8 @@ function refusalOf(reply: Reply): Why {
   return { why: error ?? `the host answered ${reply.status}: ${reply.text}` };
 }
 
-/** Ask the host service, and take its 2xx answer's body; any other answer is its refusal. */
-function ask(machine: Machine, method: "GET" | "POST", path: string, body?: JsonObject): Effect.Effect<{ readonly status: number; readonly body: JsonObject }, Why> {
+/** Ask the host service, and take its 2xx answer's body; any other answer is its refusal, worded by `more` first. */
+function ask(machine: Machine, method: "GET" | "POST", path: string, body?: JsonObject, more: ReadonlyMap<string, Words> = new Map()): Effect.Effect<{ readonly status: number; readonly body: JsonObject }, Why> {
   return Effect.gen(function* () {
     const origin = hostOf(machine);
 
@@ -162,7 +174,7 @@ function ask(machine: Machine, method: "GET" | "POST", path: string, body?: Json
 
     if ("why" in reply) return yield* Effect.fail(reply);
 
-    if (reply.status < 200 || reply.status > 299 || reply.body === undefined) return yield* Effect.fail(refusalOf(reply));
+    if (reply.status < 200 || reply.status > 299 || reply.body === undefined) return yield* Effect.fail(refusalOf(reply, more));
 
     return { status: reply.status, body: reply.body };
   });
@@ -182,18 +194,21 @@ function repoIdOf(url: string): string | undefined {
   return parts.length >= 2 && REPO_ID.test(id) ? id : undefined;
 }
 
-/** The origin remote's URL of the repo at `root`: jj's when it is a jj repo, else git's. */
-function originOf(root: string): string | undefined {
+/** The `owner/name` of the repo at `root` by its origin remote: jj's fetch URL when it is a jj repo and that names
+ * one (`origin <url>`, then ` (push: <url>)` when a push URL is set), else git's; undefined when neither does. */
+function originIdOf(root: string): string | undefined {
   if (exists(join(root, ".jj"))) {
     const listed = spawnSync("jj", ["git", "remote", "list", "--ignore-working-copy"], { cwd: root, encoding: "utf8" });
     const line = listed.status === 0 ? listed.stdout.split("\n").find((l) => l.startsWith("origin ")) : undefined;
+    const url = line?.slice("origin ".length).split(" ")[0];
+    const id = url === undefined ? undefined : repoIdOf(url);
 
-    if (line !== undefined) return line.slice("origin ".length);
+    if (id !== undefined) return id;
   }
 
   const got = spawnSync("git", ["remote", "get-url", "origin"], { cwd: root, encoding: "utf8" });
 
-  return got.status === 0 ? got.stdout.trim() : undefined;
+  return got.status === 0 ? repoIdOf(got.stdout) : undefined;
 }
 
 /** The repo `cwd` is in, the nearest folder up holding `.jj` or `.git`, named by its origin remote; else by its
@@ -206,8 +221,7 @@ export function repoAt(cwd: string, home: string): Repo | Why {
     root = dirname(root);
   }
 
-  const remote = originOf(root);
-  const fromRemote = remote === undefined ? undefined : repoIdOf(remote);
+  const fromRemote = originIdOf(root);
 
   if (fromRemote !== undefined) return { root, id: fromRemote };
   const under = relative(join(home, "repos"), root);
@@ -235,11 +249,17 @@ function bodyOf(machine: Machine, fields: Readonly<Record<string, string | undef
 export function joinProject(machine: Machine, asked: JoinAsk): Effect.Effect<Joined, Why> {
   return Effect.gen(function* () {
     const body = bodyOf(machine, { repo: asked.repo.id, path: asked.repo.root, role: asked.role, team: asked.team });
-    const answer = yield* ask(machine, "POST", `/projects/${encodeURIComponent(asked.project)}/teams`, body);
+    const more = new Map([["TeamTaken", teamTaken(asked.taken ?? "name another with --team")]]);
+    const answer = yield* ask(machine, "POST", `/projects/${encodeURIComponent(asked.project)}/teams`, body, more);
     const team = str(answer.body["id"]);
+    const dir = asString(answer.body["dir"]);
     const how = answer.status === 201 ? "joined" : "already in";
 
-    return { team, line: `${how} project ${str(answer.body["project"])} as team ${team} (${str(answer.body["repo"])}, ${str(answer.body["role"])})` };
+    return {
+      team,
+      dir: dir !== undefined && isAbsolute(dir) ? dir : undefined,
+      line: `${how} project ${str(answer.body["project"])} as team ${team} (${str(answer.body["repo"])}, ${str(answer.body["role"])})`,
+    };
   });
 }
 
@@ -257,10 +277,11 @@ export function awaitMoved(ledger: string, waitMs: number): Effect.Effect<boolea
   });
 }
 
-/** The team's ledger once its host cut it over, or why it is not there yet; `again` is the command that waits again. */
-export function ledgerOfJoined(machine: Machine, team: string, waitMs: number, again: string): Effect.Effect<string, Why> {
+/** The joined team's ledger once its host cut it over: the folder the host named, else the one {@link ledgerNamed}
+ * finds; or why it is not there yet. `again` is the command that waits again. */
+export function ledgerOfJoined(machine: Machine, joined: Joined, waitMs: number, again: string): Effect.Effect<string, Why> {
   return Effect.gen(function* () {
-    const found = ledgerNamed(team, machine.registry.known(), machine.env("HOME") ?? "");
+    const found = joined.dir === undefined ? ledgerNamed(joined.team, machine.registry.known(), machine.env("HOME") ?? "") : { ledger: joined.dir };
 
     if ("why" in found) return yield* Effect.fail(found);
 
@@ -342,7 +363,7 @@ function run(machine: Machine, argv: readonly string[], cwd: string, waitMs: num
       const joined = yield* joinProject(machine, { project, role, team: args.str("team"), repo });
 
       out.out(`${joined.line}\n`);
-      const ledger = yield* ledgerOfJoined(machine, joined.team, waitMs, `fleet project ${role === "manager" ? "manage" : "join"} ${project} --team ${joined.team}`);
+      const ledger = yield* ledgerOfJoined(machine, joined, waitMs, `fleet project ${role === "manager" ? "manage" : "join"} ${project} --team ${joined.team}`);
 
       out.out(`Your ledger is ${ledger}.\n`);
 
@@ -355,12 +376,11 @@ function run(machine: Machine, argv: readonly string[], cwd: string, waitMs: num
       out.out(`project ${str(archived.body["id"])} archived ${str(archived.body["archivedAt"])}: read-only from now on; its pages and ledgers still read\n`);
       const view = yield* ask(machine, "GET", "/projects");
 
-      for (const team of objects(view.body["teams"]).filter((t) => t["project"] === project)) {
-        const id = str(team["id"]);
-        const found = ledgerNamed(id, machine.registry.known(), machine.env("HOME") ?? "");
-
-        out.out(`team ${id}: stop its agent (\`fleet team stop NAME\` in its repo), then \`fleet ws ${"why" in found ? `<${id}'s ledger>` : found.ledger} prune --apply\`\n`);
-      }
+      for (const team of objects(view.body["teams"]).filter((t) => t["project"] === project))
+        out.out(
+          `team ${str(team["id"])}: stop its agent with \`fleet team stop ${str(team["id"])}\` in its repo; ` +
+            `no command takes out a moved team's workspaces yet, so take them out by hand as the coordinator skill's PROGRAMS.md says ("What stays on the old CLI")\n`,
+        );
 
       return 0;
     }
@@ -381,24 +401,15 @@ function run(machine: Machine, argv: readonly string[], cwd: string, waitMs: num
   });
 }
 
-/** Say why a project command stopped: `project: <why>`, exit 1. */
-function stopped(failure: Why): Effect.Effect<number, never, Out> {
-  return Effect.gen(function* () {
-    const out = yield* Out;
-
-    out.err(`project: ${failure.why}\n`);
-
-    return 1;
-  });
-}
-
 /** `fleet project` with `argv` (after `project`), the repo found from `cwd`, a join waiting at most `waitMs` for its
  * team's cloud.json; the exit code. */
 export function projectWith(argv: readonly string[], cwd: string, waitMs: number): Effect.Effect<number, never, Out | World> {
   return Effect.gen(function* () {
     const machine = yield* World;
 
-    return yield* run(machine, argv, cwd, waitMs).pipe(Effect.catch((failure) => (failure === "help" ? printUsage(HELP) : failure instanceof UsageError ? exitOf(failure) : stopped(failure))));
+    return yield* run(machine, argv, cwd, waitMs).pipe(
+      Effect.catch((failure) => (failure === "help" ? printUsage(HELP) : exitOf(failure instanceof UsageError ? failure : new Refusal({ speaker: "project", reason: failure.why })))),
+    );
   });
 }
 

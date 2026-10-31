@@ -85,6 +85,13 @@ describe("an agent's file", () => {
     expect(parseAgent("UI team", '{"fleet": {"role": "coordinator"}}')).toEqual({ why: "UI team.json: name 'UI team' is lower-case letters, digits, - and _, starting with a letter, at most 32" });
   });
 
+  test("an agent of a project whose name holds _ is refused: its name is its team's id, which holds no _", () => {
+    expect(parseAgent("ui_x", '{"fleet": {"role": "coordinator", "project": "court"}}')).toEqual({
+      why: "ui_x.json: an agent of a project (fleet.project) is named by lower-case letters, digits and - only: its name is its team's id; rename the file",
+    });
+    expect(parseAgent("ui_x", '{"fleet": {"role": "coordinator"}}')).toMatchObject({ name: "ui_x" });
+  });
+
   test("a ledger under ~ is the home's", () => {
     const agent = parseAgent("ui", '{"fleet": {"role": "coordinator", "ledger": "~/led"}}', "/home/u");
 

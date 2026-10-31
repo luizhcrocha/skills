@@ -700,6 +700,65 @@ describe("an agent of a project", () => {
     expect(launcher.prompts).toEqual([`web: /tstack:coordinator Your ledger is ${LEDGER(at, "web")}.`]);
   });
 
+  test("an agent with both fleet.ledger and fleet.project, its ledger not cut over, is refused before any join", async () => {
+    const host = fakeHost({});
+    const at = inProject(place({ ui: `{"fleet": {"role": "coordinator", "project": "court", "ledger": "~/own"}}` }), host);
+    const launcher = new FakeLauncher();
+    const ran = await start(at, launcher);
+
+    expect(ran).toEqual({
+      code: 1,
+      stdout: "",
+      stderr: `team: ui: names both fleet.ledger (${join(at.home, "own")}, not cut over to the cloud) and fleet.project, and the join makes the team's folder itself: drop fleet.ledger, or set it to the joined team's folder once \`fleet project join court\` has printed it\n`,
+    });
+    expect(host.sent).toEqual([]);
+    expect(launcher.calls).toEqual([]);
+  });
+
+  test("the host's dir is where the start waits; one that is not the agent's ledger is refused, naming it", async () => {
+    const dir = join(tmp("fleet-team-dir-"), "ui");
+    const host = fakeHost({ "POST /projects/court/teams": { status: 201, body: { ...TEAM("ui", "coordinator"), dir }, before: () => cutOver("", "ui", dir) } });
+    const at = inProject(place({ ui: '{"fleet": {"role": "coordinator", "project": "court"}}' }), host);
+    const launcher = new FakeLauncher();
+    const ran = await start(at, launcher);
+
+    expect(ran).toEqual({
+      code: 1,
+      stdout: "ui: joined project court as team ui (coelhorocha/custom-mcp-servers, coordinator)\n",
+      stderr: `team: ui: the host made team ui's folder at ${dir}, not ${LEDGER(at, "ui")}: set fleet.ledger in ui.json to ${dir}\n`,
+    });
+    expect(launcher.calls).toEqual([]);
+  });
+
+  test("a team id taken elsewhere says to rename the agent's file, as start has no --team", async () => {
+    const host = fakeHost({ "POST /projects/court/teams": { status: 409, body: { _tag: "TeamTaken", team: "ui" } } });
+    const at = inProject(place({ ui: '{"fleet": {"role": "coordinator", "project": "court"}}' }), host);
+    const ran = await start(at, new FakeLauncher());
+
+    expect(ran).toEqual({
+      code: 1,
+      stdout: "",
+      stderr: `team: ui: the team id ui is taken by another project, repo or machine: rename the agent's file, ${join(at.repo, ".fleet", "agents", "ui.json")}, as its name is the team's id\n`,
+    });
+  });
+
+  test("an untrusted repo, or a session another repo's team holds, is refused before the cloud team is made", async () => {
+    const host = fakeHost({ "POST /projects/court/teams": { status: 201, body: TEAM("ui", "coordinator") } });
+    const untrusted = inProject(place({ ui: '{"fleet": {"role": "coordinator", "project": "court"}}' }), host);
+    writeFileSync(untrusted.claude, "{}");
+
+    expect(await start(untrusted, new FakeLauncher())).toMatchObject({ code: 1, stdout: "", stderr: `team: Claude Code does not trust ${untrusted.repo} yet, and there is no terminal to ask on: \`fleet team start --trust\` trusts it\n` });
+    expect(host.sent).toEqual([]);
+
+    const at = inProject(place({ ui: '{"fleet": {"role": "coordinator", "project": "court"}}' }), host);
+    const launcher = new FakeLauncher();
+    team(twinOf(at), launcher, "start");
+    const ran = await start(at, launcher);
+
+    expect(ran).toEqual({ code: 1, stdout: "", stderr: expect.stringContaining(`which fleet team runs; name this repo's in its .fleet/team.json ("session")`) });
+    expect(host.sent).toEqual([]);
+  });
+
   test("a join that gives the agent another team than its name is refused: its ledger would not be the agent's", async () => {
     const host = fakeHost({ "POST /projects/court/teams": { status: 200, body: TEAM("court-manager", "manager") } });
     const at = inProject(place({ boss: '{"fleet": {"role": "manager", "project": "court"}}' }), host);
