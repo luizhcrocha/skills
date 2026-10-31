@@ -31,6 +31,10 @@ const POLL_MS = 500;
 /** The terminal block's flavor. */
 const TERMINAL = "com.superlogical.terminal.shell";
 
+/** The most one `rex` run may print: `rex capture` prints a block's whole scrollback, up to 64 MiB, and over
+ * spawnSync's default of 1 MiB a run fails with nothing to show. */
+const PRINTED_MAX = 128 * 1024 * 1024;
+
 /** What one `rex` run printed, and its exit code. */
 export interface Ran {
   readonly code: number;
@@ -44,7 +48,8 @@ export type RexRunner = (args: readonly string[], input?: string) => Ran | Why;
 /** The installed `rex`, run to its end. */
 export function rexRunner(bin = "rex"): RexRunner {
   return (args, input) => {
-    const done = input === undefined ? spawnSync(bin, args, { encoding: "utf8" }) : spawnSync(bin, args, { encoding: "utf8", input });
+    const options = { encoding: "utf8", maxBuffer: PRINTED_MAX } as const;
+    const done = input === undefined ? spawnSync(bin, args, options) : spawnSync(bin, args, { ...options, input });
 
     return done.error === undefined ? { code: done.status ?? 1, stdout: done.stdout, stderr: done.stderr } : { why: `rex could not run: ${strerror(done.error)}` };
   };
@@ -228,13 +233,6 @@ export function rexLauncher(options: RexOptions): Launcher {
     return end.ended === undefined ? reported(sid, block) : { ended: end.ended };
   };
 
-  /** The block's program's state now; unknown when rex cannot say. */
-  const statusNow = (sid: string, block: string): Status => {
-    const now = programOf(sid, block);
-
-    return "why" in now ? "unknown" : "ended" in now ? "ended" : statusOf(now.state);
-  };
-
   /** Whether rex lists the session's blocks and `block` is not among them. */
   const gone = (sid: string, block: string): boolean => {
     const blocks = blocksOf(sid);
@@ -242,11 +240,29 @@ export function rexLauncher(options: RexOptions): Launcher {
     return !("why" in blocks) && !blocks.some((b) => b.id === block);
   };
 
-  /** The last lines the block shows, for a start that failed. */
+  /** The last lines the block shows, for a program that ended. */
   const tail = (sid: string, block: string): string => {
     const ran = run(["capture", "-s", sid, "-b", block, "--trim"]);
 
     return "why" in ran ? "" : ran.stdout.split("\n").map((l) => l.trim()).filter((l) => l !== "").slice(-3).join(" / ");
+  };
+
+  /** Block `b`'s agent now, how its program ended when it did, read when asked; unknown when rex cannot say. */
+  const seenOf = (sid: string, b: Block): Seen => {
+    const seen = { name: b.label, tab: b.window };
+    const now = programOf(sid, b.id);
+
+    if ("why" in now) return { ...seen, status: "unknown" };
+
+    if (!("ended" in now)) return { ...seen, status: statusOf(now.state) };
+
+    const ended = (): string => {
+      const shown = tail(sid, b.id);
+
+      return shown === "" ? now.ended : `${now.ended}: ${shown}`;
+    };
+
+    return { ...seen, status: "ended", ended };
   };
 
   const argvOf = (agent: Agent): readonly string[] | Why => {
@@ -372,7 +388,7 @@ export function rexLauncher(options: RexOptions): Launcher {
         return handle === undefined || label === undefined ? [] : [{ handle, label }];
       });
 
-      const agents = blocks.map((b): Seen => ({ name: b.label, tab: b.window, status: statusNow(sid, b.id) }));
+      const agents = blocks.map((b) => seenOf(sid, b));
 
       return { tabs, agents } satisfies Look;
     },

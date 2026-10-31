@@ -141,6 +141,29 @@ describe("start", () => {
     expect(launcher.calls.filter((c) => c.startsWith("close ") || c.startsWith("settle "))).toEqual([`close ${at.session} w1:t1`]);
   });
 
+  test("a relaunch says how the program ended, before its tab and that reason go", () => {
+    const at = place();
+    const launcher = new FakeLauncher();
+    team(at, launcher, "start", "ui");
+    launcher.exit(at.session, "ui");
+    launcher.endings.set("ui", "exit status 1: Error: no such model");
+
+    expect(team(at, launcher, "start", "ui").stdout).toStartWith("ui: its program in tab w1:t1 had ended (exit status 1: Error: no such model); the tab is closed\n");
+  });
+
+  test("a program that ends while its opening waits is said to have ended so too", () => {
+    const at = place();
+    const launcher = new FakeLauncher();
+    launcher.blockAtStart.add("ui");
+    team(at, launcher, "start", "ui");
+    launcher.blockAtStart.delete("ui");
+    launcher.answer(at.session, "ui");
+    launcher.endWhileSettling.add("ui");
+    launcher.endings.set("ui", "exit status 3");
+
+    expect(team(at, launcher, "start", "ui").stdout).toStartWith("ui: its program in tab w1:t1 had ended (exit status 3); the tab is closed\n");
+  });
+
   test("an agent whose program ends while its unsent opening waits has its tab closed and starts again", () => {
     const at = place();
     const launcher = new FakeLauncher();
@@ -273,6 +296,61 @@ describe("stop", () => {
 
     expect(ran.stdout).toStartWith("ui: stopped: tab w1:t1 closed once it was ready\n");
     expect(launcher.calls.filter((c) => c.startsWith("settle "))).toEqual([`settle ${at.session} ui`]);
+  });
+
+  test("list and stop say how the program ended", () => {
+    const at = place();
+    const launcher = new FakeLauncher();
+    team(at, launcher, "start", "ui");
+    launcher.exit(at.session, "ui");
+    launcher.endings.set("ui", "exit status 1");
+
+    expect(team(at, launcher, "list").stdout).toStartWith(`ui  not running: its program ended (exit status 1) in session ${at.session}, tab w1:t1;`);
+    expect(team(at, launcher, "stop", "ui").stdout).toStartWith("ui: stopped: tab w1:t1 closed at once: its program had ended (exit status 1)\n");
+    team(at, launcher, "start", "ui");
+    launcher.endWhileSettling.add("ui");
+    launcher.endings.set("ui", "exit status 2");
+
+    expect(team(at, launcher, "stop", "ui").stdout).toStartWith("ui: stopped: tab w1:t2 closed once its program ended (exit status 2)\n");
+  });
+
+  test("--force on a program that ended still says how", () => {
+    const at = place();
+    const launcher = new FakeLauncher();
+    team(at, launcher, "start", "ui");
+    launcher.exit(at.session, "ui");
+    launcher.endings.set("ui", "exit status 1");
+
+    expect(team(at, launcher, "stop", "--force", "ui").stdout).toStartWith("ui: stopped: tab w1:t1 closed at once: its program had ended (exit status 1)\n");
+  });
+
+  test("how a program ended, and whether it did, is the agent's own, not another block's in its tab", () => {
+    const at = place();
+    const tab = { handle: "w1:t1", label: "ui" };
+    const marks = join(at.registry, "team", at.session, "marks.json");
+    const stranger = { name: "stranger", tab: tab.handle, status: "ended" } as const;
+    const launcher = new FakeLauncher().seed(at.session, [tab], [stranger, { name: "ui", tab: tab.handle, status: "ended" }]);
+    launcher.endings.set("stranger", "exit status 9");
+    launcher.endings.set("ui", "exit status 1");
+    mkdirSync(dirname(marks), { recursive: true });
+    writeFileSync(marks, JSON.stringify({ repo: at.repo, agents: { ui: { tab: tab.handle } } }));
+
+    expect(team(at, launcher, "list").stdout).toStartWith(`ui  not running: its program ended (exit status 1) in session ${at.session}, tab w1:t1;`);
+
+    const running = new FakeLauncher().seed(at.session, [tab], [stranger, { name: "ui", tab: tab.handle, status: "ready" }]);
+
+    expect(team(at, running, "stop", "ui").stdout).toStartWith("ui: stopped: tab w1:t1 closed once it was ready\n");
+  });
+
+  test("a program's ending is read only to be said: no look at a session, this one's or another's, reads the scrollback of a block it says nothing of", () => {
+    const at = place();
+    const launcher = new FakeLauncher().seed("other", [{ handle: "w9:t1", label: "api" }], [{ name: "api", tab: "w9:t1", status: "ended" }]);
+    launcher.endings.set("api", "exit status 1");
+    team(at, launcher, "start", "ui");
+    team(at, launcher, "list");
+    team(at, launcher, "stop", "ui");
+
+    expect(launcher.calls.filter((c) => c.startsWith("ending "))).toEqual([]);
   });
 
   test("an agent whose program ended is listed so and closed at once, without the wait; one that ends during the wait is closed then", () => {

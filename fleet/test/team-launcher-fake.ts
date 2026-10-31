@@ -5,7 +5,7 @@
  * its tab kept ({@link FakeLauncher.exit}). `settle` lets a working agent finish (ready), says when its program
  * ended, and gives up on a silent one. Each session instance has its own handle, so a session seeded again
  * (after a reboot) is not the one `open` started. Sessions not this fake's own are given with
- * {@link FakeLauncher.seed}. A call named in {@link FakeLauncher.failing} answers as rex does when it cannot say.
+ * {@link FakeLauncher.seed}. An ending read is a call too. A call named in {@link FakeLauncher.failing} answers as rex does when it cannot say.
  */
 import type { Why } from "../src/team/agents.ts";
 import type { Blocked, Handle, Launch, Launcher, Look, Opened, Seen, Settled, Status, Tab } from "../src/team/launcher.ts";
@@ -39,6 +39,8 @@ export class FakeLauncher implements Launcher {
   readonly blockAtStart = new Set<string>();
   /** The agents whose program ends while a settle waits on them. */
   readonly endWhileSettling = new Set<string>();
+  /** How the agents' programs ended, as a look says it. */
+  readonly endings = new Map<string, string>();
   /** The reads that cannot answer, by the launcher's method. */
   readonly failing = new Set<"sessions" | "owns" | "look">();
   private readonly held = new Map<string, Held>();
@@ -120,7 +122,23 @@ export class FakeLauncher implements Launcher {
 
     if (held === undefined) return { why: `no session ${session}` };
 
-    return { tabs: [...held.tabs], agents: held.agents.map((a): Seen => ({ ...a, status: a.status === "silent" ? statusOf(undefined) : a.status })) };
+    return { tabs: [...held.tabs], agents: held.agents.map((a): Seen => this.seen(a)) };
+  }
+
+  private seen(agent: Running): Seen {
+    const seen: Seen = { ...agent, status: agent.status === "silent" ? statusOf(undefined) : agent.status };
+    const ending = this.endings.get(agent.name);
+
+    if (agent.status !== "ended" || ending === undefined) return seen;
+
+    return {
+      ...seen,
+      ended: () => {
+        this.calls.push(`ending ${agent.name}`);
+
+        return ending;
+      },
+    };
   }
 
   settle(session: string, agent: string): Settled | Why {

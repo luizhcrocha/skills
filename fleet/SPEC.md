@@ -4530,7 +4530,7 @@ says `all`; `attach` takes none. `add` takes its own arguments (below).
   tab w1:t2; left as it is`), or as an agent of its name or a tab labelled with it that `fleet team` did not
   start (said so). An agent whose program ended in the tab this command started (a claude that failed within
   the 2 minutes after its start keeps its tab), or ends while its unsent opening waits, has that tab closed
-  and is started again (`ui: its program in tab w1:t1 had ended; the tab is closed`). One running elsewhere is refused, saying where: another
+  and is started again (`ui: its program in tab w1:t1 had ended (<how>); the tab is closed`). One running elsewhere is refused, saying where: another
   session with an agent of its name or a tab labelled with it, or a fleet the registry serves by its
   name or from its ledger. HOME unset is refused. `machine` other than `local` is refused: an agent
   away from this machine needs a launcher on that machine, which is not built.
@@ -4598,8 +4598,8 @@ says `all`; `attach` takes none. `add` takes its own arguments (below).
 - **stop.** Waits, at most 10 minutes, until the agent is ready (its block's `process`, then its
   `program_status`, asked twice a second), then closes its tab (`rex window close`); `--force` closes at once,
   and a wait that gives up says so. An agent whose program has ended is closed at once (`ui: stopped: tab
-  w1:t1 closed at once: its program had ended`), and one whose program ends during the wait is closed then
-  (`closed once its program ended`). An agent
+  w1:t1 closed at once: its program had ended (<how>)`), `--force` saying so too, and one whose program ends during
+  the wait is closed then (`closed once its program ended (<how>)`). An agent
   waiting on a prompt at its start (its opening unsent, and `asking`, as a silent start is) is closed at once,
   and a second `start` refuses it at once, without the wait, which would hold
   the team's lock for the 10 minutes (`ui: stopped: tab w1:t1 closed at once: it waited on a prompt`). An
@@ -4613,8 +4613,9 @@ says `all`; `attach` takes none. `add` takes its own arguments (below).
   a start reads it; `unknown` when rex cannot say),
   `running here, not started by fleet
   team: <where>`, `running elsewhere: <where>`, `not running`, or, once its program ended, rex keeping its tab,
-  whatever it last reported, `not running: its program ended in session S, tab T; \`fleet team start ui\` closes
-  that tab and starts it again`. A session of the team's name that runs but
+  whatever it last reported, `not running: its program ended (<how>) in session S, tab T; \`fleet team start ui\`
+  closes that tab and starts it again`, `<how>` being its `last_exit` and the block's last lines, which go with the
+  tab. `start` and `stop` say them too before they close it. A session of the team's name that runs but
   cannot be read, or sessions that cannot be listed, refuse with the launcher's reason: only no such session is
   `not running`.
 - **add.** `fleet team add NAME --project ID --mission TEXT [--role {coordinator,manager}] [--no-start]

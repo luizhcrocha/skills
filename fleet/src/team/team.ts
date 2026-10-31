@@ -159,6 +159,14 @@ function realOf(path: string): string {
   return existsSync(path) ? realpathSync(path) : path;
 }
 
+/** How agent `name`'s program in `tab` ended, to follow the word: ` (exit 1: its last lines)`; empty when `look`
+ * does not say. */
+function howEnded(look: Look | undefined, name: string, tab: Handle): string {
+  const how = look?.agents.find((a) => a.name === name && a.tab === tab)?.ended;
+
+  return how === undefined ? "" : ` (${how()})`;
+}
+
 /** Where `look` runs an agent of `agent`'s name, or a tab labelled with it, in a phrase; undefined when nowhere. */
 function runsIn(look: Look, agent: Agent): string | undefined {
   if (look.agents.some((a) => a.name === agent.name)) return `runs an agent named ${agent.name}`;
@@ -267,6 +275,7 @@ function startLocked(ground: Ground, agents: readonly Agent[], before: BeforeSta
     }
 
     if (mine !== undefined && status === "ended") {
+      const how = howEnded(lookOf(ground, session), agent.name, mine.handle);
       const closed = ground.launcher.close(session, mine.handle);
 
       if (closed !== undefined) {
@@ -275,7 +284,7 @@ function startLocked(ground: Ground, agents: readonly Agent[], before: BeforeSta
       }
 
       save(withoutAgent(marks, agent.name));
-      lines.push(`${agent.name}: its program in tab ${mine.handle} had ended; the tab is closed`);
+      lines.push(`${agent.name}: its program in tab ${mine.handle} had ended${how}; the tab is closed`);
       here = lookOf(ground, session);
     }
 
@@ -397,7 +406,7 @@ function stopLocked(ground: Ground, agents: readonly Agent[], force: boolean): S
       continue;
     }
 
-    const status = look.agents.find((a) => a.tab === tab.handle)?.status;
+    const status = look.agents.find((a) => a.name === agent.name && a.tab === tab.handle)?.status;
     const blocked = marks.unsent.includes(agent.name) && status === "asking";
     const settled: Settled | Why = force || blocked || status === "ended" ? "ready" : ground.launcher.settle(session, agent.name);
 
@@ -406,7 +415,8 @@ function stopLocked(ground: Ground, agents: readonly Agent[], force: boolean): S
       continue;
     }
 
-    const how = force ? "" : blocked ? " at once: it waited on a prompt" : status === "ended" ? " at once: its program had ended" : settled === "ended" ? " once its program ended" : " once it was ready";
+    const ending = howEnded(settled === "ended" ? lookOf(ground, session) : look, agent.name, tab.handle);
+    const how = force && status !== "ended" ? "" : blocked ? " at once: it waited on a prompt" : status === "ended" ? ` at once: its program had ended${ending}` : settled === "ended" ? ` once its program ended${ending}` : " once it was ready";
 
     const closed = ground.launcher.close(session, tab.handle);
 
@@ -453,7 +463,7 @@ export function listTeam(ground: Ground, agents: readonly Agent[]): Said {
     if (tab !== undefined) {
       const status = here?.agents.find((a) => a.name === agent.name && a.tab === tab.handle)?.status ?? "unknown";
 
-      if (status === "ended") return `${agent.name}  not running: its program ended in session ${session}, tab ${tab.handle}; \`fleet team start ${agent.name}\` closes that tab and starts it again`;
+      if (status === "ended") return `${agent.name}  not running: its program ended${howEnded(here, agent.name, tab.handle)} in session ${session}, tab ${tab.handle}; \`fleet team start ${agent.name}\` closes that tab and starts it again`;
 
       return `${agent.name}  running here: session ${session}, tab ${tab.handle}, ${status}`;
     }

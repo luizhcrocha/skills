@@ -26,11 +26,14 @@ export interface Tab {
   readonly label: string;
 }
 
-/** One agent the launcher recognises, by the name it was started with, in tab `tab`. */
+/** One agent the launcher recognises, by the name it was started with, in tab `tab`; `ended`, when its program
+ * ended, reads how: before the tab closes, which takes that with it, and only to say it, as the read may be all of
+ * the tab's scrollback. */
 export interface Seen {
   readonly name: string;
   readonly tab: Handle;
   readonly status: Status;
+  readonly ended?: () => string;
 }
 
 /** What a session holds now. */

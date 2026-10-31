@@ -5,7 +5,7 @@
  * session `fleet-team-smoke-<random>` whose tabs run sh, not claude, reporting their state as Claude Code does;
  * every session it made is killed.
  */
-import { readFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { describe, expect, test } from "bun:test";
@@ -198,8 +198,31 @@ describe("rex's calls", () => {
     };
 
     expect(look("null")).toEqual({ tabs: [{ handle: "window:1", label: "ui" }], agents: [{ name: "ui", tab: "window:1", status: "asking" }] });
-    expect(look('{"exit_code":1,"error":"exit status 1"}')).toEqual({ tabs: [{ handle: "window:1", label: "ui" }], agents: [{ name: "ui", tab: "window:1", status: "ended" }] });
-    expect(look('{"exit_code":1,"error":"exit status 1"}', "idle")).toEqual({ tabs: [{ handle: "window:1", label: "ui" }], agents: [{ name: "ui", tab: "window:1", status: "ended" }] });
+    expect(look('{"exit_code":1,"error":"exit status 1"}')).toEqual({ tabs: [{ handle: "window:1", label: "ui" }], agents: [{ name: "ui", tab: "window:1", status: "ended", ended: expect.any(Function) }] });
+    expect(look('{"exit_code":1,"error":"exit status 1"}', "idle")).toEqual({ tabs: [{ handle: "window:1", label: "ui" }], agents: [{ name: "ui", tab: "window:1", status: "ended", ended: expect.any(Function) }] });
+  });
+
+  test("a look says how a program ended and the last lines its block shows, while the tab that holds them is there, reading the block's scrollback only when asked", () => {
+    const rex = fakeRex((words) => {
+      if (words.endsWith("process")) return { code: 0, stdout: '{"last_exit":{"exit_code":3}}', stderr: "" };
+
+      return words.includes("capture") ? { code: 0, stdout: "one\n\ntwo\nthree\nfour\n", stderr: "" } : undefined;
+    });
+
+    const look = rexLauncher({ state: tmp("fleet-team-state-"), run: rex.run, ...FAST }).look("skills");
+    const captures = (): string[] => rex.calls.filter((c) => c.startsWith("capture"));
+
+    expect(captures()).toEqual([]);
+    expect("why" in look ? look.why : look.agents[0]?.ended?.()).toBe("exit 3: two / three / four");
+    expect(captures()).toHaveLength(1);
+  });
+
+  test("a block's scrollback past spawnSync's default 1 MiB still comes back, so a long-lived agent's last lines are said", () => {
+    const bin = join(tmp("fleet-team-rex-bin-"), "rex");
+    writeFileSync(bin, "#!/bin/sh\nhead -c 2097152 /dev/zero | tr '\\0' x\necho\necho 'Error: the last line'\n", { mode: 0o755 });
+    const ran = rexRunner(bin)(["capture"]);
+
+    expect("why" in ran ? ran.why : ran.stdout.split("\n").map((l) => l.length)).toEqual([2_097_152, 20, 0]);
   });
 
   test("owns says why when rex cannot say, and end stops nothing then", () => {
@@ -323,8 +346,9 @@ describe.skipIf(Bun.which("rex") === null || process.env["FLEET_TEST_REX"] !== "
         expect(look.agents).toEqual([
           { name: "ui", tab: ui.handle, status: "ready" },
           { name: "web", tab: web.blocked.handle, status: "asking" },
-          { name: "dying", tab: dying.handle, status: "ended" },
+          { name: "dying", tab: dying.handle, status: "ended", ended: expect.any(Function) },
         ]);
+        expect(look.agents[2]?.ended?.()).toContain("exit status 4");
         expect(launcher.settle(session, "dying")).toBe("ended");
         expect(launcher.close(session, dying.handle)).toBeUndefined();
 
