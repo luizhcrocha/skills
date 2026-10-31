@@ -3,7 +3,7 @@
  * (D13 stage 5, fleet/RULES.md): what it refuses, what it warns about, and what it composes. Through the
  * CLI, as every other test of the fleet.
  */
-import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
@@ -11,7 +11,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { asArray, asObject, type JsonObject } from "../src/json.ts";
 import { callRev } from "../src/ledger/permission.ts";
 import { startedOf } from "../src/procs.ts";
-import { baseEnv, fleet, fleetAsync, readJson, sleep, start, tmp, type Environment, type Ran } from "./support.ts";
+import { baseEnv, FLEET, fleet, readJson, start, tmp, type Environment, type Ran } from "./support.ts";
 
 let base: string;
 
@@ -466,12 +466,22 @@ describe("fleet turn", () => {
   describe("with the manager moved to the cloud", () => {
     let manager: string;
 
-    /** The seqs the host must record beside its exported state.json, a contract it does not meet yet (turn.ts): what
-     * the cloud applied last, what the folder holds. */
-    function seqs(applied: number, exported?: number): void {
-      writeFileSync(join(manager, "applied.json"), JSON.stringify({ seq: applied }));
+    /** fleet-run answering with `text` and `exit`, as this machine's host service would, keeping what it was sent. */
+    function run(text: string, exit = 0, said = ""): Environment {
+      const bin = join(base, "fleet-run");
+      writeFileSync(join(base, "run.answer"), text);
+      writeFileSync(join(base, "run.said"), said);
+      writeFileSync(bin, `#!/bin/sh\nprintf '%s' "$FLEET_DIR" >"${base}/run.dir"\ncat >"${base}/run.program"\ncat "${base}/run.answer"\ncat "${base}/run.said" >&2\nexit ${exit}\n`);
+      chmodSync(bin, 0o755);
 
-      if (exported !== undefined) writeFileSync(join(manager, "exported.json"), JSON.stringify({ seq: exported }));
+      return { ...env, TSTACK_FLEET_RUN: bin };
+    }
+
+    /** The host's answer when the cloud's landings milestone holds l1 with `status`. */
+    function cloud(status: string): Environment {
+      const steps = [{ id: "l1", title: "acme: push", status, agent: "acme" }];
+
+      return run(JSON.stringify({ id: "r", status: "completed", result: [{ kind: "milestone", key: "landings", record: { title: "Landings and deploys", steps } }] }));
     }
 
     beforeEach(() => {
@@ -513,10 +523,10 @@ describe("fleet turn", () => {
       return acme;
     }
 
-    test("the turn is read from the manager's exported ledger", () => {
-      const holds = fleet(["turn", root], env);
+    test("a manager present in its folder gives the turn the cloud reads", () => {
+      const holds = fleet(["turn", root], cloud("current"));
       expect(holds.code, holds.stderr).toBe(0);
-      expect(holds.stdout).toBe("acme holds the landing turn: l1 (acme: push). Land, then report the commit and the files that moved to the manager\n");
+      expect(holds.stdout).toEndWith("acme holds the landing turn: l1 (acme: push). Land, then report the commit and the files that moved to the manager\n");
     });
 
     test("a manager whose ledger is not running is not present: the turn is the fleet's", () => {
@@ -544,7 +554,7 @@ describe("fleet turn", () => {
     test("a running manager whose watch records its live session is present", () => {
       rmSync(join(manager, "wakes.json"));
       writeFileSync(join(manager, "watch-manager.owner.pid"), JSON.stringify({ watch: 1, session: process.pid, started: startedOf(process.pid) }));
-      const holds = fleet(["turn", root], env);
+      const holds = fleet(["turn", root], cloud("current"));
       expect(holds.code, holds.stderr).toBe(0);
       expect(holds.stdout).toContain("acme holds the landing turn: l1 (acme: push)");
       landing("pending");
@@ -554,7 +564,7 @@ describe("fleet turn", () => {
     });
 
     test("a fleet that moved too is found by its folder", () => {
-      const holds = fleet(["turn", movedAcme()], env);
+      const holds = fleet(["turn", movedAcme()], cloud("current"));
       expect(holds.code, holds.stderr).toBe(0);
       expect(holds.stdout).toContain("acme holds the landing turn: l1 (acme: push)");
     });
@@ -568,42 +578,104 @@ describe("fleet turn", () => {
       expect(waits.code).toBe(1);
       expect(waits.stderr).toContain("turn: acme does not hold the landing turn (no landing has the turn; yours, l1, waits in the queue)");
       landing("current");
-      const holds = fleet(["turn"], { ...env, FLEET_DIR: acme });
+      const holds = fleet(["turn"], { ...cloud("current"), FLEET_DIR: acme });
       expect(holds.code, holds.stderr).toBe(0);
       expect(holds.stdout).toContain("acme holds the landing turn: l1 (acme: push)");
       expect(fleet(["turn"], { ...env, FLEET_DIR: manager }).stdout).toBe("this session serves no fleet: no landing turn to take\n");
     });
 
-    test("an export at the cloud's last applied seq gives the turn at once", () => {
-      seqs(9, 9);
-      const holds = fleet(["turn", root], env);
+    test("the cloud decides the turn while the folder's export is behind it, either way", () => {
+      landing("pending");
+      const holds = fleet(["turn", root], cloud("current"));
       expect(holds.code, holds.stderr).toBe(0);
       expect(holds.stdout).toBe("acme holds the landing turn: l1 (acme: push). Land, then report the commit and the files that moved to the manager\n");
+      expect(readFileSync(join(base, "run.dir"), "utf8")).toBe(manager);
+      expect(readFileSync(join(base, "run.program"), "utf8")).toBe('return records.read({ kind: "milestone", key: "landings" });\n');
+      landing("current");
+      const taken = fleet(["turn", root], cloud("done"));
+      expect(taken.code).toBe(1);
+      expect(taken.stderr).toStartWith("turn: acme does not hold the landing turn (no landing has the turn)");
     });
 
-    test("an export behind the cloud's last apply is waited for, then the turn is given", async () => {
-      seqs(9, 7);
-      const started = Date.now();
-      const turn = fleetAsync(["turn", root], { ...env, FLEET_TURN_WAIT_S: "10" });
-      await sleep(400);
-      seqs(9, 9);
-      const holds = await turn;
-      expect(holds.code, holds.stderr).toBe(0);
-      expect(holds.stdout).toContain("the manager's ledger here is behind the cloud (exported seq 7, applied seq 9): waiting up to 10 s for its export\n");
-      expect(holds.stdout).toContain("acme holds the landing turn: l1 (acme: push)");
-      expect(Date.now() - started).toBeLessThan(5000);
-    }, 15_000);
+    test("a cloud with no landings milestone gives nobody the turn, whatever the folder says", () => {
+      const none = fleet(["turn", root], run(JSON.stringify({ id: "r", status: "completed", result: [] })));
+      expect(none.code).toBe(1);
+      expect(none.stderr).toStartWith("turn: acme does not hold the landing turn (no landing has the turn)");
+    });
 
-    test("an export that stays behind is refused once the wait ends, naming the lag", async () => {
-      seqs(9);
+    /** The refusal when the cloud's read failed for `why` and the folder says acme holds l1. */
+    const unconfirmed = (why: string): string =>
+      `turn: acme cannot confirm the landing turn: the manager's ledger could not be read from the cloud (${why}), and its folder here, which can be behind the cloud, says l1 (acme: push) has it. ` +
+      `A landing needs the cloud's word, so this machine must reach its host service and the cloud (\`FLEET_DIR=${manager} fleet-run --status\` says how they stand): try again once it does\n`;
+
+    const steps = '[{"id":"l1","title":"acme: push","status":"current","agent":"acme"}]';
+
+    test.each([
+      ["the service is down", "", 4, "fleet-host is not running on this machine", "fleet-run exited 4: fleet-host is not running on this machine"],
+      ["the link is down or a backlog holds the read", '{"id":"r","status":"queued","queued":{"since":"t"},"offline":{"since":"t","queued":3}}', 3, "", "the host's outbox holds it, 3 program(s) waiting with it: the link to the cloud is down, or they have not drained yet"],
+      ["the fleet is paused", '{"id":"r","status":"paused"}', 2, "", "fleet-run exited 2 (paused)"],
+      ["the program failed", '{"id":"r","status":"error","error":"no"}', 2, "no such record\nat line 1", "fleet-run exited 2 (error): no such record"],
+      ["its outcome is unknown", '{"id":"r","status":"unknown"}', 5, "", "fleet-run exited 5 (unknown)"],
+      ["it exits 0 with another status", `{"status":"queued","result":[{"record":{"steps":${steps}}}]}`, 0, "", "fleet-run answered status queued"],
+      ["it says completed and no rows", '{"id":"r","status":"completed"}', 0, "", "fleet-run's completed answer holds no rows"],
+      ["a row's steps do not read", '{"status":"completed","result":[{"record":{"steps":[{"id":1}]}}]}', 0, "", "a landings step in fleet-run's answer does not read"],
+      ["it prints no JSON", "oops", 0, "", "fleet-run printed no JSON"],
+    ])("when %s and the folder says the fleet holds the turn, it is refused and says why", (_case, text, exit, said, why) => {
+      const refused = fleet(["turn", root], run(text, exit, said));
+      expect([refused.code, refused.stdout, refused.stderr]).toEqual([1, "", unconfirmed(why)]);
+      landing("pending");
+      const waits = fleet(["turn", root], run(text, exit, said));
+      expect(waits.code).toBe(1);
+      expect(waits.stderr).toStartWith("turn: acme does not hold the landing turn (no landing has the turn; yours, l1, waits in the queue)");
+      expect(waits.stdout).toBe(`the manager's ledger could not be read from the cloud (${why}): reading its folder here, which can be behind it\n`);
+    });
+
+    /** A fleet-run that runs `body`, in place. */
+    function fleetRun(body: string): Environment {
+      const bin = join(base, "fleet-run");
+      writeFileSync(bin, `#!/bin/sh\n${body}\n`);
+      chmodSync(bin, 0o755);
+
+      return { ...env, TSTACK_FLEET_RUN: bin };
+    }
+
+    test("a fleet-run that does not answer is given up on within $FLEET_TURN_WAIT_S: a failed read, not a hang", () => {
       const started = Date.now();
-      const refused = await fleetAsync(["turn", root], { ...env, FLEET_TURN_WAIT_S: "1" });
-      expect(Date.now() - started).toBeGreaterThanOrEqual(1000);
+      const refused = fleet(["turn", root], { ...fleetRun("exec sleep 30"), FLEET_TURN_WAIT_S: "1" });
+      expect(Date.now() - started).toBeLessThan(5000);
+      expect(refused.stderr).toBe(unconfirmed("fleet-run gave no answer in 1 s"));
       expect(refused.code).toBe(1);
-      expect(refused.stdout).toBe("the manager's ledger here is behind the cloud (exported seq none, applied seq 9): waiting up to 1 s for its export\n");
-      expect(refused.stderr).toStartWith("turn: the manager's ledger here is still behind the cloud after 1 s (exported seq none, applied seq 9)");
-      expect(refused.stderr).toContain("systemctl --user status fleet-host`");
-    }, 15_000);
+    });
+
+    test("a fleet-run that ignores TERM is killed all the same", () => {
+      const started = Date.now();
+      const refused = fleet(["turn", root], { ...fleetRun("trap '' TERM\nexec sleep 8"), FLEET_TURN_WAIT_S: "1" });
+      expect(Date.now() - started).toBeLessThan(5000);
+      expect(refused.stderr).toBe(unconfirmed("fleet-run gave no answer in 1 s"));
+    });
+
+    test("a wait with a fraction of a millisecond is a wait", () => {
+      const refused = fleet(["turn", root], { ...fleetRun("exec sleep 30"), FLEET_TURN_WAIT_S: "0.1234" });
+      expect(refused.stderr).toBe(unconfirmed("fleet-run gave no answer in 0.1234 s"));
+      expect(refused.code).toBe(1);
+    });
+
+    test("a wait of 0 is the default, not no limit, and a wait past the push gate's 20 s stops at 15 s, so the read fails before the gate gives up", async () => {
+      const hung = fleetRun("exec sleep 30");
+
+      const turnWith = async (wait: string): Promise<[number, string]> => {
+        const proc = Bun.spawn([FLEET, "turn", root], { env: { ...hung, FLEET_TURN_WAIT_S: wait }, stdout: "ignore", stderr: "pipe" });
+        const said = await new Response(proc.stderr).text();
+
+        return [await proc.exited, said];
+      };
+
+      const started = Date.now();
+      const [zero, far] = await Promise.all([turnWith("0"), turnWith("25")]);
+      expect(Date.now() - started).toBeLessThan(19_000);
+      expect(zero).toEqual([1, unconfirmed("fleet-run gave no answer in 10 s")]);
+      expect(far).toEqual([1, unconfirmed("fleet-run gave no answer in 15 s")]);
+    }, 30_000);
   });
 });
 

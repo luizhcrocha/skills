@@ -5440,6 +5440,63 @@ for fd in 0 1 2; do readlink /proc/$PPID/fd/$fd >>{seen}; done
         self.manager(("l1", "done", "infra"), ("l2", "current", "p"))
         self.assertSilent(self.push("jj git push --bookmark master"))
 
+    def moved_manager(self, status):
+        """A manager moved to the cloud and present, whose folder gives landing l1, `status`, to fleet p."""
+        d = self.registry.parent / "fleet" / "manager"
+        d.mkdir(parents=True)
+        (d / "state.json").write_text(json.dumps({
+            "project": "manager", "goal": "g", "status": "running", "now": "", "role": "manager",
+            "started": "2026-01-05T08:00:00+00:00", "agents": [], "roadblocks": [], "decisions": [], "events": [],
+            "roadmap": [{"id": "landings", "title": "Landings and deploys",
+                         "steps": [{"id": "l1", "title": "p: push", "status": status, "agent": "p"}]}]}))
+        (d / "cloud.json").write_text(json.dumps({"fleet": "manager", "cloud": "https://fleet.example.dev",
+                                                  "since": "2026-01-05T08:00:00Z", "host": "box"}))
+        started = subprocess.run(["bun", "-e", f'import {{ startedOf }} from "{ROOT / "fleet" / "src" / "procs.ts"}"; '
+                                               f'console.log(startedOf({os.getpid()}))'],
+                                 capture_output=True, text=True, check=True).stdout.strip()
+        (d / "wakes.json").write_text(json.dumps({"wakes": [], "owner": {"session": os.getpid(), "started": started}}))
+
+    def fleet_run(self, body):
+        """This machine's fleet-run, running `body`."""
+        run = self.tmp / "fleet-run"
+        run.write_text(f"#!/bin/sh\n{body}\n")
+        run.chmod(0o755)
+        self.env["TSTACK_FLEET_RUN"] = str(run)
+
+    def test_a_failed_cloud_read_denies_a_push_the_folder_would_allow_and_says_why(self):
+        """The manager took the turn back, and the folder that says p holds it can be behind the cloud."""
+        self.moved_manager("current")
+        for body, wait, why in (
+                ("echo 'fleet-host is not running on this machine' >&2; exit 4", "10",
+                 "fleet-run exited 4: fleet-host is not running on this machine"),
+                ("""echo '{"id":"r","status":"queued","offline":{"since":"t","queued":3}}'; exit 3""", "10",
+                 "the host's outbox holds it, 3 program(s) waiting with it"),
+                ("""echo '{"id":"r","status":"paused"}'; exit 2""", "10", "fleet-run exited 2 (paused)"),
+                ("exec sleep 30", "1", "fleet-run gave no answer in 1 s")):
+            with self.subTest(why=why):
+                self.fleet_run(body)
+                reason = self.denied(self.push("jj git push --bookmark master", env={"FLEET_TURN_WAIT_S": wait}))
+                self.assertIn("This push moves the landing bookmark master, and its landing turn could not be "
+                              "confirmed (fleet turn: p cannot confirm the landing turn: the manager's ledger could "
+                              f"not be read from the cloud ({why}", reason)
+                self.assertIn("this machine must reach its host service and the cloud", reason)
+                self.assertNotIn("doesn't hold", reason)
+                self.assertIn("Push gate: refused `jj git push --bookmark master`: p could not confirm the landing "
+                              "turn onto master", self.events()[-1]["text"])
+        self.assertEqual(len(self.events()), 4)
+
+    def test_a_failed_cloud_read_leaves_the_folders_no_standing(self):
+        self.moved_manager("pending")
+        self.fleet_run("exit 4")
+        self.assertIn("p doesn't hold the landing turn (fleet turn: p does not hold the landing turn (no landing has "
+                      "the turn; yours, l1, waits in the queue)", self.denied(self.push("jj git push --bookmark master")))
+
+    def test_the_clouds_word_is_enough_when_the_read_works(self):
+        self.moved_manager("pending")
+        steps = '[{"id":"l1","title":"p: push","status":"current","agent":"p"}]'
+        self.fleet_run(f"""echo '{{"status":"completed","result":[{{"record":{{"steps":{steps}}}}}]}}'""")
+        self.assertSilent(self.push("jj git push --bookmark master"))
+
     def test_a_push_with_the_turn_is_allowed(self):
         self.manager(("l1", "done", "infra"), ("l2", "current", "p"))
         self.assertSilent(self.push("jj git push --bookmark master"))

@@ -5269,8 +5269,9 @@ def land_turn_gate(hook):
     session with none set is given the folder of the moved fleet it serves, which no registry entry names). In a fleet
     whose machine serves a manager and that does not hold the turn, the push is denied; Luiz's approval to
     push answers whether it may land, the turn when. Outside a managed fleet, and for any other push, it says
-    nothing. When the fleet CLI cannot run, the push goes through with a warning: a broken hub never blocks
-    every push."""
+    nothing. A manager moved to the cloud that could not be read denies too (`fleet turn` refuses, as its folder can
+    be behind the turn just taken back). When the fleet CLI cannot run, the push goes through with a warning: a broken
+    hub never blocks every push."""
     tool_input = hook.input.get("tool_input") if isinstance(hook.input.get("tool_input"), dict) else {}
     command = tool_input.get("command") if hook.input.get("tool_name") == "Bash" else None
     if not isinstance(command, str):
@@ -5301,11 +5302,17 @@ def land_turn_gate(hook):
         log(hook.data_dir, f"{hook.event} land_turn_gate failed open: {why}")
         return None
     said = turn[1].removeprefix("turn: ")
-    fleet = said.split(" does not hold", 1)[0] if " does not hold" in said else "this fleet"
     onto = f"onto {', '.join(sorted(landing))}" if landing else "(a push it could not read)"
+    unclear_line = f" Also, {UNCLEAR}." if landing and unclear else ""
+    if " does not hold" not in said:  # the manager's cloud could not be read and the folder alone says yes
+        fleet = said.split(" cannot confirm", 1)[0] if " cannot confirm" in said else "this fleet"
+        _log_denial(hook, lc, cli, moved_dir, f"Push gate: refused `{_one_line(command, 120)}`: {fleet} could not confirm "
+                                   f"the landing turn {onto}")
+        return Deny(f"{what}, and its landing turn could not be confirmed (fleet turn: {said}){'' if said.endswith('.') else '.'} "
+                    f"Luiz's approval to push doesn't replace it, and nothing else lifts it.{unclear_line}")
+    fleet = said.split(" does not hold", 1)[0]
     _log_denial(hook, lc, cli, moved_dir, f"Push gate: refused `{_one_line(command, 120)}`: {fleet} does not hold the landing "
                                f"turn {onto}")
-    unclear_line = f" Also, {UNCLEAR}." if landing and unclear else ""
     return Deny(f"{what}, and {fleet} doesn't hold the landing turn (fleet turn: {said}). Ask the manager for it as "
                 f"that says, wait for its answer, and check with `{cli} turn` before pushing again. Luiz's approval "
                 f"to push doesn't skip the queue: it answers whether this may land, the turn answers when.{unclear_line}")

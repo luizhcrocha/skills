@@ -2,7 +2,8 @@
  * `fleet turn [DIR]`: whether this fleet holds the landing turn, read from the manager's landing queue
  * (its `landings` milestone: one step per landing, `--agent <fleet>`, the current one holds the turn).
  * Exit 0: the turn is this fleet's, or no manager is present (a fleet then lands on its own word), or the
- * session runs no fleet. Exit 1: a manager is present and the turn is not this fleet's. Without DIR the
+ * session runs no fleet. Exit 1: a manager is present and the turn is not this fleet's, or only a folder that
+ * can be behind the cloud says it is. Without DIR the
  * fleet is the one the Claude Code session running the command serves (its registry entry's pid is
  * among the command's parents), else the one $FLEET_DIR names, so `land-check` asks it without being told
  * the fleet. DIR and $FLEET_DIR may name a team moved to the cloud (its folder holds cloud.json); the
@@ -12,24 +13,26 @@
  * present while its ledger's status is running and a session of its runs (registry.ts `movedManagerAway`):
  * no registry entry of its goes away when it stops or its session closes, and then the turn is every fleet's.
  *
- * The turn the manager just gave reaches its folder a moment later. The handover waits for it only when the
- * host says how far its export is behind, a contract the host must still meet (it writes neither file
- * today): the cloud's seq after the last program it applied in `applied.json`, the seq the folder holds in
- * `exported.json`, both `{"seq": n}`. While the exported seq is missing or below the applied one the command
- * says so and waits, up to $FLEET_TURN_WAIT_S (10 s: the plugin's push gate gives this command 20 s inside a
- * 30 s hook, and fails open past them), then refuses naming the lag. A folder with no `applied.json` has no
- * apply to wait for, and is read as it stands.
+ * A moved manager's queue is read from the cloud, not its folder: the folder is the host's export and takes a moment
+ * to follow, so the turn the manager just gave or took back would read wrong there. The read is one program, through
+ * fleet-run, which only reads. It gets $FLEET_TURN_WAIT_S (10 s, at most 15: the plugin's push gate gives this command
+ * 20 s inside a 30 s hook, and fails open past them). When it brings no queue (the host down, the link down, a backlog
+ * in the host's outbox, no answer) the folder decides only a no: a folder that says this fleet holds the turn can be
+ * the turn the manager just took back, so the command refuses and says why. A machine cut off from the cloud cannot
+ * push anyway, and no flag lifts this: an agent could set one itself.
  */
+import { spawnSync } from "node:child_process";
 import { join } from "node:path";
 
 import * as Effect from "effect/Effect";
+import * as Option from "effect/Option";
 
 import { Refusal } from "../errors.ts";
 import { resolvePath } from "../files.ts";
 import { Out } from "../io.ts";
-import { asNumber, type JsonObject } from "../json.ts";
+import { asArray, asNumber, asObject, asString, parseObject, type Json, type JsonObject } from "../json.ts";
 import { LANDINGS } from "../ledger/commands.ts";
-import { decodeLedger } from "../ledger/model.ts";
+import { decodeLedger, type Step } from "../ledger/model.ts";
 import { ancestry } from "../procs.ts";
 import { movedTeam, readObject, type Entry } from "../registry.ts";
 import { World, type Machine } from "../world.ts";
@@ -41,8 +44,14 @@ function refuse(reason: string): Effect.Effect<never, Refusal> {
   return Effect.fail(new Refusal({ speaker: "turn", reason }));
 }
 
-/** How long the handover waits for a moved manager's export, by default. */
+/** How long a moved manager's queue may take to read from the cloud, by default. */
 const WAIT_S = 10;
+
+/** The most it may take: the push gate kills this command at 20 s, and that fails open, so a read gives up first. */
+const WAIT_MAX_S = 15;
+
+/** The program that reads a moved manager's landing queue. */
+const QUEUE_PROGRAM = `return records.read({ kind: "milestone", key: "${LANDINGS}" });\n`;
 
 /** The fleet at `dir`: its entry when served, else the team moved to the cloud there. */
 function fleetAt(machine: Machine, dir: string): Entry | undefined {
@@ -63,60 +72,76 @@ function fleetOf(machine: Machine, dir: string | undefined): Entry | undefined {
   return found?.role === "manager" ? undefined : found;
 }
 
-/** A moved manager's folder behind the cloud: the seq its export holds (undefined: none recorded) and the seq the
- * cloud applied last. */
-interface Lag {
-  readonly exported: number | undefined;
-  readonly applied: number;
+/** `value` as a step, when it reads as one. */
+function stepOf(value: Json): Step | undefined {
+  const row = asObject(value);
+  const [id, title, status] = [asString(row?.["id"]), asString(row?.["title"]), asString(row?.["status"])];
+  const agent = row?.["agent"] ?? null;
+
+  if (id === undefined || title === undefined || status === undefined || (agent !== null && asString(agent) === undefined)) return undefined;
+
+  return { id, title, status, agent: asString(agent) ?? null };
 }
 
-function seqIn(dir: string, name: string): number | undefined {
-  return asNumber(readObject(join(dir, name))?.["seq"]);
+/** What reading a moved manager's queue from the cloud came to: the queue, or why not. */
+type CloudRead = { readonly queue: readonly Step[]; readonly unread?: never } | { readonly queue?: never; readonly unread: string };
+
+/** The steps of the rows a completed `records.read` printed, none for no row, or what was seen instead. */
+function queueIn(text: string): CloudRead {
+  const outcome = Option.getOrUndefined(parseObject(text));
+
+  if (outcome === undefined) return { unread: "fleet-run printed no JSON" };
+
+  if (outcome["status"] !== "completed") return { unread: `fleet-run answered status ${asString(outcome["status"]) ?? "none"}` };
+  const rows = asArray(outcome["result"]);
+
+  if (rows === undefined) return { unread: "fleet-run's completed answer holds no rows" };
+  const steps = rows.flatMap((row) => asArray(asObject(asObject(row)?.["record"])?.["steps"]) ?? [null]).map(stepOf);
+
+  return steps.every((step) => step !== undefined) ? { queue: steps } : { unread: "a landings step in fleet-run's answer does not read" };
 }
 
-/** How far the folder `dir` is behind the cloud, or undefined when it holds the last apply (or records none). */
-function lagOf(dir: string): Lag | undefined {
-  const applied = seqIn(dir, "applied.json");
-  const exported = seqIn(dir, "exported.json");
+/** Why a fleet-run that exited `code` brought no queue. A `queued` answer is the host's outbox: offline, or online
+ * behind programs not yet drained, which the answer does not tell apart; `waiting` counts this read too. */
+function failedRun(code: number | null, stdout: string, stderr: string): string {
+  const outcome = Option.getOrUndefined(parseObject(stdout));
+  const status = asString(outcome?.["status"]);
 
-  return applied === undefined || (exported !== undefined && exported >= applied) ? undefined : { exported, applied };
+  if (status === "queued") {
+    const waiting = asNumber(asObject(outcome?.["offline"])?.["queued"]);
+
+    return `the host's outbox holds it${waiting === undefined ? "" : `, ${waiting} program(s) waiting with it`}: the link to the cloud is down, or they have not drained yet`;
+  }
+
+  const said = stderr.split("\n").find((l) => l.trim() !== "")?.trim();
+
+  return `fleet-run exited ${code ?? "on a signal"}${status === undefined ? "" : ` (${status})`}${said === undefined ? "" : `: ${said}`}`;
 }
 
-function lagWords(lag: Lag): string {
-  return `exported seq ${lag.exported ?? "none"}, applied seq ${lag.applied}`;
+/** The moved manager's landing queue as the cloud holds it. */
+function cloudQueue(machine: Machine, manager: Entry, waitS: number): CloudRead {
+  const bin = machine.env("TSTACK_FLEET_RUN") ?? join(import.meta.dir, "..", "..", "bin", "fleet-run");
+  // SIGKILL: spawnSync waits for the child, so one that ignores TERM would run the command past the gate's limit.
+  const done = spawnSync(bin, [], { input: QUEUE_PROGRAM, encoding: "utf8", env: { ...process.env, FLEET_DIR: manager.dir }, timeout: Math.ceil(waitS * 1000), killSignal: "SIGKILL" });
+
+  if (done.error !== undefined) return { unread: "code" in done.error && done.error.code === "ETIMEDOUT" ? `fleet-run gave no answer in ${waitS} s` : `fleet-run did not run: ${done.error.message}` };
+
+  return done.status === 0 ? queueIn(done.stdout) : { unread: failedRun(done.status, done.stdout, done.stderr) };
 }
 
-/** Wait until the moved manager's folder holds the cloud's last apply, saying so once, or refuse after `waitS`. */
-function caughtUp(manager: Entry, waitS: number): Effect.Effect<void, Refusal, Out> {
-  return Effect.gen(function* () {
-    const dir = manager.dir;
-    const out = yield* Out;
-    const first = lagOf(dir);
+/** The landing queue in the manager's folder. */
+function folderQueue(manager: Entry): readonly Step[] {
+  const raw: JsonObject = readObject(join(manager.dir, "state.json")) ?? {};
+  const ledger = decodeLedger(raw);
 
-    if (first === undefined) return;
-    out.out(`the manager's ledger here is behind the cloud (${lagWords(first)}): waiting up to ${waitS} s for its export\n`);
-    const deadline = Date.now() + waitS * 1000;
-    let lag: Lag | undefined = first;
-
-    while (lag !== undefined && Date.now() < deadline) {
-      yield* Effect.sleep(Math.min(100, Math.max(0, deadline - Date.now())));
-      lag = lagOf(dir);
-    }
-
-    if (lag === undefined) return;
-
-    return yield* refuse(
-      `the manager's ledger here is still behind the cloud after ${waitS} s (${lagWords(lag)}), so it cannot say whose turn it is. ` +
-        `${dir} is written by the manager's host service: check it (\`systemctl --user status fleet-host\`, its journal), then run \`fleet turn\` again`,
-    );
-  });
+  return ledger instanceof Refusal ? [] : (ledger.roadmap.find((m) => m.id === LANDINGS)?.steps ?? []);
 }
 
 function waitOf(machine: Machine): number {
   const text = machine.env("FLEET_TURN_WAIT_S")?.trim();
   const given = text === undefined || text === "" ? Number.NaN : Number(text);
 
-  return Number.isFinite(given) && given >= 0 ? given : WAIT_S;
+  return Number.isFinite(given) && given > 0 ? Math.min(given, WAIT_MAX_S) : WAIT_S;
 }
 
 function run(machine: Machine, argv: readonly string[]): Effect.Effect<number, Refusal, Out> {
@@ -148,13 +173,18 @@ function run(machine: Machine, argv: readonly string[]): Effect.Effect<number, R
       return yield* refuse(`${dir} is not served, so the manager cannot give it the turn: \`fleet serve ${dir}\`, then ask the manager for it`);
     }
 
-    if (manager.moved === true) yield* caughtUp(manager, waitOf(machine));
-    const raw: JsonObject = readObject(join(manager.dir, "state.json")) ?? {};
-    const ledger = decodeLedger(raw);
-    const queue = ledger instanceof Refusal ? [] : (ledger.roadmap.find((m) => m.id === LANDINGS)?.steps ?? []);
+    const cloud = manager.moved === true ? cloudQueue(machine, manager, waitOf(machine)) : undefined;
+    const queue = cloud?.queue ?? folderQueue(manager);
     const names = new Set([fleet.id, ...fleet.aliases].map((n) => n.toLowerCase()));
     const ours = (agent: string | null | undefined): boolean => agent != null && names.has(agent.toLowerCase());
     const mine = queue.find((s) => ours(s.agent) && s.status === "current");
+
+    if (mine !== undefined && cloud?.unread !== undefined) {
+      return yield* refuse(
+        `${fleet.id} cannot confirm the landing turn: the manager's ledger could not be read from the cloud (${cloud.unread}), and its folder here, which can be behind the cloud, says ${mine.id} (${mine.title}) has it. ` +
+          `A landing needs the cloud's word, so this machine must reach its host service and the cloud (\`FLEET_DIR=${manager.dir} fleet-run --status\` says how they stand): try again once it does`,
+      );
+    }
 
     if (mine !== undefined) {
       out.out(`${fleet.id} holds the landing turn: ${mine.id} (${mine.title}). Land, then report the commit and the files that moved to the manager\n`);
@@ -162,6 +192,7 @@ function run(machine: Machine, argv: readonly string[]): Effect.Effect<number, R
       return 0;
     }
 
+    if (cloud?.unread !== undefined) out.out(`the manager's ledger could not be read from the cloud (${cloud.unread}): reading its folder here, which can be behind it\n`);
     const held = queue.find((s) => s.status === "current");
     const queued = queue.find((s) => ours(s.agent) && s.status === "pending");
 

@@ -4442,6 +4442,20 @@ rule's disposition are in [RULES.md](RULES.md)). Beside the refusals and warning
   manager ...`) otherwise, or when DIR is not served while a manager is. Without DIR the fleet is the
   registry entry whose pid is among the command's parents (the session that serves it). The plugin's
   `land-check` runs it before its verdict: exit 1 makes the verdict `stop`, with the reason in `turn`.
+  With a manager moved to the cloud the queue is read from the cloud, not the folder its host exports and which takes a
+  moment to follow: one read-only program through fleet-run (`FLEET_DIR=<the manager's folder>`), given
+  `$FLEET_TURN_WAIT_S` (10 s; 0 or a value that reads as no number is the 10, past 15 is 15, as the push gate gives this
+  command 20 s and fails open past them), then killed. When it brings no queue the folder decides only a no: exit 1 with
+  `<fleet> does not hold the landing turn` as above, and on stdout `the manager's ledger could not be read from the cloud
+  (<why>): reading its folder here, which can be behind it`. A folder that says the fleet holds the turn is not enough,
+  since the turn may just have been taken back: exit 1, `turn: acme cannot confirm the landing turn: the manager's ledger
+  could not be read from the cloud (<why>), and its folder here ... says l1 (...) has it. A landing needs the cloud's
+  word, so this machine must reach its host service and the cloud ...: try again once it does`. `<why>` says how the
+  read failed: no answer in N s, fleet-run's exit and its status and first stderr line, the host's outbox holding the
+  read (fleet-run exit 3, `queued`: offline, or online behind programs not drained, which the answer does not tell
+  apart; the read runs later and changes nothing, and the next try goes through once they drain), or what a completed
+  answer held instead of steps. No flag lifts this: a machine cut off cannot push anyway, and an agent could set one
+  itself. The push gate denies on this exit 1 as on any other, naming the failed read.
 
 ## The advisor (`fleet advisor`)
 
