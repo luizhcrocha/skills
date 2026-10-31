@@ -2,31 +2,34 @@
  * `fleet team {start,stop,attach,list} [--force] [--trust] [NAME ...|all]`: the repo's standing agents
  * (`.fleet/agents/<name>.json`, team/agents.ts) as tabs of one rex session (team/team.ts). The repo is the
  * nearest folder up from here holding `.fleet/agents`. No NAME is every agent, for start and list; stop names
- * them, or `all`. attach takes none. start first makes sure Claude Code trusts the repo (team/trust.ts), asking
+ * them, or `all`. attach takes none. `add NAME --project ID --mission TEXT` writes an agent's file and starts it as
+ * start does; a start that gives it no tab removes the file again, and the same add over the file as it writes it
+ * (a run killed midway) starts it rather than refusing. start first makes sure Claude Code trusts the repo (team/trust.ts), asking
  * on the terminal unless `--trust`, and joins an agent of a project (`fleet.project`) whose ledger is not cut over to
  * the cloud yet, through the host service (cli/project.ts), the trust and the session's owner settled before any
  * team is made in the cloud. TypeScript only.
  */
-import { readSync } from "node:fs";
+import { readSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 
 import * as Effect from "effect/Effect";
 import * as Result from "effect/Result";
 
 import { Refusal, UsageError } from "../errors.ts";
-import { isDir, isMoved } from "../files.ts";
+import { exists, isDir, isMoved, makeDirs, readText, remove, removeEmptyDir, strerror } from "../files.ts";
 import { Out } from "../io.ts";
-import { readTeam, type Agent, type Team, type Why } from "../team/agents.ts";
+import { parseAgent, readTeam, type Agent, type Role, type Team, type Why } from "../team/agents.ts";
 import type { Launcher } from "../team/launcher.ts";
 import { ledgerOf } from "../team/ledger.ts";
 import { rexLauncher } from "../team/rex.ts";
 import { heldElsewhere, listTeam, startTeam, stopTeam, type BeforeStart, type Ground, type Said } from "../team/team.ts";
-import { claudeConfigOf, ensureTrusted, trustRootOf, type Asker, type Consent } from "../team/trust.ts";
+import { atOrAboveHome, claudeConfigOf, ensureTrusted, trustRootOf, type Asker, type Consent } from "../team/trust.ts";
 import { World, type Machine } from "../world.ts";
+import { opt, parseArgs, usageWidth, type CommandSpec } from "./args.ts";
 import { exitOf, printUsage } from "./exit.ts";
 import { awaitMoved, joinProject, JOIN_WAIT_MS, repoAt } from "./project.ts";
 
-const USAGE = "usage: fleet team [-h] {start,stop,attach,list} [--force] [--trust] [NAME ...|all]\n";
+const USAGE = "usage: fleet team [-h] {start,stop,attach,list,add} [--force] [--trust] [NAME ...|all]\n";
 
 const HELP = `${USAGE}
 A repo's standing agents (.fleet/agents/<name>.json) as tabs of one rex session, named after the repo's
@@ -41,9 +44,30 @@ folder or .fleet/team.json's "session". Run it in the repo or below it.
                            once); only tabs fleet team started that still run their agent
     list [NAME ...]        each agent: running here, elsewhere (where), or not running
     attach                 show the team's session in the Rex app (rex do session.select)
+    add NAME --project ID --mission TEXT [--role {coordinator,manager}] [--no-start] [--trust]
+                           write .fleet/agents/NAME.json (at the repo's root when it has none yet;
+                           never in / or the home folder): a coordinator unless --role, of project ID,
+                           its opening carrying TEXT (one line of plain text, at most 2000 characters);
+                           then start NAME alone, as start does (--no-start: only the file). A start that
+                           gives it no tab removes the file and the folders add made, so add runs again
+                           once fixed; the same add again over a file it wrote that has no tab (a run
+                           killed midway) starts it. The join waits up to 30 s and the start up to 2 min
 No NAME is every agent, for start and list.`;
 
-const COMMANDS = ["start", "stop", "attach", "list"] as const;
+const COMMANDS = ["start", "stop", "attach", "list", "add"] as const;
+
+/** `add`'s arguments, after `add`. */
+const ADD: CommandSpec = {
+  name: "add",
+  positionals: [{ dest: "name" }],
+  options: [
+    opt.value("--project", { metavar: "ID", required: true }),
+    opt.value("--mission", { metavar: "TEXT", required: true }),
+    opt.value("--role", { choices: ["coordinator", "manager"] }),
+    opt.flag("--no-start"),
+    opt.flag("--trust"),
+  ],
+};
 
 type Command = (typeof COMMANDS)[number];
 
@@ -169,6 +193,160 @@ function joinFirst(machine: Machine, team: Team, agents: readonly Agent[], home:
   });
 }
 
+/** Start `agents` of `ground`'s team: Claude Code's trust under `consent`, each agent's project joined first, then a
+ * tab each. A refusal that stops every start is a failure; one agent's is said with the rest. */
+function startAgents(machine: Machine, ground: Ground, agents: readonly Agent[], consent: Consent, waitMs: number): Effect.Effect<Said, Refusal> {
+  return Effect.gen(function* () {
+    const { team, home } = ground;
+
+    const before: BeforeStart = () => {
+      const trusted = ensureTrusted({ root: trustRootOf(team.repo), config: claudeConfigOf(machine.env, home), home, consent });
+
+      return "why" in trusted ? trusted : { line: trusted._tag === "Written" ? trusted.line : undefined };
+    };
+
+    const early: string[] = [];
+    let gate = before;
+
+    if (agents.some((agent) => toJoin(machine, agent, home) !== undefined)) {
+      const other = heldElsewhere(ground);
+
+      if (other !== undefined) return yield* refuse(other.why);
+      const ready = before();
+
+      if ("why" in ready) return yield* refuse(ready.why);
+
+      if (ready.line !== undefined) early.push(ready.line);
+      gate = () => ({ line: undefined });
+    }
+
+    const joins = yield* joinFirst(machine, team, agents, home, waitMs);
+    const started = startTeam(ground, joins.ready, gate);
+
+    return { lines: [...early, ...joins.lines, ...started.lines], refused: [...joins.refused, ...started.refused] };
+  });
+}
+
+/** The repo `add` writes in, from `cwd`: the nearest folder up holding `.fleet/agents`, else the nearest holding
+ * `.jj` or `.git`; or why there is none. */
+function addRepoOf(cwd: string): { readonly repo: string } | Why {
+  const found = repoOf(cwd);
+
+  if (isDir(join(found, ".fleet", "agents"))) return { repo: found };
+
+  for (let dir = cwd; ; dir = dirname(dir)) {
+    if (exists(join(dir, ".jj")) || exists(join(dir, ".git"))) return { repo: dir };
+
+    if (dirname(dir) === dir) return { why: `${cwd} is in no repo (no .fleet/agents, .jj or .git from it up): run it in the repo the agent works in` };
+  }
+}
+
+/** The ground of `team`: its launcher from `launcherAt`, its folder under the registry's. */
+function groundOf(machine: Machine, team: Team, launcherAt: (state: string) => Launcher, home: string): Ground {
+  const state = join(machine.registry.place.home, "team", team.session);
+
+  return { team, launcher: launcherAt(state), state, live: () => machine.registry.live(), known: () => machine.registry.known(), home };
+}
+
+/** Whether `name` has a tab in the team's session, or the launcher cannot say (undefined). */
+function hasTab(ground: Ground, name: string): boolean | undefined {
+  const sessions = ground.launcher.sessions();
+
+  if ("why" in sessions) return undefined;
+
+  if (!sessions.includes(ground.team.session)) return false;
+  const look = ground.launcher.look(ground.team.session);
+
+  return "why" in look ? undefined : look.tabs.some((t) => t.label === name);
+}
+
+/** `fleet team add` with `argv` (after `add`): write the agent's file, then start it alone, as start does. */
+function add(machine: Machine, argv: readonly string[], launcherAt: (state: string) => Launcher, cwd: string, ask: Asker | undefined, waitMs: number): Effect.Effect<number, Refusal | UsageError, Out> {
+  return Effect.gen(function* () {
+    const out = yield* Out;
+    const parsed = parseArgs("fleet team add", ADD, argv, usageWidth(machine.env, process.stdout.isTTY ? process.stdout.columns : undefined));
+
+    if (parsed === "help") return yield* printUsage(HELP);
+
+    if (parsed instanceof UsageError) return yield* Effect.fail(parsed);
+
+    if (parsed.extras.length > 0) return yield* Effect.fail(new UsageError({ prog: "fleet team add", usage: USAGE, reason: `unrecognized arguments: ${parsed.extras.join(" ")}` }));
+    const { args } = parsed;
+    const name = args.str("name") ?? "";
+    const role: Role = args.str("role") === "manager" ? "manager" : "coordinator";
+    const home = machine.env("HOME");
+
+    if (home === undefined || home === "") return yield* refuse("HOME is not set, and the ledgers' fixed homes are under it (~/.local/state/fleet)");
+    const found = addRepoOf(cwd);
+
+    if ("why" in found) return yield* refuse(found.why);
+    const { repo } = found;
+
+    if (atOrAboveHome(repo, home)) return yield* refuse(`${repo} is / or the home folder, or a folder above it: an agent's file goes in the repository it works in; run add in one below the home folder`);
+    const fleetDir = join(repo, ".fleet");
+    const dir = join(fleetDir, "agents");
+    const file = join(dir, `${name}.json`);
+    const text = `${JSON.stringify({ fleet: { role, project: args.str("project"), mission: args.str("mission") } }, null, 2)}\n`;
+    const agent = parseAgent(name, text, home);
+
+    if ("why" in agent) return yield* refuse(agent.why);
+    const resumed = exists(file) && readText(file) === text;
+
+    if (exists(file) && !resumed) return yield* refuse(`${name}: ${file} exists already: \`fleet team start ${name}\` starts it, or name another`);
+    const made = [dir, fleetDir].filter((d) => !exists(d));
+
+    const unmake = (): void => {
+      for (const d of made) removeEmptyDir(d);
+    };
+
+    const undo = (): void => {
+      if (!resumed) remove(file);
+      unmake();
+    };
+
+    if (!resumed) {
+      try {
+        makeDirs(dir);
+        writeFileSync(file, text, { flag: "wx" });
+      } catch (cause: unknown) {
+        unmake();
+
+        return yield* refuse(`${name}: ${file} could not be written: ${strerror(cause)}`);
+      }
+    }
+
+    const team = readTeam(repo, home);
+
+    if ("why" in team) {
+      undo();
+
+      return yield* refuse(`${team.why}; ${file} is removed again`);
+    }
+
+    const what = resumed ? `${file} is there already, as add writes it` : `wrote ${file}`;
+
+    if (args.flag("no_start")) {
+      out.out(`${name}: ${what}; \`fleet team start ${name}\` starts it\n`);
+
+      return 0;
+    }
+
+    out.out(`${name}: ${what}${resumed ? "; starting it" : ""}\n`);
+    const ground = groundOf(machine, team, launcherAt, home);
+    const consent: Consent = args.flag("trust") ? { _tag: "Given" } : ask === undefined ? { _tag: "None", again: "`fleet team add` again with --trust" } : { _tag: "Ask", ask };
+    const started = yield* Effect.result(startAgents(machine, ground, team.agents.filter((a) => a.name === name), consent, waitMs));
+    const result: Said = Result.isFailure(started) ? { lines: [], refused: [started.failure.reason] } : started.success;
+
+    if (hasTab(ground, name) !== false) return yield* said(result);
+    undo();
+
+    const kept = `${name}: not started; ${file} was there before this add, so it stays`;
+    const removed = `${name}: not started, so ${file} is removed: \`fleet team add\` again once that is fixed`;
+
+    return yield* said({ lines: result.lines, refused: [...result.refused, resumed ? kept : removed] });
+  });
+}
+
 function run(machine: Machine, argv: readonly string[], launcherAt: (state: string) => Launcher, cwd: string, ask: Asker | undefined, waitMs: number): Effect.Effect<number, Refusal | UsageError, Out> {
   return Effect.gen(function* () {
     if (argv.includes("-h") || argv.includes("--help")) return yield* printUsage(HELP);
@@ -178,6 +356,8 @@ function run(machine: Machine, argv: readonly string[], launcherAt: (state: stri
     if (first === undefined) return yield* usage("the following arguments are required: cmd");
 
     if (command === undefined) return yield* usage(`argument cmd: invalid choice: '${first}' (choose from ${COMMANDS.map((c) => `'${c}'`).join(", ")})`);
+
+    if (command === "add") return yield* add(machine, rest, launcherAt, cwd, ask, waitMs);
     const force = rest.includes("--force");
     const trust = rest.includes("--trust");
     const names = rest.filter((a) => a !== "--force" && a !== "--trust");
@@ -199,17 +379,8 @@ function run(machine: Machine, argv: readonly string[], launcherAt: (state: stri
 
     if ("why" in team) return yield* refuse(team.why);
 
-    const state = join(machine.registry.place.home, "team", team.session);
-    const launcher = launcherAt(state);
-
-    const ground: Ground = {
-      team,
-      launcher,
-      state,
-      live: () => machine.registry.live(),
-      known: () => machine.registry.known(),
-      home,
-    };
+    const ground = groundOf(machine, team, launcherAt, home);
+    const { launcher } = ground;
 
     if (command === "attach") {
       const other = heldElsewhere(ground);
@@ -222,33 +393,9 @@ function run(machine: Machine, argv: readonly string[], launcherAt: (state: stri
     if ("why" in agents) return yield* refuse(agents.why);
 
     if (command === "start") {
-      const consent: Consent = trust ? { _tag: "Given" } : ask === undefined ? { _tag: "None" } : { _tag: "Ask", ask };
+      const consent: Consent = trust ? { _tag: "Given" } : ask === undefined ? { _tag: "None", again: "`fleet team start --trust`" } : { _tag: "Ask", ask };
 
-      const before: BeforeStart = () => {
-        const trusted = ensureTrusted({ root: trustRootOf(team.repo), config: claudeConfigOf(machine.env, home), home, consent });
-
-        return "why" in trusted ? trusted : { line: trusted._tag === "Written" ? trusted.line : undefined };
-      };
-
-      const early: string[] = [];
-      let gate = before;
-
-      if (agents.some((agent) => toJoin(machine, agent, home) !== undefined)) {
-        const other = heldElsewhere(ground);
-
-        if (other !== undefined) return yield* refuse(other.why);
-        const ready = before();
-
-        if ("why" in ready) return yield* refuse(ready.why);
-
-        if (ready.line !== undefined) early.push(ready.line);
-        gate = () => ({ line: undefined });
-      }
-
-      const joins = yield* joinFirst(machine, team, agents, home, waitMs);
-      const started = startTeam(ground, joins.ready, gate);
-
-      return yield* said({ lines: [...early, ...joins.lines, ...started.lines], refused: [...joins.refused, ...started.refused] });
+      return yield* said(yield* startAgents(machine, ground, agents, consent, waitMs));
     }
 
     if (command === "stop") return yield* said(stopTeam(ground, agents, force));

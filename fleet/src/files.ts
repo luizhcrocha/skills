@@ -12,6 +12,7 @@ import {
   readdirSync,
   realpathSync,
   renameSync,
+  rmdirSync,
   statSync,
   unlinkSync,
   writeFileSync,
@@ -139,6 +140,15 @@ export function remove(path: string): void {
     unlinkSync(path);
   } catch {
     // missing_ok: already gone
+  }
+}
+
+/** Remove the directory `path` when it is there and empty; one that holds anything is left. */
+export function removeEmptyDir(path: string): void {
+  try {
+    rmdirSync(path);
+  } catch {
+    // not empty, or already gone
   }
 }
 

@@ -4,7 +4,7 @@
  * repo. Nothing here touches rex, a live ledger or the live registry.
  */
 import { spawnSync } from "node:child_process";
-import { chmodSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 
 import { afterEach, describe, expect, test } from "bun:test";
@@ -365,7 +365,7 @@ describe("list and attach", () => {
   test("a command not among them and an unset HOME are refused", () => {
     const at = place();
 
-    expect(team(at, new FakeLauncher(), "begin").stderr).toEndWith("fleet team: error: argument cmd: invalid choice: 'begin' (choose from 'start', 'stop', 'attach', 'list')\n");
+    expect(team(at, new FakeLauncher(), "begin").stderr).toEndWith("fleet team: error: argument cmd: invalid choice: 'begin' (choose from 'start', 'stop', 'attach', 'list', 'add')\n");
     expect(team({ ...at, env: { ...at.env, HOME: "" } }, new FakeLauncher(), "list")).toEqual({ code: 1, stdout: "", stderr: "team: HOME is not set, and the ledgers' fixed homes are under it (~/.local/state/fleet)\n" });
   });
 
@@ -635,15 +635,15 @@ describe("trust", () => {
   });
 });
 
+/** The repo of `at` with an origin remote, and the agents' calls going to `host`. */
+function inProject(at: Place, host: FakeHost): Place {
+  for (const args of [["init", "-q"], ["remote", "add", "origin", "git@github.com:CoelhoRocha/Custom-MCP-Servers.git"]]) spawnSync("git", args, { cwd: at.repo });
+
+  return { ...at, env: { ...at.env, FLEET_RUN_URL: host.origin, CLAUDE_CODE_SESSION_ID: "" } };
+}
+
 describe("an agent of a project", () => {
   afterEach(stopHosts);
-
-  /** The repo of `at` with an origin remote, and the agents' calls going to `host`. */
-  function inProject(at: Place, host: FakeHost): Place {
-    for (const args of [["init", "-q"], ["remote", "add", "origin", "git@github.com:CoelhoRocha/Custom-MCP-Servers.git"]]) spawnSync("git", args, { cwd: at.repo });
-
-    return { ...at, env: { ...at.env, FLEET_RUN_URL: host.origin, CLAUDE_CODE_SESSION_ID: "" } };
-  }
 
   async function start(at: Place, launcher: FakeLauncher, waitMs = 2_000): Promise<Ran> {
     const { layer, recorded } = recordingOut();
@@ -771,5 +771,299 @@ describe("an agent of a project", () => {
       stderr: `team: boss: project court's manager on this machine is the team court-manager, not boss: set fleet.ledger in boss.json to its folder (\`fleet project manage court\` prints it)\n`,
     });
     expect(launcher.calls).toEqual([]);
+  });
+});
+
+describe("add", () => {
+  afterEach(stopHosts);
+
+  const TEAM = (id: string, role: string) => ({ id, project: "court", repo: "coelhorocha/custom-mcp-servers", machine: "office", role, createdBy: { machine: "office", session: null }, createdAt: "2026-10-30T10:01:00.000Z" });
+
+  /** `fleet team add ...argv` run from `cwd` (the repo by default), with no terminal unless `ask` is given. */
+  async function add(at: Place, launcher: FakeLauncher, argv: readonly string[], { cwd = at.repo, waitMs = 2_000, ask }: { cwd?: string; waitMs?: number; ask?: Asker } = {}): Promise<Ran> {
+    const { layer, recorded } = recordingOut();
+    const world = Layer.succeed(World, machine(at.env));
+    const code = await Effect.runPromise(teamWith(["add", ...argv], () => launcher, cwd, ask, waitMs).pipe(Effect.provide(Layer.mergeAll(world, layer))));
+
+    return { code, stdout: recorded.stdout.join(""), stderr: recorded.stderr.join("") };
+  }
+
+  const fileOf = (at: Place, name: string): string => join(at.repo, ".fleet", "agents", `${name}.json`);
+
+  /** A place whose repo has the agent `ui` and a host that joins team `id` as `role`, cutting its ledger over. */
+  function joining(id: string, role = "coordinator", agents?: Readonly<Record<string, string>>) {
+    let home = "";
+    const host = fakeHost({ "POST /projects/court/teams": { status: 201, body: TEAM(id, role), before: () => cutOver(home, id) } });
+    const at = inProject(place(agents), host);
+    home = at.home;
+
+    return { at, host };
+  }
+
+  test("writes a coordinator's file naming the project and the mission, then starts it as start does: its own tab, the join, the opening with the mission", async () => {
+    const { at, host } = joining("api");
+    const launcher = new FakeLauncher();
+    const ran = await add(at, launcher, ["api", "--project", "court", "--mission", "Sync the court data"]);
+
+    expect(ran).toEqual({
+      code: 0,
+      stdout:
+        `api: wrote ${fileOf(at, "api")}\n` +
+        "api: joined project court as team api (coelhorocha/custom-mcp-servers, coordinator)\n" +
+        `started session ${at.session}\n` +
+        `api: started in session ${at.session}, tab w1:t1; its ledger is ${LEDGER(at, "api")}\n`,
+      stderr: "",
+    });
+    expect(JSON.parse(readFileSync(fileOf(at, "api"), "utf8"))).toEqual({ fleet: { role: "coordinator", project: "court", mission: "Sync the court data" } });
+    expect(host.sent.map((s) => s.body)).toEqual([{ repo: "coelhorocha/custom-mcp-servers", path: at.repo, role: "coordinator", team: "api" }]);
+    expect(launcher.calls.filter((c) => c.startsWith("tab"))).toEqual([`tab ${at.session} api`]);
+    expect(launcher.prompts).toEqual([`api: /tstack:tuca-mode Sync the court data. Your ledger is ${LEDGER(at, "api")}.`]);
+  });
+
+  test("starts only the agent it adds: the repo's other agents are left as they are", async () => {
+    const { at } = joining("api");
+    const launcher = new FakeLauncher();
+    const ran = await add(at, launcher, ["api", "--project", "court", "--mission", "Sync the court data"]);
+
+    expect(ran.code).toBe(0);
+    expect(launcher.prompts.map((p) => p.split(":")[0])).toEqual(["api"]);
+  });
+
+  test("--role manager writes a manager, joined as the project's manager", async () => {
+    const { at, host } = joining("boss", "manager");
+    const launcher = new FakeLauncher();
+    const ran = await add(at, launcher, ["boss", "--project", "court", "--role", "manager", "--mission", "Land the court work"]);
+
+    expect(ran.code).toBe(0);
+    expect(JSON.parse(readFileSync(fileOf(at, "boss"), "utf8"))).toEqual({ fleet: { role: "manager", project: "court", mission: "Land the court work" } });
+    expect(host.sent.map((s) => s.body)).toEqual([{ repo: "coelhorocha/custom-mcp-servers", path: at.repo, role: "manager", team: "boss" }]);
+    expect(launcher.prompts).toEqual([`boss: /tstack:manager Land the court work. Your ledger is ${LEDGER(at, "boss")}.`]);
+  });
+
+  test("--no-start writes the file and starts nothing", async () => {
+    const host = fakeHost({});
+    const at = inProject(place(), host);
+    const launcher = new FakeLauncher();
+    const ran = await add(at, launcher, ["api", "--project", "court", "--mission", "Sync the court data", "--no-start"]);
+
+    expect(ran).toEqual({ code: 0, stdout: `api: wrote ${fileOf(at, "api")}; \`fleet team start api\` starts it\n`, stderr: "" });
+    expect(existsSync(fileOf(at, "api"))).toBe(true);
+    expect(host.sent).toEqual([]);
+    expect(launcher.calls).toEqual([]);
+  });
+
+  test("in a repo with no agents yet, makes .fleet/agents at the repo's root, run from below it", async () => {
+    const { at } = joining("api", "coordinator", {});
+    rmSync(join(at.repo, ".fleet"), { recursive: true });
+    const below = join(at.repo, "src", "deep");
+    mkdirSync(below, { recursive: true });
+    const ran = await add(at, new FakeLauncher(), ["api", "--project", "court", "--mission", "Sync the court data"], { cwd: below });
+
+    expect(ran.code).toBe(0);
+    expect(existsSync(fileOf(at, "api"))).toBe(true);
+  });
+
+  test("outside any repo, it is refused and writes nothing", async () => {
+    const at = place();
+    const nowhere = tmp("fleet-team-nowhere-");
+    const ran = await add(at, new FakeLauncher(), ["api", "--project", "court", "--mission", "Sync the court data"], { cwd: nowhere });
+
+    expect(ran).toEqual({ code: 1, stdout: "", stderr: `team: ${nowhere} is in no repo (no .fleet/agents, .jj or .git from it up): run it in the repo the agent works in\n` });
+    expect(readdirSync(nowhere)).toEqual([]);
+  });
+
+  test("a name that exists is refused, its file and its agent left as they are", async () => {
+    const host = fakeHost({});
+    const at = inProject(place({ api: '{"fleet": {"role": "coordinator"}}' }), host);
+    const launcher = new FakeLauncher();
+    const ran = await add(at, launcher, ["api", "--project", "court", "--mission", "Sync the court data"]);
+
+    expect(ran).toEqual({ code: 1, stdout: "", stderr: `team: api: ${fileOf(at, "api")} exists already: \`fleet team start api\` starts it, or name another\n` });
+    expect(readFileSync(fileOf(at, "api"), "utf8")).toBe('{"fleet": {"role": "coordinator"}}');
+    expect(launcher.calls).toEqual([]);
+  });
+
+  test("the same add again after a run killed before its start ended (the file as add writes it, no tab) starts it rather than refusing", async () => {
+    const { at } = joining("api");
+    const argv = ["api", "--project", "court", "--mission", "Sync the court data"];
+    expect((await add(at, new FakeLauncher(), [...argv, "--no-start"])).code).toBe(0);
+
+    expect(await add(at, new FakeLauncher(), [...argv, "--no-start"])).toEqual({ code: 0, stdout: `api: ${fileOf(at, "api")} is there already, as add writes it; \`fleet team start api\` starts it\n`, stderr: "" });
+    const launcher = new FakeLauncher();
+    const ran = await add(at, launcher, argv);
+
+    expect(ran).toEqual({
+      code: 0,
+      stdout:
+        `api: ${fileOf(at, "api")} is there already, as add writes it; starting it\n` +
+        "api: joined project court as team api (coelhorocha/custom-mcp-servers, coordinator)\n" +
+        `started session ${at.session}\n` +
+        `api: started in session ${at.session}, tab w1:t1; its ledger is ${LEDGER(at, "api")}\n`,
+      stderr: "",
+    });
+    expect(launcher.prompts).toEqual([`api: /tstack:tuca-mode Sync the court data. Your ledger is ${LEDGER(at, "api")}.`]);
+  });
+
+  test("a file add wrote for another mission is refused and left", async () => {
+    const host = fakeHost({});
+    const at = inProject(place(), host);
+    expect((await add(at, new FakeLauncher(), ["api", "--project", "court", "--mission", "Sync the court data", "--no-start"])).code).toBe(0);
+    const before = readFileSync(fileOf(at, "api"), "utf8");
+    const launcher = new FakeLauncher();
+    const ran = await add(at, launcher, ["api", "--project", "court", "--mission", "Sync the rest"]);
+
+    expect(ran).toEqual({ code: 1, stdout: "", stderr: `team: api: ${fileOf(at, "api")} exists already: \`fleet team start api\` starts it, or name another\n` });
+    expect(readFileSync(fileOf(at, "api"), "utf8")).toBe(before);
+    expect(launcher.calls).toEqual([]);
+  });
+
+  test.each([
+    [
+      "the home folder, given through a symlink",
+      (repo: string) => {
+        const home = join(tmp("fleet-team-link-"), "home");
+        symlinkSync(repo, home);
+
+        return home;
+      },
+    ],
+    ["a folder above the home folder", (repo: string) => join(repo, "me")],
+  ])("a repo that is %s is refused and nothing is written", async (_, homeOf) => {
+    const host = fakeHost({});
+    const base = inProject(place({}), host);
+    rmSync(join(base.repo, ".fleet"), { recursive: true });
+    const at = { ...base, env: { ...base.env, HOME: homeOf(base.repo) } };
+    const launcher = new FakeLauncher();
+    const ran = await add(at, launcher, ["api", "--project", "court", "--mission", "Sync the court data"]);
+
+    expect(ran).toEqual({
+      code: 1,
+      stdout: "",
+      stderr: `team: ${at.repo} is / or the home folder, or a folder above it: an agent's file goes in the repository it works in; run add in one below the home folder\n`,
+    });
+    expect(existsSync(join(at.repo, ".fleet"))).toBe(false);
+    expect(host.sent).toEqual([]);
+    expect(launcher.calls).toEqual([]);
+  });
+
+  test("a start that gives the agent no tab also removes the .fleet/agents and .fleet folders add made", async () => {
+    const host = fakeHost({ "POST /projects/court/teams": { status: 404, body: { _tag: "UnknownProject", project: "court" } } });
+    const at = inProject(place({}), host);
+    rmSync(join(at.repo, ".fleet"), { recursive: true });
+    const ran = await add(at, new FakeLauncher(), ["api", "--project", "court", "--mission", "Sync the court data"]);
+
+    expect(ran.code).toBe(1);
+    expect(existsSync(join(at.repo, ".fleet"))).toBe(false);
+  });
+
+  test("a start that gives the agent no tab keeps a .fleet that was there before add", async () => {
+    const host = fakeHost({ "POST /projects/court/teams": { status: 404, body: { _tag: "UnknownProject", project: "court" } } });
+    const at = inProject(place({}), host);
+    rmSync(join(at.repo, ".fleet", "agents"), { recursive: true });
+    writeFileSync(join(at.repo, ".fleet", "team.json"), "{}");
+    const ran = await add(at, new FakeLauncher(), ["api", "--project", "court", "--mission", "Sync the court data"]);
+
+    expect(ran.code).toBe(1);
+    expect(readdirSync(join(at.repo, ".fleet"))).toEqual(["team.json"]);
+  });
+
+  test.each([
+    ["a name that is no team id", ["api_x", "--project", "court", "--mission", "Go"], "api_x.json: an agent of a project (fleet.project) is named by lower-case letters, digits and - only: its name is its team's id; rename the file"],
+    ["a name with capitals", ["Api", "--project", "court", "--mission", "Go"], "Api.json: name 'Api' is lower-case letters, digits, - and _, starting with a letter, at most 32"],
+    ["a project that is no project id", ["api", "--project", "Court", "--mission", "Go"], "api.json: fleet.project is 'Court'; it is a project's id (lower-case letters, digits and -), as `fleet project list` prints it"],
+    ["a mission of two lines", ["api", "--project", "court", "--mission", "Sync.\nThen more."], "api.json: fleet.mission is one line: the opening is typed into the agent's prompt, where each line would be sent alone"],
+  ])("%s is refused and nothing is written", async (_, argv, why) => {
+    const host = fakeHost({});
+    const at = inProject(place(), host);
+    const launcher = new FakeLauncher();
+    const ran = await add(at, launcher, argv);
+
+    expect(ran).toEqual({ code: 1, stdout: "", stderr: `team: ${why}\n` });
+    expect(readdirSync(join(at.repo, ".fleet", "agents"))).toEqual(["ui.json"]);
+    expect(host.sent).toEqual([]);
+    expect(launcher.calls).toEqual([]);
+  });
+
+  test.each([
+    ["no --project", ["api", "--mission", "Go"], "the following arguments are required: --project"],
+    ["no --mission", ["api", "--project", "court"], "the following arguments are required: --mission"],
+    ["no name", ["--project", "court", "--mission", "Go"], "the following arguments are required: name"],
+    ["a role of no kind", ["api", "--project", "court", "--mission", "Go", "--role", "worker"], "argument --role: invalid choice: 'worker' (choose from 'coordinator', 'manager')"],
+  ])("%s is a usage error", async (_, argv, reason) => {
+    const at = place();
+    const ran = await add(at, new FakeLauncher(), argv);
+
+    expect(ran.code).toBe(2);
+    expect(ran.stderr).toEndWith(`fleet team add: error: ${reason}\n`);
+  });
+
+  test("a start that gives the agent no tab removes the file it wrote, so add runs again once that is fixed", async () => {
+    const host = fakeHost({ "POST /projects/court/teams": { status: 404, body: { _tag: "UnknownProject", project: "court" } } });
+    const at = inProject(place(), host);
+    const launcher = new FakeLauncher();
+    const ran = await add(at, launcher, ["api", "--project", "court", "--mission", "Sync the court data"]);
+
+    expect(ran).toEqual({
+      code: 1,
+      stdout: `api: wrote ${fileOf(at, "api")}\n`,
+      stderr:
+        "team: api: the registry has no project court: `fleet project new` makes one\n" +
+        `team: api: not started, so ${fileOf(at, "api")} is removed: \`fleet team add\` again once that is fixed\n`,
+    });
+    expect(existsSync(fileOf(at, "api"))).toBe(false);
+    expect(launcher.calls.filter((c) => c.startsWith("tab"))).toEqual([]);
+  });
+
+  test("a resumed add whose start gives no tab keeps the file that was there before it", async () => {
+    const host = fakeHost({ "POST /projects/court/teams": { status: 404, body: { _tag: "UnknownProject", project: "court" } } });
+    const at = inProject(place(), host);
+    const argv = ["api", "--project", "court", "--mission", "Sync the court data"];
+    expect((await add(at, new FakeLauncher(), [...argv, "--no-start"])).code).toBe(0);
+
+    const ran = await add(at, new FakeLauncher(), argv);
+
+    expect(ran).toEqual({
+      code: 1,
+      stdout: `api: ${fileOf(at, "api")} is there already, as add writes it; starting it\n`,
+      stderr:
+        "team: api: the registry has no project court: `fleet project new` makes one\n" +
+        `team: api: not started; ${fileOf(at, "api")} was there before this add, so it stays\n`,
+    });
+    expect(existsSync(fileOf(at, "api"))).toBe(true);
+  });
+
+  test("an untrusted repo with no terminal is refused naming add's --trust; --trust trusts it and starts", async () => {
+    const { at } = joining("api");
+    writeFileSync(at.claude, JSON.stringify({ projects: {} }));
+    const argv = ["api", "--project", "court", "--mission", "Sync the court data"];
+    const refused = await add(at, new FakeLauncher(), argv);
+
+    expect(refused.code).toBe(1);
+    expect(refused.stderr).toBe(
+      `team: Claude Code does not trust ${at.repo} yet, and there is no terminal to ask on: \`fleet team add\` again with --trust trusts it\n` +
+        `team: api: not started, so ${fileOf(at, "api")} is removed: \`fleet team add\` again once that is fixed\n`,
+    );
+    expect(existsSync(fileOf(at, "api"))).toBe(false);
+
+    const launcher = new FakeLauncher();
+    const ran = await add(at, launcher, [...argv, "--trust"]);
+
+    expect(ran.code).toBe(0);
+    expect(launcher.prompts).toEqual([`api: /tstack:tuca-mode Sync the court data. Your ledger is ${LEDGER(at, "api")}.`]);
+  });
+
+  test("an agent whose start blocks on a prompt keeps its tab and its file: start sends its opening once it is answered", async () => {
+    const { at } = joining("api");
+    const launcher = new FakeLauncher();
+    launcher.blockAtStart.add("api");
+    const ran = await add(at, launcher, ["api", "--project", "court", "--mission", "Sync the court data"]);
+
+    expect(ran.code).toBe(1);
+    expect(ran.stderr).toContain("api: waits on a prompt in its tab w1:t1");
+    expect(existsSync(fileOf(at, "api"))).toBe(true);
+
+    launcher.answer(at.session, "api");
+    expect(team(at, launcher, "start", "api").code).toBe(0);
+    expect(launcher.prompts).toEqual([`api: /tstack:tuca-mode Sync the court data. Your ledger is ${LEDGER(at, "api")}.`]);
   });
 });

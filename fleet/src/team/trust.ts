@@ -20,8 +20,9 @@ import type { Why } from "./agents.ts";
 /** Asks the owner `question` on a terminal; true only for a yes. */
 export type Asker = (question: string) => boolean;
 
-/** How `start` may trust a folder: the owner said `--trust`, or it may ask on a terminal, or neither. */
-export type Consent = { readonly _tag: "Given" } | { readonly _tag: "Ask"; readonly ask: Asker } | { readonly _tag: "None" };
+/** How `start` may trust a folder: the owner said `--trust`, or it may ask on a terminal, or neither (`again`
+ * says how to give `--trust`, as `\`fleet team start --trust\``). */
+export type Consent = { readonly _tag: "Given" } | { readonly _tag: "Ask"; readonly ask: Asker } | { readonly _tag: "None"; readonly again: string };
 
 /** What {@link ensureTrusted} did: nothing, the folder being trusted already, or wrote the key. */
 export type Trusted = { readonly _tag: "Already" } | { readonly _tag: "Written"; readonly line: string };
@@ -70,7 +71,7 @@ function realOf(path: string): string {
 }
 
 /** Whether `root` is `/`, empty, the home folder or a folder above it, by their realpaths. */
-function atOrAboveHome(root: string, home: string): boolean {
+export function atOrAboveHome(root: string, home: string): boolean {
   if (root === "") return true;
   const real = realOf(root);
   const realHome = realOf(home);
@@ -102,7 +103,7 @@ export function ensureTrusted(input: {
 
   switch (consent._tag) {
     case "None":
-      return { why: `Claude Code does not trust ${root} yet, and there is no terminal to ask on: \`fleet team start --trust\` trusts it` };
+      return { why: `Claude Code does not trust ${root} yet, and there is no terminal to ask on: ${consent.again} trusts it` };
     case "Ask":
       if (!consent.ask(`trust ${root} for Claude Code? Its agents read, edit and run files there. [y/N] `)) return { why: `${root} not trusted for Claude Code; nothing started` };
       break;

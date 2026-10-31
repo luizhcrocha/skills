@@ -1,9 +1,10 @@
 /**
  * A repo's standing agents: one file each, `.fleet/agents/<name>.json`, in the Anthropic Agents SDK's agent
  * fields (`name`, `description`, `model: {id, effort}`, `system`, `tools`, `multiagent`, `metadata`) and a
- * `fleet` block for what that API has no field for (`role`, `opening`, `remote_control`, `machine`, `ledger`,
- * `project`: the project its team is in, which `fleet team start` joins first).
- * The role gives the defaults, so a coordinator's file can be `{"fleet": {"role": "coordinator"}}`. `tools`,
+ * `fleet` block for what that API has no field for (`role`, `opening`, `mission`, `remote_control`, `machine`,
+ * `ledger`, `project`: the project its team is in, which `fleet team start` joins first).
+ * The role gives the defaults, so a coordinator's file can be `{"fleet": {"role": "coordinator"}}`; a mission
+ * goes in the role's opening, one line of plain text of at most 2000 characters. `tools`,
  * `multiagent` and `metadata` are kept for a cloud launcher and not applied here: Claude Code's settings and
  * the plugin's permission cards decide a local agent's tools. `.fleet/team.json` may name the session
  * (`{"session": "skills"}`); else it is the repo's folder. Either is refused unless it is a plain name.
@@ -42,6 +43,8 @@ export interface Agent {
     readonly role: Role;
     /** The first prompt, sent once the agent is ready. */
     readonly opening: string;
+    /** What it is started to do, one line, carried by its role's opening. */
+    readonly mission: string | undefined;
     readonly remote_control: boolean;
     /** Where it runs: `local`, the only one started yet. */
     readonly machine: string;
@@ -60,17 +63,23 @@ export interface Team {
 }
 
 /** What a role gives an agent that does not say. Coordinators and the manager run on Opus at low effort
- * (coordinator/MODELS.md). */
-const ROLE_DEFAULTS: Readonly<Record<Role, { readonly opening: string; readonly model: { readonly id: string; readonly effort: Effort } }>> = {
-  coordinator: { opening: "/tstack:coordinator", model: { id: "opus", effort: "low" } },
-  manager: { opening: "/tstack:manager", model: { id: "opus", effort: "low" } },
+ * (coordinator/MODELS.md). A prompt runs one slash command, so a coordinator with a mission opens with tuca-mode,
+ * whose sessions are coordinators, and the mission is its task. */
+const ROLE_DEFAULTS: Readonly<Record<Role, { readonly opening: string; readonly withMission: string; readonly model: { readonly id: string; readonly effort: Effort } }>> = {
+  coordinator: { opening: "/tstack:coordinator", withMission: "/tstack:tuca-mode", model: { id: "opus", effort: "low" } },
+  manager: { opening: "/tstack:manager", withMission: "/tstack:manager", model: { id: "opus", effort: "low" } },
 };
+
+/** The opening `role` gives, carrying `mission` when there is one. */
+function roleOpening(role: Role, mission: string | undefined): string {
+  return mission === undefined ? ROLE_DEFAULTS[role].opening : `${ROLE_DEFAULTS[role].withMission} ${mission}`;
+}
 
 /** The fields of an agent's file. */
 const FIELDS = ["name", "description", "model", "system", "tools", "multiagent", "metadata", "fleet"];
 
 /** The fields of its `fleet` block. */
-const FLEET_FIELDS = ["role", "opening", "remote_control", "machine", "ledger", "project"];
+const FLEET_FIELDS = ["role", "opening", "mission", "remote_control", "machine", "ledger", "project"];
 
 /** A project's or a team's id, as the cloud's registry names them. */
 const FLEET_ID = /^[a-z0-9][a-z0-9-]{0,63}$/;
@@ -120,6 +129,25 @@ function parseModel(raw: JsonObject, file: string, fallback: Agent["model"]): Ag
   return isEffort(effort.text) ? { id: id.text, effort: effort.text } : { why: `${file}: model.effort is '${effort.text}'; it is one of ${EFFORTS.join(", ")}` };
 }
 
+/** The most characters a mission holds: the opening types it whole into the agent's prompt. */
+export const MISSION_MAX = 2000;
+
+/** What is wrong with `mission`, after "fleet.mission ", or undefined: it is one line of plain text, not blank, at
+ * most {@link MISSION_MAX} characters, as it is typed into the agent's prompt. */
+function missionWhy(mission: string): string | undefined {
+  if (/[\r\n]/.test(mission)) return "is one line: the opening is typed into the agent's prompt, where each line would be sent alone";
+  const control = /\p{Cc}/u.exec(mission)?.[0];
+
+  if (control !== undefined) return `holds a control character (U+${control.charCodeAt(0).toString(16).toUpperCase().padStart(4, "0")}): it is plain text typed into the agent's prompt`;
+
+  if (mission.trim() === "") return "is blank: it says what the agent is started to do";
+  const length = [...mission].length;
+
+  return length > MISSION_MAX
+    ? `is ${length} characters, over ${MISSION_MAX}: the opening types it whole into the agent's prompt; put the detail in a file of the repo and name the file in the mission`
+    : undefined;
+}
+
 function parseFleet(raw: JsonObject, file: string, home: string): Agent["fleet"] | Why {
   const block = asObject(raw["fleet"]);
 
@@ -135,6 +163,17 @@ function parseFleet(raw: JsonObject, file: string, home: string): Agent["fleet"]
   const opening = stringField(block, "opening", file, "fleet.opening");
 
   if ("why" in opening) return opening;
+  const mission = stringField(block, "mission", file, "fleet.mission");
+
+  if ("why" in mission) return mission;
+
+  if (mission.text !== undefined) {
+    const bad = missionWhy(mission.text);
+
+    if (bad !== undefined) return { why: `${file}: fleet.mission ${bad}` };
+  }
+
+  if (mission.text !== undefined && opening.text !== undefined) return { why: `${file}: names both fleet.opening and fleet.mission; the mission goes in the role's opening: drop fleet.opening` };
   const machine = stringField(block, "machine", file, "fleet.machine");
 
   if ("why" in machine) return machine;
@@ -154,7 +193,7 @@ function parseFleet(raw: JsonObject, file: string, home: string): Agent["fleet"]
 
   if (ledgerPath !== undefined && !isAbsolute(ledgerPath)) return { why: `${file}: fleet.ledger is an absolute path (or ~/...)` };
 
-  return { role, opening: opening.text ?? ROLE_DEFAULTS[role].opening, remote_control: remote, machine: machine.text ?? "local", ledger: ledgerPath, project: project.text };
+  return { role, opening: opening.text ?? roleOpening(role, mission.text), mission: mission.text, remote_control: remote, machine: machine.text ?? "local", ledger: ledgerPath, project: project.text };
 }
 
 /** The agent `name` from its file's text (`home` expands a `~/` ledger), or why the file is refused. */
@@ -233,7 +272,12 @@ export function readTeam(repo: string, home: string): Team | Why {
   return { repo, session: name, agents };
 }
 
-/** The agent's first prompt: its opening, and the ledger it picks up when it has one. */
+/** The agent's first prompt: its opening, and the ledger it picks up when it has one, a sentence of its own after
+ * a mission (a bare slash command takes it as its text). */
 export function openingOf(agent: Agent, ledger: string | undefined): string {
-  return ledger === undefined ? agent.fleet.opening : `${agent.fleet.opening} Your ledger is ${ledger}.`;
+  if (ledger === undefined) return agent.fleet.opening;
+  const opening = agent.fleet.opening;
+  const ended = !/\s/.test(opening) || /[.!?]$/.test(opening);
+
+  return `${ended ? opening : `${opening}.`} Your ledger is ${ledger}.`;
 }

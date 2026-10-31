@@ -30,7 +30,7 @@ describe("an agent's file", () => {
       tools: undefined,
       multiagent: undefined,
       metadata: undefined,
-      fleet: { role: "coordinator", opening: "/tstack:coordinator", remote_control: true, machine: "local", ledger: undefined, project: undefined },
+      fleet: { role: "coordinator", opening: "/tstack:coordinator", mission: undefined, remote_control: true, machine: "local", ledger: undefined, project: undefined },
     });
   });
 
@@ -38,6 +38,25 @@ describe("an agent's file", () => {
     const agent = parseAgent("boss", '{"fleet": {"role": "manager"}}');
 
     expect("why" in agent ? agent.why : agent.fleet.opening).toBe("/tstack:manager");
+  });
+
+  test("a coordinator with a mission opens with tuca-mode, which makes the session a coordinator, carrying the mission", () => {
+    const agent = parseAgent("api", '{"fleet": {"role": "coordinator", "project": "court", "mission": "Sync the court data"}}');
+
+    expect("why" in agent ? agent.why : agent.fleet).toMatchObject({ opening: "/tstack:tuca-mode Sync the court data", mission: "Sync the court data" });
+  });
+
+  test("a mission of 2000 characters is taken whole", () => {
+    const mission = "é".repeat(2000);
+    const agent = parseAgent("api", JSON.stringify({ fleet: { role: "coordinator", mission } }));
+
+    expect("why" in agent ? agent.why : agent.fleet.mission).toBe(mission);
+  });
+
+  test("a manager with a mission opens with the manager skill carrying it", () => {
+    const agent = parseAgent("boss", '{"fleet": {"role": "manager", "mission": "Land the court work"}}');
+
+    expect("why" in agent ? agent.why : agent.fleet.opening).toBe("/tstack:manager Land the court work");
   });
 
   test("every field given is kept, tools and multiagent included", () => {
@@ -49,7 +68,7 @@ describe("an agent's file", () => {
       tools: [{ type: "agent_toolset_20260401" }],
       multiagent: { agents: ["reviewer"] },
       metadata: { owner: "luiz" },
-      fleet: { role: "coordinator", opening: "/tstack:coordinator go", remote_control: false, machine: "local", ledger: "/x/ledger", project: "court" },
+      fleet: { role: "coordinator", opening: "/tstack:coordinator go", mission: undefined, remote_control: false, machine: "local", ledger: "/x/ledger", project: "court" },
     });
 
     expect(parseAgent("ui", text)).toEqual({
@@ -60,7 +79,7 @@ describe("an agent's file", () => {
       tools: [{ type: "agent_toolset_20260401" }],
       multiagent: { agents: ["reviewer"] },
       metadata: { owner: "luiz" },
-      fleet: { role: "coordinator", opening: "/tstack:coordinator go", remote_control: false, machine: "local", ledger: "/x/ledger", project: "court" },
+      fleet: { role: "coordinator", opening: "/tstack:coordinator go", mission: undefined, remote_control: false, machine: "local", ledger: "/x/ledger", project: "court" },
     });
   });
 
@@ -72,11 +91,34 @@ describe("an agent's file", () => {
     ["an effort of no level", '{"model": {"id": "opus", "effort": "huge"}, "fleet": {"role": "coordinator"}}', "ui.json: model.effort is 'huge'; it is one of low, medium, high, xhigh, max"],
     ["a model with no id", '{"model": {"effort": "low"}, "fleet": {"role": "coordinator"}}', "ui.json: model.id is required when model is given"],
     ["an unknown field", '{"modle": "opus", "fleet": {"role": "coordinator"}}', "ui.json: modle is not a field of an agent (name, description, model, system, tools, multiagent, metadata, fleet)"],
-    ["an unknown fleet field", '{"fleet": {"role": "coordinator", "openning": "x"}}', "ui.json: fleet.openning is not a field of the fleet block (role, opening, remote_control, machine, ledger, project)"],
+    ["an unknown fleet field", '{"fleet": {"role": "coordinator", "openning": "x"}}', "ui.json: fleet.openning is not a field of the fleet block (role, opening, mission, remote_control, machine, ledger, project)"],
     ["a remote_control that is no bool", '{"fleet": {"role": "coordinator", "remote_control": "yes"}}', "ui.json: fleet.remote_control is true or false"],
     ["an empty opening", '{"fleet": {"role": "coordinator", "opening": ""}}', "ui.json: fleet.opening is a non-empty string"],
     ["a relative ledger", '{"fleet": {"role": "coordinator", "ledger": "led"}}', "ui.json: fleet.ledger is an absolute path (or ~/...)"],
     ["a project that is no project id", '{"fleet": {"role": "coordinator", "project": "Court Integrations"}}', "ui.json: fleet.project is 'Court Integrations'; it is a project's id (lower-case letters, digits and -), as `fleet project list` prints it"],
+    ["an empty mission", '{"fleet": {"role": "coordinator", "mission": ""}}', "ui.json: fleet.mission is a non-empty string"],
+    [
+      "a mission of two lines",
+      '{"fleet": {"role": "coordinator", "mission": "Sync the court.\\nThen the rest."}}',
+      "ui.json: fleet.mission is one line: the opening is typed into the agent's prompt, where each line would be sent alone",
+    ],
+    [
+      "a mission holding an escape",
+      '{"fleet": {"role": "coordinator", "mission": "Sync \\u001b[2Jthe court"}}',
+      "ui.json: fleet.mission holds a control character (U+001B): it is plain text typed into the agent's prompt",
+    ],
+    ["a mission holding a tab", '{"fleet": {"role": "coordinator", "mission": "Sync\\tthe court"}}', "ui.json: fleet.mission holds a control character (U+0009): it is plain text typed into the agent's prompt"],
+    ["a blank mission", '{"fleet": {"role": "coordinator", "mission": "   "}}', "ui.json: fleet.mission is blank: it says what the agent is started to do"],
+    [
+      "a mission over 2000 characters",
+      JSON.stringify({ fleet: { role: "coordinator", mission: "é".repeat(2001) } }),
+      "ui.json: fleet.mission is 2001 characters, over 2000: the opening types it whole into the agent's prompt; put the detail in a file of the repo and name the file in the mission",
+    ],
+    [
+      "both an opening and a mission",
+      '{"fleet": {"role": "coordinator", "opening": "/tstack:coordinator", "mission": "Sync the court."}}',
+      "ui.json: names both fleet.opening and fleet.mission; the mission goes in the role's opening: drop fleet.opening",
+    ],
   ])("%s is refused with a sentence naming the field", (_, text, why) => {
     expect(parseAgent("ui", text)).toEqual({ why });
   });
@@ -134,5 +176,20 @@ describe("what a tab runs", () => {
     if ("why" in agent) throw new Error(agent.why);
     expect(openingOf(agent, "/s/fleet/ui")).toBe("/tstack:coordinator Your ledger is /s/fleet/ui.");
     expect(openingOf(agent, undefined)).toBe("/tstack:coordinator");
+  });
+
+  test("the ledger is a sentence of its own after a mission", () => {
+    const opened = (mission: string, ledger: string | undefined): string => {
+      const agent = parseAgent("api", JSON.stringify({ fleet: { role: "coordinator", mission } }));
+
+      if ("why" in agent) throw new Error(agent.why);
+
+      return openingOf(agent, ledger);
+    };
+
+    expect(opened("Sync the court data", "/s/fleet/api")).toBe("/tstack:tuca-mode Sync the court data. Your ledger is /s/fleet/api.");
+    expect(opened("Sync the court data.", "/s/fleet/api")).toBe("/tstack:tuca-mode Sync the court data. Your ledger is /s/fleet/api.");
+    expect(opened("Is the sync done?", "/s/fleet/api")).toBe("/tstack:tuca-mode Is the sync done? Your ledger is /s/fleet/api.");
+    expect(opened("Sync the court data", undefined)).toBe("/tstack:tuca-mode Sync the court data");
   });
 });

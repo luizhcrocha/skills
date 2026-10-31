@@ -4476,16 +4476,20 @@ recommendation attached.
 ## The team (`fleet team`)
 
 A repo's standing agents (coordinators and the manager) run as tabs of one Superlogical rex session. TypeScript only.
-`fleet team [-h] {start,stop,attach,list} [--force] [--trust] [NAME ...|all]`, run in the repo or below it (the repo is the
+`fleet team [-h] {start,stop,attach,list,add} [--force] [--trust] [NAME ...|all]`, run in the repo or below it (the repo is the
 nearest folder up holding `.fleet/agents`). No NAME is every agent for `start` and `list`; `stop` names them or
-says `all`; `attach` takes none.
+says `all`; `attach` takes none. `add` takes its own arguments (below).
 
 - **An agent's file.** `.fleet/agents/<name>.json`, one per agent, in the Anthropic Agents SDK's agent fields
   (`name`, `description`, `model: {id, effort}`, `system`, `tools`, `multiagent`, `metadata`) and a `fleet`
-  block: `role` (manager or coordinator, required), `opening` (the first prompt), `remote_control` (default
+  block: `role` (manager or coordinator, required), `opening` (the first prompt), `mission` (what it is started
+  to do, one line of plain text, not blank, at most 2000 characters: the opening types it whole into its prompt,
+  where each line would be sent alone and a control character would act; refused beside an `opening`),
+  `remote_control` (default
   true), `machine` (default `local`), `ledger` (absolute or `~/`), `project` (a project's id, `[a-z0-9][a-z0-9-]{0,63}`;
   see the join below; an agent with one is named as a team id is, with no `_`, else refused: rename the file). The role gives the rest: `opening`
-  `/tstack:coordinator` or `/tstack:manager`, model `opus` at `low` effort, description `The <name> <role>`.
+  `/tstack:coordinator` or `/tstack:manager`; with a `mission`, `/tstack:tuca-mode <mission>` for a coordinator (a
+  prompt runs one slash command, and every tuca-mode session is a coordinator) or `/tstack:manager <mission>`; model `opus` at `low` effort, description `The <name> <role>`.
   `name`, when given, is the file's name (`[a-z][a-z0-9_-]{0,31}`), its block's label and its `--name`. `tools`,
   `multiagent` and `metadata` are kept for a cloud launcher and not applied: a local agent's tools are Claude
   Code's settings and the plugin's permission cards. An unknown field, a bad value or a bad file refuses the
@@ -4503,7 +4507,8 @@ says `all`; `attach` takes none.
   `REGISTRY/team/<session>/<name>.system.md`. The start waits, at most 2 minutes, for Claude Code to say it is
   ready: it reports its state to the terminal (the program status protocol, OSC 7501), read back with `rex
   block call <block> program_status` (the root record: `idle` or `done` is ready). Then the opening and
-  `Your ledger is <path>.` are typed into its block (`rex send`, the text on stdin) and submitted (`rex
+  `Your ledger is <path>.` are typed into its block (an opening that carries text and ends in no `.`, `!` or `?`
+  gets a `.` first, so the ledger is a sentence of its own after a mission) (`rex send`, the text on stdin) and submitted (`rex
   send-key enter`); a prompt holding a line break is refused, since each line would be sent alone.
   An agent whose start blocks on a prompt in its tab (it reports `blocked`, or reports nothing for the 2
   minutes while its program runs, as Claude Code does before its prompt is up; in a folder Claude Code has
@@ -4540,7 +4545,7 @@ says `all`; `attach` takes none.
   run files there. [y/N]`; a yes (`y`, `yes`) writes the key, anything else refuses (`<root> not trusted for
   Claude Code; nothing started`). `--trust` writes it without asking; no terminal and no `--trust` refuses
   (`Claude Code does not trust <root> yet, and there is no terminal to ask on: \`fleet team start --trust\`
-  trusts it`); a read of the answer that fails (EAGAIN) is a no. A root that is `/`, HOME or a folder above
+  trusts it`; from `add`, `... \`fleet team add\` again with --trust trusts it`); a read of the answer that fails (EAGAIN) is a no. A root that is `/`, HOME or a folder above
   it, compared by realpath, is refused: Claude Code never keeps trust in HOME, and one above it would trust all
   below. The write reads the file again after the answer, sets that one key (making the project's entry when
   missing), writes `<file>.fleet-trust.<pid>.<uuid>.tmp` (`wx`, fsynced) with the file's mode, and renames it
@@ -4601,6 +4606,31 @@ says `all`; `attach` takes none.
   team: <where>`, `running elsewhere: <where>`, or `not running`. A session of the team's name that runs but
   cannot be read, or sessions that cannot be listed, refuse with the launcher's reason: only no such session is
   `not running`.
+- **add.** `fleet team add NAME --project ID --mission TEXT [--role {coordinator,manager}] [--no-start]
+  [--trust]` writes `.fleet/agents/NAME.json`, `{"fleet": {"role": <role>, "project": ID, "mission": TEXT}}`
+  (role `coordinator` unless `--role`), then starts NAME alone, as `start NAME` does: the trust question, the
+  join of project ID under NAME, a tab of its own in the repo's session, the opening carrying the mission. It
+  runs in the repo the agent works in: the nearest folder up holding `.fleet/agents`, else the nearest holding
+  `.jj` or `.git`, where it makes `.fleet/agents`; in no repo it is refused (`<cwd> is in no repo (...): run it
+  in the repo the agent works in`), and a repo that is `/`, the home folder or a folder above it, by their
+  realpaths, is refused before anything is written (`<repo> is / or the home folder, or a folder above it:
+  ...`). The file is checked as `start` reads it before it is written: a bad name, a project that is no
+  project id or a mission that is not one line of plain text (above) is refused and nothing is written. A name
+  whose file exists is refused (`api: <file> exists already: \`fleet team start api\` starts it, or name
+  another`) and the file left, unless the file is byte for byte what this add would write: a run killed before
+  its start ended (the join waits up to 30 s and the start up to 2 min, past a caller's 120 s timeout) leaves
+  that file, so the same add again says `api: <file> is there already, as add writes it; starting it` and starts
+  it as `start` would (the join answers "already in", an agent with a tab is left). Matching the bytes needs no
+  marker in the file and no state beside it, and a file written by hand or for another mission is still
+  refused. Whether the project exists is the join's to say (`UnknownProject`): the host's `GET /projects`
+  lists only this machine's teams. It says `<name>: wrote <file>`, then what the start says. A start that gives
+  the agent no tab (the join refused, the trust refused, another session holds the name) removes the file, and
+  `.fleet/agents` and `.fleet` when this run made them and they are empty, and says so (`api: not started, so <file> is removed: \`fleet team add\` again once that is fixed`), exit 1, so
+  `add` runs again once that is fixed; an agent that has a tab, even one waiting on a startup prompt, keeps
+  its file, and `fleet team start NAME` goes on from there. `--no-start` only writes the file (`api: wrote
+  <file>; \`fleet team start api\` starts it`). Starting is the default because the file alone runs nothing:
+  the one call a manager makes leaves a coordinator running in the project. `--project` and `--mission` are
+  required; a missing one, or a role of no kind, is a usage error, exit 2.
 - **attach.** Shows the team's session in the Rex app (`rex do session.select session_id=<ID>`, the app
   connected, or the one `REX_CLIENT` or `-C` names); rex has no terminal client on Linux.
 - **The seam.** `team/launcher.ts`: sessions, open-or-reuse (the started session's handle), whether a handle
@@ -4703,6 +4733,7 @@ page panel that comes later read that record.
 | the plugin's hook (`onepw_watch`, `onepw_hold`) | `REGISTRY/onepw/locked.json` (under `REGISTRY/onepw/onepw.lock`), `REGISTRY/onepw/locked.json.broken` (a state that did not read, set aside), `REGISTRY/onepw/onepw.log` |
 | `fleet secrets unlocked` outside Claude Code | `REGISTRY/onepw/locked.json` (`cleared`, `lapsed` and `told` set, rows dropped, kinds pruned, and the file removed when nothing is left; under `REGISTRY/onepw/onepw.lock`), `REGISTRY/onepw/locked.json.broken`, `REGISTRY/onepw/onepw.log`, and for each held fleet the notice: its `DIR/chat.jsonl` (under the store's lock), or one line to its session's socket, `<FLEET_CC_SOCKS>/<pid>.sock`, when its host's watch is dead |
 | `state`, on a write that numbers a row or `approval add next` (TypeScript only) | `REGISTRY/numbers/numbers.json` (under `REGISTRY/numbers/numbers.lock`), when `REGISTRY` exists |
+| `fleet team add` | `<repo>/.fleet/agents/<name>.json` (removed again when its start gave it no tab), then what `start` writes |
 | `fleet team start` / `stop` | `REGISTRY/team/<session>/marks.json`, `REGISTRY/team/<session>/<agent>.system.md`; on the owner's yes or `--trust`, `projects["<root>"].hasTrustDialogAccepted` in Claude Code's `.claude.json` |
 | `fleet ws add` / `prune --apply` | `DIR/state.json` (`workspaces`, `events`, `updated`), `DIR/index.html`; the workspace directory made / moved to the trash with its note, `TRASH/<repo>/<entry>` and `<entry>.json` (a shared fleet's `add` writes nothing); whatever the repo's hooks (`.fleet/ws-pre-add`, `.fleet/ws-add` or `devenv-run --prepare`, `.fleet/ws-pre-remove`) write |
 | `fleet ws restore` / `gc` | the entry's folder moved back and a jj workspace added there (`jj workspace add`, `jj sparse reset`), its note removed / each entry past the age deleted, folder and note |
