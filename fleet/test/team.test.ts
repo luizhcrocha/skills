@@ -518,6 +518,60 @@ describe("safety", () => {
     expect(launcher.calls.filter((c) => c.startsWith("close ") || c.startsWith("end "))).toEqual([]);
   });
 
+  test("marks naming no repo bind as another repo's while they hold: a repo of the same folder name closes nothing of theirs", () => {
+    const at = place();
+    const other = twinOf(at);
+    const launcher = new FakeLauncher();
+    team(at, launcher, "start", "ui");
+    const marks = join(at.registry, "team", at.session, "marks.json");
+    writeFileSync(marks, readFileSync(marks, "utf8").replace(/"repo": "[^"]*",/, ""));
+
+    const refused = (from: Place): string =>
+      `team: session ${at.session} is the team of a repo its marks do not name, which fleet team runs; name this repo's in its .fleet/team.json ("session"); ` +
+      `if it is this repo's, add "repo": ${JSON.stringify(from.repo)} to ${marks}, which leaves its agents running, where closing that session in the Rex app kills them\n`;
+
+    expect(team(other, launcher, "stop", "--force", "ui")).toEqual({ code: 1, stdout: "", stderr: refused(other) });
+    expect(team(other, launcher, "list")).toEqual({ code: 1, stdout: "", stderr: refused(other) });
+    expect(team(at, launcher, "stop", "--force", "ui")).toEqual({ code: 1, stdout: "", stderr: refused(at) });
+    expect(launcher.calls.filter((c) => c.startsWith("close ") || c.startsWith("end "))).toEqual([]);
+  });
+
+  test("marks naming no repo give their repo back the way the refusal says: with \"repo\" added, its agent still runs and it drives it", () => {
+    const at = place();
+    const launcher = new FakeLauncher();
+    team(at, launcher, "start", "ui");
+    const marks = join(at.registry, "team", at.session, "marks.json");
+    const written = readFileSync(marks, "utf8");
+    writeFileSync(marks, written.replace(/"repo": "[^"]*",/, ""));
+
+    expect(team(at, launcher, "list").code).toBe(1);
+    writeFileSync(marks, written);
+
+    expect(team(at, launcher, "list").stdout).toBe(`ui  running here: session ${at.session}, tab w1:t1, working\n`);
+    expect(team(at, launcher, "stop", "ui").code).toBe(0);
+    expect(launcher.calls).toContain(`end ${at.session}`);
+  });
+
+  test("marks naming no repo that no longer hold (herdr's, say) leave the session free, and the next write names this repo", () => {
+    const at = place();
+    const marks = join(at.registry, "team", at.session, "marks.json");
+    mkdirSync(dirname(marks), { recursive: true });
+    writeFileSync(marks, '{"session": "2856944@11502470", "agents": {"ui": {"tab": "w9:t9"}}}');
+    const launcher = new FakeLauncher();
+
+    expect(team(at, launcher, "start", "ui").code).toBe(0);
+    expect(team(at, launcher, "stop", "ui").code).toBe(0);
+    expect(JSON.parse(readFileSync(marks, "utf8"))).toMatchObject({ repo: at.repo });
+  });
+
+  test("no marks are nobody's: a launcher that cannot say gives its own refusal, not another repo's", () => {
+    const at = place();
+    const launcher = new FakeLauncher();
+    launcher.failing.add("sessions");
+
+    expect(team(at, launcher, "list")).toEqual({ code: 1, stdout: "", stderr: "team: the sessions could not be read: rex ls: connection reset\n" });
+  });
+
   test("a session's mark stays while the launcher cannot say the instance still runs: stop then ends it", () => {
     const at = place({ ui: '{"fleet": {"role": "coordinator"}}', api: '{"fleet": {"role": "coordinator"}}' });
     const launcher = new FakeLauncher();

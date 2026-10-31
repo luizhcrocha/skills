@@ -4593,8 +4593,11 @@ says `all`; `attach` takes none. `add` takes its own arguments (below).
   the Rex app) leave the session free: this repo starts from no marks, and its next write replaces them. When
   rex cannot say whether they hold, every such command is refused and the marks stay (`session skills may be the
   team of <repo>, and whether it still is could not be read (<rex's error>); nothing is done`). A
-  marks.json without `repo` (written before marks named it) is adopted once: taken as the repo that runs
-  `fleet team` on it, which names itself there at its next write.
+  marks.json without `repo` (written before marks named it) binds as another repo's: while it holds, every
+  command is refused (`session skills is the team of a repo its marks do not name, ...`), even from the repo that
+  wrote it, since closing a tab of another repo costs more than one refusal; `.fleet/team.json` clears it for
+  another repo, and the repo that wrote it adds `"repo"` to marks.json, as the refusal says, which leaves its agents
+  running where closing the session in the Rex app kills them. One that no longer holds, as herdr's handles never do, leaves the session free.
 - **stop.** Waits, at most 10 minutes, until the agent is ready (its block's `process`, then its
   `program_status`, asked twice a second), then closes its tab (`rex window close`); `--force` closes at once,
   and a wait that gives up says so. An agent whose program has ended is closed at once (`ui: stopped: tab

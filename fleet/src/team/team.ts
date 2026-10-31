@@ -78,20 +78,24 @@ function writeMarks(ground: Ground, marks: Marks): Why | undefined {
   return writeOrWhy(marksPath(ground), `${JSON.stringify({ repo: ground.team.repo, session: marks.session, agents }, null, 2)}\n`);
 }
 
-/** The marks this repo works from: its own (marks naming no repo are taken as its own), none when another repo's
- * no longer hold, or why the session is another repo's: one whose folder has the same name, its marks still
- * holding the session or a tab, or the launcher unable to say they do not. */
+/** The marks this repo works from: its own, none when another repo's no longer hold, or why the session is another
+ * repo's: one whose folder has the same name, its marks still holding the session or a tab, or the launcher unable
+ * to say they do not. Marks naming no repo (from before marks named it) may be either repo's, so they bind as
+ * another's: closing a tab that was another repo's costs more than one refusal. */
 function ownMarks(ground: Ground): Marks | Why {
   const marks = readMarks(ground);
+  const nothing = marks.session === undefined && Object.keys(marks.agents).length === 0;
 
-  if (marks.repo === undefined || realOf(marks.repo) === realOf(ground.team.repo)) return marks;
+  if (nothing || (marks.repo !== undefined && realOf(marks.repo) === realOf(ground.team.repo))) return marks;
   const held = holds(ground, marks);
 
   if (held === false) return { repo: ground.team.repo, session: undefined, agents: {}, unsent: [] };
+  const holder = marks.repo ?? "a repo its marks do not name";
 
-  if (held !== true) return { why: `session ${ground.team.session} may be the team of ${marks.repo}, and whether it still is could not be read (${held.why}); nothing is done` };
+  if (held !== true) return { why: `session ${ground.team.session} may be the team of ${holder}, and whether it still is could not be read (${held.why}); nothing is done` };
+  const claim = marks.repo === undefined ? `; if it is this repo's, add "repo": ${JSON.stringify(ground.team.repo)} to ${marksPath(ground)}, which leaves its agents running, where closing that session in the Rex app kills them` : "";
 
-  return { why: `session ${ground.team.session} is the team of ${marks.repo}, which fleet team runs; name this repo's in its .fleet/team.json ("session")` };
+  return { why: `session ${ground.team.session} is the team of ${holder}, which fleet team runs; name this repo's in its .fleet/team.json ("session")${claim}` };
 }
 
 /** Why the team's session is another repo's ({@link ownMarks}); undefined when it is this repo's or free. */
