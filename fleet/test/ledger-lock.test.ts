@@ -3,7 +3,7 @@
  * state.json under it: while another writer holds it, they wait, and the ledger is left as that writer left it; a
  * lock that cannot be taken refuses the write.
  */
-import { mkdirSync, readFileSync } from "node:fs";
+import { fstatSync, mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -14,7 +14,7 @@ import { save } from "../src/cli/ws.ts";
 import { Refusal } from "../src/errors.ts";
 import { asObject, parseObject } from "../src/json.ts";
 import { lockLedger } from "../src/ledger/store.ts";
-import { holdExclusiveLock } from "../src/lock.ts";
+import { holdExclusiveLock, LockFailed } from "../src/lock.ts";
 import { baseEnv, FLEET, fleet, machine, RACES_SEEN, sleep, tmp, untilOpens, type Environment } from "./support.ts";
 
 const WS = fileURLToPath(new URL("../src/cli/ws.ts", import.meta.url));
@@ -93,6 +93,30 @@ test.skipIf(!RACES_SEEN)("`fleet render` reads, stamps and writes the ledger und
   );
 
   expect(JSON.parse(written).updated).toStartWith("2026-01-02T");
+});
+
+test("the ledger's lock closes its fd when it cannot be taken, and when it is released", () => {
+  const { root } = fresh();
+  let fd = -1;
+
+  const failing = (opened: number): (() => void) => {
+    fd = opened;
+
+    return holdExclusiveLock(987_654);
+  };
+
+  expect(() => lockLedger(root, failing)).toThrow(LockFailed);
+  expect(() => fstatSync(fd)).toThrow("EBADF");
+
+  const release = lockLedger(root, (opened) => {
+    fd = opened;
+
+    return () => undefined;
+  });
+
+  expect(fstatSync(fd).isFile()).toBe(true);
+  release?.();
+  expect(() => fstatSync(fd)).toThrow("EBADF");
 });
 
 test("a ws write whose lock cannot be taken is refused, as render's is, the ledger left as it was", () => {
