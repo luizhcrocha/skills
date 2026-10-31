@@ -44,6 +44,8 @@ Run this on every task the user hands you, and again on every report a worker se
 
 Understand the task before splitting it. Read enough to name the milestones and their steps; delegate any deeper reading. If the user's ask is ambiguous in a way that changes the split, ask one question. Then record the roadmap with the state CLI, register the session as the fleet's host with `fleet serve <dashboard-dir>`, and arm the chat watch as a background command, `fleet chat <dashboard-dir> watch --as coordinator --all --resume --once` (`run_in_background: true`; never `& disown` or `>/dev/null`, which reads the user's messages into nowhere and wakes no one: see [DASHBOARD.md](DASHBOARD.md)), so the user has the link, sees the plan, and can write to the fleet before any worker starts.
 
+When the user tells you to join a project, join it first, before `init`: the host service sets up the joined folder, and you set up the rest of the ledger through a program ([Join a project](#join-a-project)).
+
 If the fleet works on a web app with picasso, name the fleet and claim the app's pages before the first mark, so a mark reaches the fleet it is meant for and not every session on the machine. Run `picasso claim <page-id>... --as <role>` with each page-id of the fleet's dev servers (`picasso status` lists them), for example `picasso claim localhost-7501 localhost-7504 --as casos`. A fleet that only reviews other fleets' pages, such as ui, runs `picasso subscribe '<glob>' --as <role>` instead. Check with `picasso claims`. Luiz addresses a mark to a fleet with `@<role>` in its note or reply.
 
 ### 2. Route
@@ -331,7 +333,7 @@ A project groups teams in the cloud: one room, at most one manager, one page at 
 
 One session may manage every coordinator on the machine (the `manager` skill). Its greeting names its session, its page and `standing.md`, and `fleet fleets manager` prints its page and `standing.md` again; `fleet fleets manager` and `fleet turn` read the manager from its folder. With a manager:
 
-- **It speaks in the project room.** The manager posts to your project's room; a line that tags your team wakes you, and you answer it there (Respond, a room line).
+- **When your team is in a project, the manager speaks in its room.** It posts in the room; a line that tags your team wakes you, and you answer it there (Respond, a room line).
 - **One address.** The office, https://fleet.luiz-rocha.workers.dev/, lists every team with what waits on the user; each team's page is `https://fleet.luiz-rocha.workers.dev/<team>`, the manager's `…/manager`. Give the user the office's address.
 - **Your fleet's name is your session's.** The registry reads it from the session's title (a `/rename` carries over); use that name in everything you write. `fleet fleets name <dashboard-dir> <session>` records it by hand for a session with no title.
 - **Say it once.** The user writes to you on your own page, so the message is in your chat like any other. A question from the manager comes with where to answer: the user's message on the manager's page (`fleet chat <manager-dir> say --as <fleet> --re N "..."`), or `SendMessage` when it asked in its own name. Answer there, once. Your own session's reply afterwards is one line at most ("answered #14 on the manager's page"), never the answer again; and a message that only acknowledges is not sent. The manager reads your ledger with `fleet fleets show`, so a now-line kept current answers most questions before they are asked.
