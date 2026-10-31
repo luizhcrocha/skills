@@ -38,6 +38,24 @@ You manage one project, a row of the cloud's registry with a page at `<cloud>/p/
 
 A project that exists already starts at step 2. `fleet project list` names this machine's projects and their teams. A standing manager whose agent file names `fleet.project` is made the manager by `fleet team start`, and its opening names the ledger.
 
+## Add a coordinator to the project
+
+When the user asks for a coordinator on part of the project's work, start one as a standing agent of the project. Run this in the repo the coordinator works in, not in yours, as a Bash call with `timeout: 300000`: the join waits up to 30 s and the start up to 2 min, past the Bash tool's default 120 s.
+
+```
+cd <repo>; fleet team add <name> --project <id> --mission "<what it is to do>"
+```
+
+`<name>` is its team's id: lower-case letters, digits and `-`, starting with a letter, at most 32 characters. The mission is one line of plain text, at most 2000 characters. The command writes `.fleet/agents/<name>.json` in that repo, joins the project as team `<name>`, and opens a new tab named `<name>` in that repo's rex session. The coordinator opens with `/tstack:tuca-mode <mission>` and its ledger. The user sees the new tab in the Rex app and the new team in the project's room and on its page. `--role manager` adds a manager instead. `--no-start` only writes the file, for `fleet team start <name>` later.
+
+The agent file lands in that repo's working copy: jj snapshots it into the change open there, and that repo's coordinator commits it or ignores it, as the repo prefers.
+
+- **Untrusted repo.** Claude Code's trust in a repo is the user's ("Whose is what"), and `--trust` writes Claude Code's own settings, which auto mode refuses even after a yes on a page. So the refusal that names `--trust` becomes an `action` for the user, a step only they can take (the coordinator skill's "Decisions" gives the kinds and the manual's form). Its `--hand` says that only their own terminal can trust a repo for Claude Code. Its `--manual` has two numbered steps, each with one ```` ```nu ```` block holding one command and no comment, paths absolute: `cd <repo>`, then the same `add` line with the fleet CLI by its full path (`${CLAUDE_PLUGIN_ROOT}` expanded, then `/fleet/bin/fleet team add <name> --project <id> --mission "<mission>"`). Run from their terminal, `add` asks the trust question there.
+- **Killed midway.** A run the tool killed leaves the file. The same `add` again sees the file as `add` writes it and starts it; a file written by hand or for another mission is refused.
+- **No tab.** A start that gave the agent no tab removes the file, and the `.fleet` folders it made; a file that was there before this `add` stays. Fix what the refusal names, then run `add` again.
+- **A startup prompt.** An agent waiting on one keeps its tab and its file. The user answers it in the Rex app (`fleet team attach`), then `fleet team start <name>` sends the opening.
+- **Auto mode refuses the launch.** That is a permission card for the user, never a retry. It reaches you as a `[hub]` line and a refusal draft: ask the user with the command it gives, as "Whose is what" says.
+
 ## Setup
 
 Read the coordinator skill's `DASHBOARD.md` (`${CLAUDE_PLUGIN_ROOT}/skills/productivity/coordinator/DASHBOARD.md`): the chat and the decisions work for you as they do for a coordinator.
