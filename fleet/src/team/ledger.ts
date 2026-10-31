@@ -25,11 +25,16 @@ export function isAgentsEntry(entry: Entry, name: string): boolean {
  * different folders are refused.
  */
 export function ledgerOf(agent: Agent, known: readonly Entry[], home: string): { readonly ledger: string } | Why {
-  if (agent.fleet.ledger !== undefined) return { ledger: agent.fleet.ledger };
-  const reals = [...new Set(known.flatMap((e) => (isAgentsEntry(e, agent.name) && existsSync(e.dir) ? [realpathSync(e.dir)] : [])))];
+  return agent.fleet.ledger === undefined ? ledgerNamed(agent.name, known, home) : { ledger: agent.fleet.ledger };
+}
+
+/** The ledger the registry (`known`) knows by `name`, where it is; else its fixed home. Entries of that name in
+ * different folders are refused. A team a project's join made is named by its team id. */
+export function ledgerNamed(name: string, known: readonly Entry[], home: string): { readonly ledger: string } | Why {
+  const reals = [...new Set(known.flatMap((e) => (isAgentsEntry(e, name) && existsSync(e.dir) ? [realpathSync(e.dir)] : [])))];
   const [found, ...others] = reals;
 
-  if (others.length > 0) return { why: `${agent.name}: the registry knows ${reals.length} ledgers by its name, in different folders (${reals.join(", ")}); remove the stale entries so one is left` };
+  if (others.length > 0) return { why: `${name}: the registry knows ${reals.length} ledgers by its name, in different folders (${reals.join(", ")}); remove the stale entries so one is left` };
 
-  return { ledger: found ?? join(fixedHomes(home), agent.name) };
+  return { ledger: found ?? join(fixedHomes(home), name) };
 }

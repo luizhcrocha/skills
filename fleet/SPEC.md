@@ -27,7 +27,7 @@ Contents: [Environment](#environment) · [state.py](#statepy-the-ledger-cli) ·
 [chat.py](#chatpy-the-chat) · [fleets.py and the registry](#fleetspy-and-the-registry) ·
 [The other scripts](#the-other-scripts) · [`fleet serve`](#fleet-serve-the-fleets-host) · [Heartbeats](#heartbeats) ·
 [Listening hooks](#listening-hooks) · [The wake](#the-wake) · [The news](#the-news-fleet-news) ·
-[1Password locked](#1password-locked-fleet-secrets) ·
+[The project room](#the-project-room-fleet-room) · [Projects](#projects-fleet-project) · [1Password locked](#1password-locked-fleet-secrets) ·
 [Workspaces](#workspaces-fleet-ws) · [The preview](#the-preview-fleet-preview) · [The advisor](#the-advisor-fleet-advisor) · [The team](#the-team-fleet-team) ·
 [Waste](#waste-fleet-waste) · [Files by writer](#files-by-writer) ·
 [Oracle traces](#oracle-traces) · [The model](#the-model-based-test) · [Open](#open)
@@ -3058,6 +3058,42 @@ machine holds its room, so the lines the CLI prints name `--as`.
 at, team, line, how: "watch"}`, `{kind: "forwarded", at, team, line, agent}`. The room's calls are the cloud
 prelude's `rooms` connector: `room`, `room.answer` and `room.forwarded` each return a promise, not an op.
 
+## Projects (`fleet project`)
+
+TypeScript only. A project is a row of the cloud's registry: an id, a title, `open` or `archived`, who made it
+(the machine its host's token names, and the session's label when one asked), and its manager team. A team is
+one repo of a project on one machine: its id names its fleet object, its page and its ledger folder. The CLI
+holds no token. It asks this machine's host service on loopback, `$FLEET_RUN_URL` (an `http` address on
+`127.0.0.1` or `[::1]` with a port, else refused and nothing sent), else `http://127.0.0.1:7633`, and the host
+asks the cloud under the machine's token. The routes and their answers are the run server's contract
+(`apps/host/src/run-server.ts` in the fleet repo). Every body sent is JSON (`content-type: application/json`) and
+carries `session`, the value of `$CLAUDE_CODE_SESSION_ID`, when that is set.
+
+| Command | Asks | Output | Exit |
+| :-- | :-- | :-- | :-- |
+| `project new TITLE [--id ID]` | `POST /projects {title, id?, session?}`; no `--id`: the cloud makes the id from the title | `project <id> ("<title>") created; page <cloud>/p/<id>. Join it from a repo with ...` (the page when a team of this machine has moved: its `cloud.json`'s cloud) | 0; 1 refused |
+| `project join PROJECT [--team ID] [--role {coordinator,manager}]` | `POST /projects/<p>/teams {repo, path, role, team?, session?}`, role `coordinator` unless `--role` | `joined project <p> as team <t> (<repo>, <role>)` (201) or `already in project ...` (200), then `Your ledger is <dir>.` | 0; 1 refused, or no `cloud.json` in time |
+| `project manage PROJECT [--team ID]` | the same with role `manager` | the same | the same |
+| `project archive PROJECT` | `POST /projects/<p>/archive {}`, then `GET /projects` | `project <p> archived <at>: read-only from now on; ...`, then per team of the project here `team <t>: stop its agent (...), then \`fleet ws <dir> prune --apply\`` | 0; 1 refused |
+| `project list` | `GET /projects` | per project of this machine, `<id> "<title>": open\|archived <at>, made by <machine> (session <label>) <at>, managed by <t>\|no manager`, then `  <team>: <role> of <repo>` per team here; none: `this machine (<machine>) has no team in any project` | 0; 1 refused |
+
+- **The repo.** `join` and `manage` run in the repo: the nearest folder up from the working directory holding
+  `.jj` or `.git` is `path`. `repo` is its `origin` remote's owner and name in lower case, with no host and no
+  `.git` (`jj git remote list --ignore-working-copy` in a jj repo, else `git remote get-url origin`); with no
+  such remote, the folder's last two names when it is under `~/repos` (`~/repos/<owner>/<name>`). Else refused.
+- **The ledger.** The joined team's folder is the registry's fleet of the team's id, where it is, else
+  `~/.local/state/fleet/<team>` (the [team's ledger](#the-team-fleet-team) rule). The host makes it and cuts it over;
+  the command waits, at most 30 s, until it holds `cloud.json`, else `project: the host has not cut <dir> over
+  to the cloud yet (...): \`fleet project join <p> --team <t>\` again waits for it, ...`, exit 1.
+- **Archive.** The cloud refuses an archived project's writes and keeps its reads. The CLI runs nothing on the
+  machine: it names, for each team of the project here, the agent to stop and the workspaces to prune.
+- **Refusals.** `project: <words>` on stderr, exit 1, one sentence per tag: `ProjectExists` (open: join it, or
+  `--id`; archived: `--id`), `ProjectArchived`, `HasManager`, `ManyTeams` (name one with `--team`), `TeamTaken`,
+  `TeamNotManager`, `NotArchived`, `DeclaredByFleets`, `UnknownProject`, the host's `BadRegistryBody`, the
+  cloud's `NotAllowed` (an archive by another machine); a body `{error}` (502, the cloud unreachable) is its
+  sentence; `404 no such route` is a host built before projects; anything else is `the host answered <status>:
+  <body>`. No answer at all: `nothing answers at <origin>: this machine's fleet-host is not running (...)`.
+
 ## 1Password locked (`fleet secrets`)
 
 For Luiz: "1p problems ask the user to unlock and pauses all fleet until unblocked." On his machines git
@@ -4438,7 +4474,8 @@ says `all`; `attach` takes none.
 - **An agent's file.** `.fleet/agents/<name>.json`, one per agent, in the Anthropic Agents SDK's agent fields
   (`name`, `description`, `model: {id, effort}`, `system`, `tools`, `multiagent`, `metadata`) and a `fleet`
   block: `role` (manager or coordinator, required), `opening` (the first prompt), `remote_control` (default
-  true), `machine` (default `local`), `ledger` (absolute or `~/`). The role gives the rest: `opening`
+  true), `machine` (default `local`), `ledger` (absolute or `~/`), `project` (a project's id, `[a-z0-9][a-z0-9-]{0,63}`;
+  see the join below). The role gives the rest: `opening`
   `/tstack:coordinator` or `/tstack:manager`, model `opus` at `low` effort, description `The <name> <role>`.
   `name`, when given, is the file's name (`[a-z][a-z0-9_-]{0,31}`), its block's label and its `--name`. `tools`,
   `multiagent` and `metadata` are kept for a cloud launcher and not applied: a local agent's tools are Claude
@@ -4508,6 +4545,14 @@ says `all`; `attach` takes none.
   in different folders are refused, naming them. Else it is `~/.local/state/fleet/<name>`, where a coordinator
   that has none makes it. A ledger is never moved: its folder may hold the team's `cloud.json`, and its host
   runs from it.
+- **The join.** Before its agents start, `start` joins each local agent's `fleet.project` whose ledger holds no
+  `cloud.json`, as `fleet project join` does ([Projects](#projects-fleet-project)) with the agent's role and its
+  name as the team's id (`--team <name>`), so the ledger the host makes and cuts over is the one above. It says
+  `<name>: joined project P as team T (<repo>, <role>)` (or `already in`) and waits, at most 30 s, for the
+  folder's `cloud.json`. An agent whose join is refused (`team: <name>: <the refusal's words>`), whose
+  `cloud.json` does not come (`... \`fleet team start <name>\` again waits for it`), or that the registry gives
+  another team (a manager team made before under another id: set `fleet.ledger` to its folder) does not start;
+  the others do, and `start` exits 1.
 - **Yours.** `REGISTRY/team/<session>/marks.json` holds what `fleet team` started, by the launcher's handles:
   the session when it started it and each agent's tab, by rex's IDs (`session:<uuid>`, `window:<uuid>`), which
   rex never reuses. `stop` and the session's end act only on what is marked and still holds: a tab is its

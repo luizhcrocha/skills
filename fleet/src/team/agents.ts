@@ -1,7 +1,8 @@
 /**
  * A repo's standing agents: one file each, `.fleet/agents/<name>.json`, in the Anthropic Agents SDK's agent
  * fields (`name`, `description`, `model: {id, effort}`, `system`, `tools`, `multiagent`, `metadata`) and a
- * `fleet` block for what that API has no field for (`role`, `opening`, `remote_control`, `machine`, `ledger`).
+ * `fleet` block for what that API has no field for (`role`, `opening`, `remote_control`, `machine`, `ledger`,
+ * `project`: the project its team is in, which `fleet team start` joins first).
  * The role gives the defaults, so a coordinator's file can be `{"fleet": {"role": "coordinator"}}`. `tools`,
  * `multiagent` and `metadata` are kept for a cloud launcher and not applied here: Claude Code's settings and
  * the plugin's permission cards decide a local agent's tools. `.fleet/team.json` may name the session
@@ -46,6 +47,8 @@ export interface Agent {
     readonly machine: string;
     /** Its ledger folder when the file names one, absolute. */
     readonly ledger: string | undefined;
+    /** The project whose team it is, by id, when the file names one. */
+    readonly project: string | undefined;
   };
 }
 
@@ -67,7 +70,10 @@ const ROLE_DEFAULTS: Readonly<Record<Role, { readonly opening: string; readonly 
 const FIELDS = ["name", "description", "model", "system", "tools", "multiagent", "metadata", "fleet"];
 
 /** The fields of its `fleet` block. */
-const FLEET_FIELDS = ["role", "opening", "remote_control", "machine", "ledger"];
+const FLEET_FIELDS = ["role", "opening", "remote_control", "machine", "ledger", "project"];
+
+/** A project's id, as the cloud's registry names it. */
+const PROJECT = /^[a-z0-9][a-z0-9-]{0,63}$/;
 
 /** A standing agent's name: its file, its block and its conversation's `--name`. */
 const NAME = /^[a-z][a-z0-9_-]{0,31}$/;
@@ -135,6 +141,12 @@ function parseFleet(raw: JsonObject, file: string, home: string): Agent["fleet"]
   const ledger = stringField(block, "ledger", file, "fleet.ledger");
 
   if ("why" in ledger) return ledger;
+  const project = stringField(block, "project", file, "fleet.project");
+
+  if ("why" in project) return project;
+
+  if (project.text !== undefined && !PROJECT.test(project.text))
+    return { why: `${file}: fleet.project is '${project.text}'; it is a project's id (lower-case letters, digits and -), as \`fleet project list\` prints it` };
   const remote = block["remote_control"] === undefined ? true : asBoolean(block["remote_control"]);
 
   if (remote === undefined) return { why: `${file}: fleet.remote_control is true or false` };
@@ -142,7 +154,7 @@ function parseFleet(raw: JsonObject, file: string, home: string): Agent["fleet"]
 
   if (ledgerPath !== undefined && !isAbsolute(ledgerPath)) return { why: `${file}: fleet.ledger is an absolute path (or ~/...)` };
 
-  return { role, opening: opening.text ?? ROLE_DEFAULTS[role].opening, remote_control: remote, machine: machine.text ?? "local", ledger: ledgerPath };
+  return { role, opening: opening.text ?? ROLE_DEFAULTS[role].opening, remote_control: remote, machine: machine.text ?? "local", ledger: ledgerPath, project: project.text };
 }
 
 /** The agent `name` from its file's text (`home` expands a `~/` ledger), or why the file is refused. */

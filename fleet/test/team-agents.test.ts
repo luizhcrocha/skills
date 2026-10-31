@@ -30,7 +30,7 @@ describe("an agent's file", () => {
       tools: undefined,
       multiagent: undefined,
       metadata: undefined,
-      fleet: { role: "coordinator", opening: "/tstack:coordinator", remote_control: true, machine: "local", ledger: undefined },
+      fleet: { role: "coordinator", opening: "/tstack:coordinator", remote_control: true, machine: "local", ledger: undefined, project: undefined },
     });
   });
 
@@ -49,7 +49,7 @@ describe("an agent's file", () => {
       tools: [{ type: "agent_toolset_20260401" }],
       multiagent: { agents: ["reviewer"] },
       metadata: { owner: "luiz" },
-      fleet: { role: "coordinator", opening: "/tstack:coordinator go", remote_control: false, machine: "local", ledger: "/x/ledger" },
+      fleet: { role: "coordinator", opening: "/tstack:coordinator go", remote_control: false, machine: "local", ledger: "/x/ledger", project: "court" },
     });
 
     expect(parseAgent("ui", text)).toEqual({
@@ -60,7 +60,7 @@ describe("an agent's file", () => {
       tools: [{ type: "agent_toolset_20260401" }],
       multiagent: { agents: ["reviewer"] },
       metadata: { owner: "luiz" },
-      fleet: { role: "coordinator", opening: "/tstack:coordinator go", remote_control: false, machine: "local", ledger: "/x/ledger" },
+      fleet: { role: "coordinator", opening: "/tstack:coordinator go", remote_control: false, machine: "local", ledger: "/x/ledger", project: "court" },
     });
   });
 
@@ -72,10 +72,11 @@ describe("an agent's file", () => {
     ["an effort of no level", '{"model": {"id": "opus", "effort": "huge"}, "fleet": {"role": "coordinator"}}', "ui.json: model.effort is 'huge'; it is one of low, medium, high, xhigh, max"],
     ["a model with no id", '{"model": {"effort": "low"}, "fleet": {"role": "coordinator"}}', "ui.json: model.id is required when model is given"],
     ["an unknown field", '{"modle": "opus", "fleet": {"role": "coordinator"}}', "ui.json: modle is not a field of an agent (name, description, model, system, tools, multiagent, metadata, fleet)"],
-    ["an unknown fleet field", '{"fleet": {"role": "coordinator", "openning": "x"}}', "ui.json: fleet.openning is not a field of the fleet block (role, opening, remote_control, machine, ledger)"],
+    ["an unknown fleet field", '{"fleet": {"role": "coordinator", "openning": "x"}}', "ui.json: fleet.openning is not a field of the fleet block (role, opening, remote_control, machine, ledger, project)"],
     ["a remote_control that is no bool", '{"fleet": {"role": "coordinator", "remote_control": "yes"}}', "ui.json: fleet.remote_control is true or false"],
     ["an empty opening", '{"fleet": {"role": "coordinator", "opening": ""}}', "ui.json: fleet.opening is a non-empty string"],
     ["a relative ledger", '{"fleet": {"role": "coordinator", "ledger": "led"}}', "ui.json: fleet.ledger is an absolute path (or ~/...)"],
+    ["a project that is no project id", '{"fleet": {"role": "coordinator", "project": "Court Integrations"}}', "ui.json: fleet.project is 'Court Integrations'; it is a project's id (lower-case letters, digits and -), as `fleet project list` prints it"],
   ])("%s is refused with a sentence naming the field", (_, text, why) => {
     expect(parseAgent("ui", text)).toEqual({ why });
   });

@@ -3,23 +3,27 @@
  * (`.fleet/agents/<name>.json`, team/agents.ts) as tabs of one rex session (team/team.ts). The repo is the
  * nearest folder up from here holding `.fleet/agents`. No NAME is every agent, for start and list; stop names
  * them, or `all`. attach takes none. start first makes sure Claude Code trusts the repo (team/trust.ts), asking
- * on the terminal unless `--trust`. TypeScript only.
+ * on the terminal unless `--trust`, and joins an agent of a project (`fleet.project`) whose ledger is not cut over to
+ * the cloud yet, through the host service (cli/project.ts). TypeScript only.
  */
 import { readSync } from "node:fs";
 import { dirname, join } from "node:path";
 
 import * as Effect from "effect/Effect";
+import * as Result from "effect/Result";
 
 import { Refusal, UsageError } from "../errors.ts";
-import { isDir } from "../files.ts";
+import { isDir, isMoved } from "../files.ts";
 import { Out } from "../io.ts";
 import { readTeam, type Agent, type Team, type Why } from "../team/agents.ts";
 import type { Launcher } from "../team/launcher.ts";
+import { ledgerOf } from "../team/ledger.ts";
 import { rexLauncher } from "../team/rex.ts";
 import { heldElsewhere, listTeam, startTeam, stopTeam, type BeforeStart, type Ground, type Said } from "../team/team.ts";
 import { claudeConfigOf, ensureTrusted, trustRootOf, type Asker, type Consent } from "../team/trust.ts";
 import { World, type Machine } from "../world.ts";
 import { exitOf, printUsage } from "./exit.ts";
+import { awaitMoved, joinProject, JOIN_WAIT_MS, repoAt } from "./project.ts";
 
 const USAGE = "usage: fleet team [-h] {start,stop,attach,list} [--force] [--trust] [NAME ...|all]\n";
 
@@ -80,7 +84,66 @@ function said(result: Said): Effect.Effect<number, never, Out> {
   });
 }
 
-function run(machine: Machine, argv: readonly string[], launcherAt: (state: string) => Launcher, cwd: string, ask: Asker | undefined): Effect.Effect<number, Refusal | UsageError, Out> {
+/** What joining the projects of the agents about to start came to: what it says, and the agents that may start. */
+interface Joins extends Said {
+  readonly ready: readonly Agent[];
+}
+
+/**
+ * Each local agent of a project whose ledger holds no cloud.json joins the project first, as its role, under its
+ * own name as the team's id, so its ledger is the one {@link ledgerOf} finds, which the host makes and cuts over;
+ * the start waits at most `waitMs` for that. An agent whose join is refused, or that the registry gives another
+ * team, does not start.
+ */
+function joinFirst(machine: Machine, team: Team, agents: readonly Agent[], home: string, waitMs: number): Effect.Effect<Joins> {
+  return Effect.gen(function* () {
+    const lines: string[] = [];
+    const refused: string[] = [];
+    const ready: Agent[] = [];
+
+    for (const agent of agents) {
+      const project = agent.fleet.project;
+      const ledger = ledgerOf(agent, machine.registry.known(), home);
+
+      if (project === undefined || agent.fleet.machine !== "local" || "why" in ledger || isMoved(ledger.ledger)) {
+        ready.push(agent);
+        continue;
+      }
+
+      const repo = repoAt(team.repo, home);
+
+      if ("why" in repo) {
+        refused.push(`${agent.name}: ${repo.why}`);
+        continue;
+      }
+
+      const joined = yield* Effect.result(joinProject(machine, { project, role: agent.fleet.role, team: agent.name, repo }));
+
+      if (Result.isFailure(joined)) {
+        refused.push(`${agent.name}: ${joined.failure.why}`);
+        continue;
+      }
+
+      if (joined.success.team !== agent.name) {
+        refused.push(`${agent.name}: project ${project}'s ${agent.fleet.role} on this machine is the team ${joined.success.team}, not ${agent.name}: set fleet.ledger in ${agent.name}.json to its folder (\`fleet project ${agent.fleet.role === "manager" ? "manage" : "join"} ${project}\` prints it)`);
+        continue;
+      }
+
+      lines.push(`${agent.name}: ${joined.success.line}`);
+
+      if (!(yield* awaitMoved(ledger.ledger, waitMs))) {
+        refused.push(`${agent.name}: the host has not cut ${ledger.ledger} over to the cloud yet (no cloud.json after ${waitMs / 1000} s): \`fleet team start ${agent.name}\` again waits for it`);
+        continue;
+      }
+
+      ready.push(agent);
+    }
+
+    return { lines, refused, ready };
+  });
+}
+
+function run(machine: Machine, argv: readonly string[], launcherAt: (state: string) => Launcher, cwd: string, ask: Asker | undefined, waitMs: number): Effect.Effect<number, Refusal | UsageError, Out> {
   return Effect.gen(function* () {
     if (argv.includes("-h") || argv.includes("--help")) return yield* printUsage(HELP);
     const [first, ...rest] = argv;
@@ -141,7 +204,10 @@ function run(machine: Machine, argv: readonly string[], launcherAt: (state: stri
         return "why" in trusted ? trusted : { line: trusted._tag === "Written" ? trusted.line : undefined };
       };
 
-      return yield* said(startTeam(ground, agents, before));
+      const joins = yield* joinFirst(machine, team, agents, home, waitMs);
+      const started = startTeam(ground, joins.ready, before);
+
+      return yield* said({ lines: [...joins.lines, ...started.lines], refused: [...joins.refused, ...started.refused] });
     }
 
     if (command === "stop") return yield* said(stopTeam(ground, agents, force));
@@ -151,13 +217,13 @@ function run(machine: Machine, argv: readonly string[], launcherAt: (state: stri
 }
 
 /** `fleet team` with `argv` (after `team`) over the launcher `launcherAt` builds for the team's folder, the repo
- * found from `cwd`; `ask` puts start's trust question to the owner, undefined when there is no terminal. The exit
- * code. */
-export function teamWith(argv: readonly string[], launcherAt: (state: string) => Launcher, cwd: string, ask: Asker | undefined): Effect.Effect<number, never, Out | World> {
+ * found from `cwd`; `ask` puts start's trust question to the owner, undefined when there is no terminal; a start
+ * waits at most `waitMs` for a joined project's ledger to be cut over. The exit code. */
+export function teamWith(argv: readonly string[], launcherAt: (state: string) => Launcher, cwd: string, ask: Asker | undefined, waitMs = JOIN_WAIT_MS): Effect.Effect<number, never, Out | World> {
   return Effect.gen(function* () {
     const machine = yield* World;
 
-    return yield* run(machine, argv, launcherAt, cwd, ask).pipe(Effect.catch(exitOf));
+    return yield* run(machine, argv, launcherAt, cwd, ask, waitMs).pipe(Effect.catch(exitOf));
   });
 }
 

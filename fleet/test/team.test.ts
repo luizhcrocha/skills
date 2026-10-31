@@ -7,7 +7,7 @@ import { spawnSync } from "node:child_process";
 import { chmodSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 
-import { describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test } from "bun:test";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 
@@ -17,6 +17,7 @@ import type { Asker } from "../src/team/trust.ts";
 import { recordingOut } from "../src/io.ts";
 import type { Json } from "../src/json.ts";
 import { World } from "../src/world.ts";
+import { cutOver, fakeHost, stopHosts, type FakeHost } from "./project-host-fake.ts";
 import { baseEnv, machine, tmp, type Environment, type Ran } from "./support.ts";
 import { FakeLauncher } from "./team-launcher-fake.ts";
 
@@ -631,5 +632,85 @@ describe("trust", () => {
 
   test("--trust is start's alone", () => {
     expect(team(place(), new FakeLauncher(), "list", "--trust")).toMatchObject({ code: 2, stderr: expect.stringContaining("unrecognized arguments: --trust") });
+  });
+});
+
+describe("an agent of a project", () => {
+  afterEach(stopHosts);
+
+  /** The repo of `at` with an origin remote, and the agents' calls going to `host`. */
+  function inProject(at: Place, host: FakeHost): Place {
+    for (const args of [["init", "-q"], ["remote", "add", "origin", "git@github.com:CoelhoRocha/Custom-MCP-Servers.git"]]) spawnSync("git", args, { cwd: at.repo });
+
+    return { ...at, env: { ...at.env, FLEET_RUN_URL: host.origin, CLAUDE_CODE_SESSION_ID: "" } };
+  }
+
+  async function start(at: Place, launcher: FakeLauncher, waitMs = 2_000): Promise<Ran> {
+    const { layer, recorded } = recordingOut();
+    const world = Layer.succeed(World, machine(at.env));
+    const code = await Effect.runPromise(teamWith(["start"], () => launcher, at.repo, undefined, waitMs).pipe(Effect.provide(Layer.mergeAll(world, layer))));
+
+    return { code, stdout: recorded.stdout.join(""), stderr: recorded.stderr.join("") };
+  }
+
+  const TEAM = (id: string, role: string) => ({ id, project: "court", repo: "coelhorocha/custom-mcp-servers", machine: "office", role, createdBy: { machine: "office", session: null }, createdAt: "2026-10-30T10:01:00.000Z" });
+
+  test("joins the project first, as its role and under its name, then starts naming the ledger the host cut over", async () => {
+    let home = "";
+    const host = fakeHost({ "POST /projects/court/teams": { status: 201, body: TEAM("boss", "manager"), before: () => cutOver(home, "boss") } });
+    const at = inProject(place({ boss: '{"fleet": {"role": "manager", "project": "court"}}' }), host);
+    home = at.home;
+    const launcher = new FakeLauncher();
+    const ran = await start(at, launcher);
+
+    expect(ran).toEqual({
+      code: 0,
+      stdout: `boss: joined project court as team boss (coelhorocha/custom-mcp-servers, manager)\nstarted session ${at.session}\nboss: started in session ${at.session}, tab w1:t1; its ledger is ${LEDGER(at, "boss")}\n`,
+      stderr: "",
+    });
+    expect(host.sent.map((s) => s.body)).toEqual([{ repo: "coelhorocha/custom-mcp-servers", path: at.repo, role: "manager", team: "boss" }]);
+    expect(launcher.prompts).toEqual([`boss: /tstack:manager Your ledger is ${LEDGER(at, "boss")}.`]);
+  });
+
+  test("an agent whose ledger the host cut over already starts with no join", async () => {
+    const host = fakeHost({});
+    const at = inProject(place({ ui: '{"fleet": {"role": "coordinator", "project": "court"}}' }), host);
+    cutOver(at.home, "ui");
+    const launcher = new FakeLauncher();
+    const ran = await start(at, launcher);
+
+    expect(ran.code).toBe(0);
+    expect(host.sent).toEqual([]);
+    expect(launcher.prompts).toEqual([`ui: /tstack:coordinator Your ledger is ${LEDGER(at, "ui")}.`]);
+  });
+
+  test("an agent whose join is refused, or whose ledger is not cut over in time, does not start; the others do", async () => {
+    const host = fakeHost({ "POST /projects/court/teams": { status: 409, body: { _tag: "ProjectArchived", project: "court" } }, "POST /projects/later/teams": { status: 201, body: { ...TEAM("ux", "coordinator"), project: "later" } } });
+    const at = inProject(place({ ui: '{"fleet": {"role": "coordinator", "project": "court"}}', ux: '{"fleet": {"role": "coordinator", "project": "later"}}', web: '{"fleet": {"role": "coordinator"}}' }), host);
+    const launcher = new FakeLauncher();
+    const ran = await start(at, launcher, 200);
+
+    expect(ran).toEqual({
+      code: 1,
+      stdout: `ux: joined project later as team ux (coelhorocha/custom-mcp-servers, coordinator)\nstarted session ${at.session}\nweb: started in session ${at.session}, tab w1:t1; its ledger is ${LEDGER(at, "web")}\n`,
+      stderr:
+        "team: ui: project court is archived: it is read-only, and no team joins it\n" +
+        `team: ux: the host has not cut ${LEDGER(at, "ux")} over to the cloud yet (no cloud.json after 0.2 s): \`fleet team start ux\` again waits for it\n`,
+    });
+    expect(launcher.prompts).toEqual([`web: /tstack:coordinator Your ledger is ${LEDGER(at, "web")}.`]);
+  });
+
+  test("a join that gives the agent another team than its name is refused: its ledger would not be the agent's", async () => {
+    const host = fakeHost({ "POST /projects/court/teams": { status: 200, body: TEAM("court-manager", "manager") } });
+    const at = inProject(place({ boss: '{"fleet": {"role": "manager", "project": "court"}}' }), host);
+    const launcher = new FakeLauncher();
+    const ran = await start(at, launcher);
+
+    expect(ran).toEqual({
+      code: 1,
+      stdout: "",
+      stderr: `team: boss: project court's manager on this machine is the team court-manager, not boss: set fleet.ledger in boss.json to its folder (\`fleet project manage court\` prints it)\n`,
+    });
+    expect(launcher.calls).toEqual([]);
   });
 });
