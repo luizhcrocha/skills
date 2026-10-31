@@ -22,10 +22,12 @@ sys.path.insert(0, str(ROOT / "scripts"))
 import bun_files  # noqa: E402
 
 # A stand-in for `bun test FILE`, driven by the file's first line: pass, fail, hang, wedge (a child that exits and
-# is never reaped while the process spins, as Bun 1.4.2's spawnSync leaves it), "wedge-once", which wedges only on
-# its first run, "fail-then-wedge-once", which fails a test and then wedges on its first run, "idle-zombies" (a
-# zombie held while the process sleeps, as async children wait for the loop) and "stubborn", a hang that ignores
-# SIGTERM, SIGINT and SIGHUP. Each run writes its pid to FILE.pid.
+# is never reaped, as Bun 1.4.2's spawnSync leaves it), "wedge-once", which wedges only on its first run,
+# "fail-then-wedge-once", which fails a test and then wedges on its first run, "idle-zombies" (a zombie held while
+# the process sleeps, as async children wait for the loop) and "stubborn", a hang that ignores SIGTERM, SIGINT and
+# SIGHUP. Each run writes its pid to FILE.pid. Every mode sleeps: the spin of a wedge is the CPU meter's
+# (spinning, passed to main), not the scheduler's, which gives a busy loop less than SPIN of a core on a loaded
+# machine.
 FAKE = textwrap.dedent("""\
     #!{python}
     import os, signal, subprocess, sys, time
@@ -54,9 +56,13 @@ FAKE = textwrap.dedent("""\
         child = subprocess.Popen(["true"])  # held and never waited for: a zombie (dropped, Popen.__del__ could reap it)
     print("started", flush=True)
     while True:
-        if mode != "wedge":
-            time.sleep(0.1)
+        time.sleep(0.1)
     """)
+
+
+def spinning(_pid: int) -> float:
+    """A CPU meter by which every fake bun spins a full core: its CPU seconds are the wall clock's."""
+    return time.monotonic()
 
 
 class Runner(unittest.TestCase):
@@ -79,10 +85,10 @@ class Runner(unittest.TestCase):
     def file(self, name: str, mode: str) -> None:
         (self.tmp / "test" / name).write_text(mode + "\n")
 
-    def run_all(self, *args: str) -> tuple[int, str]:
+    def run_all(self, *args: str, cpu_s: bun_files.CpuMeter = bun_files._cpu_s) -> tuple[int, str]:
         out = io.StringIO()
         with contextlib.redirect_stdout(out):
-            code = bun_files.main(["-j", "4", *args])
+            code = bun_files.main(["-j", "4", *args], cpu_s)
         return code, out.getvalue()
 
     def test_it_finds_buns_test_files_only(self):
@@ -103,17 +109,16 @@ class Runner(unittest.TestCase):
 
     def test_a_wedged_file_is_killed_and_run_once_more(self):
         self.file("a.test.ts", "wedge-once")
-        started = time.monotonic()
-        code, out = self.run_all()
+        code, out = self.run_all(cpu_s=spinning)
         self.assertEqual(code, 0, out)
-        self.assertLess(time.monotonic() - started, 30)
+        self.assertNotIn("timed out", out, "the watch stopped it, not the --timeout")
         self.assertIn("test/a.test.ts: ok after a wedge", out)
         self.assertRegex(out, r"its child true \(\d+\) stayed a zombie for \d+s while it spun")
         self.assertIn("oven-sh/bun#34069", out)
 
     def test_a_failure_before_a_wedge_stays_a_failure_whatever_the_rerun_does(self):
         self.file("a.test.ts", "fail-then-wedge-once")
-        code, out = self.run_all()
+        code, out = self.run_all(cpu_s=spinning)
         self.assertEqual(code, 1, out)
         self.assertIn("test/a.test.ts: failed, then wedged; the rerun ok", out)
         self.assertIn("(fail) a planted failure", out, "the first run's output is shown")
@@ -129,9 +134,16 @@ class Runner(unittest.TestCase):
 
     def test_a_file_that_wedges_twice_fails(self):
         self.file("a.test.ts", "wedge")
-        code, out = self.run_all()
+        code, out = self.run_all(cpu_s=spinning)
         self.assertEqual(code, 1)
         self.assertIn("FAILED: test/a.test.ts (wedged)", out)
+
+    def test_the_cpu_meter_counts_a_process_cpu_seconds(self):
+        before, burnt = bun_files._cpu_s(os.getpid()), time.process_time()
+        while time.process_time() - burnt < 0.3:
+            pass
+        self.assertGreaterEqual(bun_files._cpu_s(os.getpid()) - before, 0.2)
+        self.assertIsNone(bun_files._cpu_s(2**22 + 1), "no such pid")
 
     def test_a_hang_with_no_zombie_is_a_timeout_and_is_not_run_again(self):
         self.file("a.test.ts", "hang")

@@ -33,6 +33,7 @@ import signal
 import subprocess
 import sys
 import time
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
@@ -87,15 +88,19 @@ def _zombie_children(pid: int) -> dict[str, str]:
     return out
 
 
+CpuMeter = Callable[[int], float | None]  # a pid's CPU seconds so far, None when it is gone
+
+
 class Wedge:
     """run_limited's watch for one file: its reason when a zombie child has been held WEDGE_S seconds while the
-    process spun (Bun's spawnSync wedge), else None."""
+    process spun (Bun's spawnSync wedge) by `cpu_s`'s reading, else None."""
 
-    def __init__(self) -> None:
+    def __init__(self, cpu_s: CpuMeter = _cpu_s) -> None:
+        self.cpu_s = cpu_s
         self.seen: dict[str, tuple[float, float | None]] = {}  # zombie pid -> (when first seen, the CPU seconds then)
 
     def __call__(self, proc: subprocess.Popen) -> str | None:
-        now, cpu = time.monotonic(), _cpu_s(proc.pid)
+        now, cpu = time.monotonic(), self.cpu_s(proc.pid)
         zombies = _zombie_children(proc.pid)
         self.seen = {z: self.seen.get(z, (now, cpu)) for z in zombies}
         for z, (since, cpu_then) in self.seen.items():
@@ -105,21 +110,22 @@ class Wedge:
         return None
 
 
-def run_file(path: str, args: list[str], limit: float) -> tuple[str, int, str, str]:
+def run_file(path: str, args: list[str], limit: float, cpu_s: CpuMeter = _cpu_s) -> tuple[str, int, str, str]:
     """Run one file: (path, exit code, verdict, output). verdict is ok, failed, wedged or timed out."""
-    code, stopped, _, out = run_limited([*BUN, *args, f"./{path}"], limit, watch=Wedge(), grace=0)
+    code, stopped, _, out = run_limited([*BUN, *args, f"./{path}"], limit, watch=Wedge(cpu_s), grace=0)
     if stopped is None:
         return path, code, "ok" if code == 0 else "failed", out
     verdict, why = ("timed out", f"still running after {limit:g}s") if stopped == TIMEOUT else ("wedged", stopped)
     return path, code or 1, verdict, out + f"bun_files: {path} {verdict}: {why}; killed\n"
 
 
-def run_with_retry(path: str, args: list[str], limit: float) -> tuple[str, int, str, str, float]:
+def run_with_retry(path: str, args: list[str], limit: float,
+                   cpu_s: CpuMeter = _cpu_s) -> tuple[str, int, str, str, float]:
     t0 = time.monotonic()
-    path, code, verdict, out = run_file(path, args, limit)
+    path, code, verdict, out = run_file(path, args, limit, cpu_s)
     if verdict == "wedged":  # oven-sh/bun#34069: once more, in a fresh process
         first, failed_first = out, bool(FAILED_TEST.search(out))
-        path, code, again, out = run_file(path, args, limit)
+        path, code, again, out = run_file(path, args, limit, cpu_s)
         out = first + f"bun_files: {path} ran again after Bun's spawnSync wedge (oven-sh/bun#34069)\n" + out
         if failed_first:
             verdict, code = f"failed, then wedged; the rerun {again}", 1
@@ -137,7 +143,8 @@ def _stop(signum: int, _frame) -> None:
     os._exit(128 + signum)
 
 
-def main(argv: list[str]) -> int:
+def main(argv: list[str], cpu_s: CpuMeter = _cpu_s) -> int:
+    """The command line; `cpu_s` is the wedge watch's CPU meter."""
     if "--" in argv:
         i = argv.index("--")
         argv, bun_args = argv[:i], argv[i + 1:]
@@ -166,7 +173,7 @@ def main(argv: list[str]) -> int:
     before = [signal.signal(sig, _stop) for sig in signals]
     try:
         with ThreadPoolExecutor(max(1, n)) as pool:
-            for fut in as_completed([pool.submit(run_with_retry, f, bun_args, args.timeout) for f in found]):
+            for fut in as_completed([pool.submit(run_with_retry, f, bun_args, args.timeout, cpu_s) for f in found]):
                 path, code, verdict, out, secs = fut.result()
                 durations[f"bun:{where}:{path}"] = round(secs, 2)
                 counts = {kind: int(num) for num, kind in COUNT.findall(out)}
