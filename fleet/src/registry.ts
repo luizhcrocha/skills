@@ -49,7 +49,7 @@ export interface Entry {
   /** Set on a team moved to the cloud (fleet slice 3): read from its folder ({@link MOVED_MARKER}), never written. A
    * session registered for it (`fleet serve`) keeps it moved, under the marker's name and with its cloud page. */
   readonly moved?: true;
-  /** A moved team's project, from its marker: the host writes it into a joined team's. */
+  /** A moved team's project, from its marker: the host writes it into a joined team's cloud.json. */
   readonly project?: string;
   /** When the moved team's project was archived, from its marker: the team is read-only from then. */
   readonly archived?: string;
@@ -618,7 +618,7 @@ export class Registry {
       prior === undefined || priorId === undefined ? [] : aliasesAfter(prior, priorId, name),
     );
 
-    return away === undefined ? entry : { ...entry, moved: true };
+    return away === undefined ? entry : { ...entry, moved: true, ...projectOf(away) };
   }
 
   /** Forget the fleet served from `root` (`fleet serve --stop`): a stop is on purpose, so its name is not kept. */

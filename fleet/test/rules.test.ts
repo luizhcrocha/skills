@@ -602,7 +602,7 @@ describe("fleet turn", () => {
       expect(refused.code).toBe(1);
       expect(refused.stdout).toBe("the manager's ledger here is behind the cloud (exported seq none, applied seq 9): waiting up to 1 s for its export\n");
       expect(refused.stderr).toStartWith("turn: the manager's ledger here is still behind the cloud after 1 s (exported seq none, applied seq 9)");
-      expect(refused.stderr).toContain("fleet-host@manager");
+      expect(refused.stderr).toContain("systemctl --user status fleet-host`");
     }, 15_000);
   });
 });

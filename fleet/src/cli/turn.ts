@@ -107,7 +107,7 @@ function caughtUp(manager: Entry, waitS: number): Effect.Effect<void, Refusal, O
 
     return yield* refuse(
       `the manager's ledger here is still behind the cloud after ${waitS} s (${lagWords(lag)}), so it cannot say whose turn it is. ` +
-        `${dir} is written by the manager's host service: check it (\`systemctl --user status fleet-host@${manager.id}\`, its journal), then run \`fleet turn\` again`,
+        `${dir} is written by the manager's host service: check it (\`systemctl --user status fleet-host\`, its journal), then run \`fleet turn\` again`,
     );
   });
 }
