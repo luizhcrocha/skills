@@ -7,6 +7,12 @@ from the cloud, and both the plugin's hook and the old CLI itself refuse every `
 `status`, and `fleet render <dir>/state.json`, with "this team records through programs: fleet-run". With no `cloud.json`, this file does
 not apply: record with the state CLI as [DASHBOARD.md](DASHBOARD.md) says.
 
+When `cloud.json` names `archived`, your team's project is archived, and the team is read-only. The cloud refuses
+its every write with `ProjectArchived`, the room's lines among them, and this machine's host service no longer serves
+it, so `fleet-run` exits 2 with "this host does not serve the team". Its page and its ledger still read. Record
+nothing more: tell the user, stop your workers, and take the team's workspaces out by hand
+([What stays on the old CLI](#what-stays-on-the-old-cli)). `fleet fleets list` says the same on the team's `project` line.
+
 ## The one command
 
 `${CLAUDE_PLUGIN_ROOT}/fleet/bin/fleet-run`, written `fleet-run` below, takes one JavaScript program on standard input
