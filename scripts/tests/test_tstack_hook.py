@@ -175,6 +175,16 @@ class TapeBuildTest(HookCase):
         self.env.update(CLAUDE_PLUGIN_ROOT=str(self.root), FAKE_TAPE_LOG=str(self.runs), FAKE_DREAM_LOG=str(self.dreams))
         self.index = self.tmp / "data" / "tstack" / "tape" / "index.db"
 
+    def tearDown(self):
+        """The build and the proposer outlive the hook, and one still writing fails the temp folder's cleanup."""
+        logs = (self.tmp / "tape-runs.jsonl", self.dreams)
+        deadline = time.monotonic() + 20
+        while any(log.exists() for log in logs) and not all(log.exists() for log in logs):
+            if time.monotonic() > deadline:
+                break
+            time.sleep(0.05)
+        super().tearDown()
+
     def tape_in_use(self):
         self.index.parent.mkdir(parents=True)
         self.index.write_bytes(b"")
