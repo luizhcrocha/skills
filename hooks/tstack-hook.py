@@ -1798,6 +1798,83 @@ def _answered_grill(d):
         isinstance(q, dict) and q.get("status") == "open" for q in questions)
 
 
+# What a subagent's context weighs, as Claude Code records it (read off real transcripts, 2026-11-01). A subagent's
+# PostToolUse carries agent_id and the session's transcript_path; agent_transcript_path comes only on its SubagentStop, and
+# in 605 of 605 stops it was <session>/subagents/agent-<agent_id>.jsonl. Each `assistant` line carries message.usage, and
+# the context a call read is its input_tokens + cache_read_input_tokens + cache_creation_input_tokens: the total the
+# harness reports for an agent is that last sum plus output_tokens, exact for 29 of 40 agents and within 1,180 for the rest.
+CONTEXT_LINE = 150_000
+CONTEXT_STEP = 50_000
+# Between a call's assistant line and the next, 99.4% of 35,850 calls wrote under this much. Past it the handler sees
+# nothing this once, and the next call's line is back in the tail.
+CONTEXT_TAIL = 256 * 1024
+CONTEXT_WARNING = ("Your context is {size:,} tokens and the limit is about 150k. Finish the read, edit or test cycle in "
+                   "hand, start no other, leave a resume point, then report. Your handoff names what you read and need "
+                   "not be re-read, the decisions you made and why, what is left, and the files and commands you were in.")
+# Who runs past the line by design, as the payload's agent_type names them (the fleets' heartbeats, 2026-11-01): the
+# fleet's long-lived advisor, and a fork, which starts with its parent's whole context.
+CONTEXT_EXEMPT = ("tstack:advisor", "fork")
+
+
+def _context_size(path):
+    """The context of the last assistant line in the transcript's last CONTEXT_TAIL bytes, or None. A line the tail
+    cuts, a torn last line, and a line that is not one of Claude Code's are read past; a file that is missing or is no
+    regular file is None."""
+    chunk = _regular_bytes(path, CONTEXT_TAIL)
+    if chunk is None:
+        return None
+    for line in reversed(chunk.split(b"\n")):
+        if b'"usage"' not in line:
+            continue
+        try:
+            entry = json.loads(line)
+        except (ValueError, RecursionError):
+            continue
+        message = entry.get("message") if isinstance(entry, dict) and entry.get("type") == "assistant" else None
+        usage = message.get("usage") if isinstance(message, dict) else None
+        if isinstance(usage, dict):
+            used = [usage.get(k) for k in ("input_tokens", "cache_read_input_tokens", "cache_creation_input_tokens")]
+            size = sum(n for n in used if isinstance(n, int))
+            if size:  # Claude Code's own error lines carry a usage of nothing
+                return size
+    return None
+
+
+def _agent_transcript(hook):
+    """The subagent's own transcript, which Claude Code keeps beside the session's."""
+    session = hook.input.get("transcript_path")
+    if not isinstance(session, str) or not session.endswith(".jsonl"):
+        return None
+    return f"{session[:-len('.jsonl')]}/subagents/agent-{hook.input['agent_id']}.jsonl"
+
+
+def fleet_context_warning(hook):
+    """PostToolUse: a subagent of a fleet cannot see its own context, so past CONTEXT_LINE tokens it is told the size,
+    and again each CONTEXT_STEP on. A session's main thread, a subagent outside a fleet and CONTEXT_EXEMPT are told
+    nothing: the limit is a coordinator's rule for its workers. An agent_id that could leave the subagents folder is
+    no subagent's. Reads only the tail of the subagent's transcript, once per call. Its marks live in the session's
+    state, one file per subagent past the line, and a compaction arms the line again."""
+    agent = hook.input.get("agent_id")
+    if not isinstance(agent, str) or not re.fullmatch(r"[A-Za-z0-9_-]+", agent) or not hook.session_id:
+        return None
+    if hook.input.get("agent_type") in CONTEXT_EXEMPT:
+        return None
+    if not fleet_dirs(hook) and not _moved_beat_dirs(hook, []):
+        return None
+    path = _agent_transcript(hook)
+    size = _context_size(path) if path else None
+    if size is None:
+        return None
+    mark = CONTEXT_LINE + (size - CONTEXT_LINE) // CONTEXT_STEP * CONTEXT_STEP if size >= CONTEXT_LINE else 0
+    name = f"context-{agent}"
+    told = hook.load_state(name).get("mark")
+    told = told if isinstance(told, int) else 0
+    if mark == told:
+        return None
+    hook.save_state(name, {"mark": mark})
+    return CONTEXT_WARNING.format(size=size) if mark > told else None
+
+
 def fleet_chat_nudge(hook):
     """PostToolUse: a coordinator or manager busy mid-turn hears its chat. At most once per NUDGE_EVERY_S
     per session, it reads the fleet's chat.jsonl from where it last stopped, and tells the session of each
@@ -3428,18 +3505,23 @@ def _encodes(record):
     return True
 
 
-def _regular_bytes(path):
-    """The bytes of the regular file at `path`; None when it is not there, cannot be read or is anything else: opened
-    O_NOFOLLOW, and O_NONBLOCK so a FIFO swapped in after a check does not hang the open, then checked on the open
-    file."""
+def _regular_bytes(path, tail=None):
+    """The bytes of the regular file at `path`, or only its last `tail` bytes; None when it is not there, cannot be read
+    or is anything else: opened O_NOFOLLOW, and O_NONBLOCK so a FIFO swapped in after a check does not hang the open,
+    then checked on the open file."""
     import stat
     try:
         fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
-    except OSError:
+    except (OSError, ValueError):
         return None
     try:
         with open(fd, "rb") as f:
-            return f.read() if stat.S_ISREG(os.fstat(f.fileno()).st_mode) else None
+            status = os.fstat(f.fileno())
+            if not stat.S_ISREG(status.st_mode):
+                return None
+            if tail is not None:
+                f.seek(max(0, status.st_size - tail))
+            return f.read(tail)
     except OSError:
         return None
 
@@ -6987,7 +7069,8 @@ HANDLERS = {
     "PreCompact": [memo_precompact],
     "PreToolUse": [fleet_agent_grant, fleet_spawn_effort, fleet_moved_writes, land_turn_gate, push_attribution, suite_gate,
                    onepw_hold, rm_guard, fleet_monitor_watch, fleet_grant_alone],
-    "PostToolUse": [fleet_heartbeat, fleet_grant_sweep, fleet_refusal_forgotten, fleet_refusal_note, fleet_chat_nudge, onepw_watch],
+    "PostToolUse": [fleet_heartbeat, fleet_grant_sweep, fleet_refusal_forgotten, fleet_refusal_note, fleet_context_warning,
+                    fleet_chat_nudge, onepw_watch],
     "PostToolUseFailure": [fleet_heartbeat, fleet_grant_sweep, onepw_watch],
     "PermissionDenied": [fleet_permission_denied],
     "UserPromptSubmit": [fleet_refusal_note],

@@ -2213,6 +2213,187 @@ def options(argv):
     return positionals, found
 
 
+class ContextWarningTest(FleetCase):
+    """fleet_context_warning: a subagent of a fleet cannot see its context, so the hook reads the last assistant
+    entry of its transcript and tells it past 150k. A subagent's PostToolUse names the session's transcript, so the
+    tests write the agent's own beside it, where Claude Code does: <session>/subagents/agent-<id>.jsonl."""
+
+    AGENT = "a915a8459428b2563"
+    WARNING = ("Your context is {} tokens and the limit is about 150k. Finish the read, edit or test cycle in hand, "
+               "start no other, leave a resume point, then report. Your handoff names what you read and need not be "
+               "re-read, the decisions you made and why, what is left, and the files and commands you were in.")
+
+    def own(self, agent=AGENT):
+        path = self.tmp / "transcript" / "subagents" / f"agent-{agent}.jsonl"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        return path
+
+    def assistant(self, size, output=900):
+        """An assistant entry as Claude Code writes it, its size in the three input fields, as a real one spreads it."""
+        return {"type": "assistant", "isSidechain": True, "agentId": self.AGENT,
+                "message": {"role": "assistant", "content": [{"type": "tool_use", "name": "Bash"}],
+                            "usage": {"input_tokens": 2, "cache_creation_input_tokens": 1000,
+                                      "cache_read_input_tokens": size - 1002, "output_tokens": output}}}
+
+    def used(self, size, path=None, **fields):
+        """The agent's last call used SIZE: its entry, then the tool's result, which comes after it in the file."""
+        with open(path or self.own(), "a") as f:
+            for e in (self.assistant(size, **fields), {"type": "user", "isSidechain": True, "message": {"role": "user",
+                      "content": [{"type": "tool_result", "content": "done"}]}}):
+                f.write(json.dumps(e, separators=(",", ":")) + "\n")
+
+    def tool(self, agent=AGENT, **extra):
+        payload = self.payload("PostToolUse", tool_name="Bash", tool_input={"command": "ls"}, **extra)
+        if agent:
+            payload["agent_id"] = agent
+        r = self.hook("PostToolUse", payload)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertNotIn("fleet_context_warning", self.log())
+        return json.loads(r.stdout)["hookSpecificOutput"]["additionalContext"] if r.stdout else ""
+
+    def test_under_the_line_it_says_nothing(self):
+        self.used(149_999)
+        self.assertEqual(self.tool(), "")
+
+    def test_past_the_line_it_warns_with_the_number(self):
+        self.used(120_000)
+        self.used(157_826)
+        self.assertEqual(self.tool(), self.WARNING.format("157,826"))
+
+    def test_the_size_leaves_the_reply_out(self):
+        self.used(149_000, output=5000)
+        self.assertEqual(self.tool(), "")
+
+    def test_the_second_call_at_that_size_says_nothing(self):
+        self.used(160_000)
+        self.assertNotEqual(self.tool(), "")
+        self.assertEqual(self.tool(), "")
+        self.used(199_999)
+        self.assertEqual(self.tool(), "")
+
+    def test_every_50k_past_it_warns_again(self):
+        self.used(160_000)
+        self.tool()
+        self.used(200_000)
+        self.assertEqual(self.tool(), self.WARNING.format("200,000"))
+        self.assertEqual(self.tool(), "")
+        self.used(291_312)  # past two marks at once: one warning
+        self.assertEqual(self.tool(), self.WARNING.format("291,312"))
+        self.used(299_000)
+        self.assertEqual(self.tool(), "")
+
+    def test_a_compaction_arms_the_line_again(self):
+        self.used(210_000)
+        self.tool()
+        self.used(40_000)
+        self.assertEqual(self.tool(), "")
+        self.used(155_000)
+        self.assertEqual(self.tool(), self.WARNING.format("155,000"))
+
+    def test_two_subagents_of_a_session_count_apart(self):
+        self.used(160_000)
+        self.used(170_000, self.own("b2"))
+        self.assertEqual(self.tool(), self.WARNING.format("160,000"))
+        self.assertEqual(self.tool("b2"), self.WARNING.format("170,000"))
+
+    def test_the_main_session_says_nothing(self):
+        self.transcript.write_text(json.dumps(self.assistant(300_000)) + "\n")
+        self.used(300_000)
+        self.assertEqual(self.tool(agent=None), "")
+
+    def test_a_subagent_outside_a_fleet_says_nothing(self):
+        self.used(300_000)
+        self.assertEqual(self.tool(scratchpad_dir=str(self.tmp)), "")
+
+    def test_a_subagent_of_a_moved_fleet_is_warned(self):
+        folder = self.tmp / "home" / ".local" / "state" / "fleet" / "p"
+        folder.mkdir(parents=True)
+        (folder / "state.json").write_text("{}")
+        (folder / "cloud.json").write_text("{}")
+        (self.data / "sessions").mkdir(parents=True)
+        (self.data / "sessions" / "sess-1.ledger-home.json").write_text(json.dumps({"served": ["p"]}))
+        (self.registry / "p.json").unlink()
+        self.used(160_000)
+        self.assertEqual(self.tool(scratchpad_dir=str(self.tmp)), self.WARNING.format("160,000"))
+
+    def test_the_payload_names_no_transcript_it_reads(self):
+        elsewhere = self.tmp / "elsewhere.jsonl"
+        self.used(180_000, elsewhere)
+        self.used(100_000)
+        self.assertEqual(self.tool(agent_transcript_path=str(elsewhere)), "")
+
+    def test_an_advisor_and_a_fork_are_not_told(self):
+        self.used(300_000)
+        for kind in ("tstack:advisor", "fork"):
+            self.assertEqual(self.tool(agent_type=kind), "", kind)
+        self.assertEqual(self.tool(agent_type="general-purpose"), self.WARNING.format("300,000"))
+
+    def test_a_fifo_at_the_transcript_says_nothing_and_returns(self):
+        os.mkfifo(self.own())
+        self.assertEqual(self.tool(), "")
+
+    def test_a_symlink_at_the_transcript_says_nothing(self):
+        target = self.tmp / "elsewhere.jsonl"
+        self.used(300_000, target)
+        self.own().symlink_to(target)
+        self.assertEqual(self.tool(), "")
+
+    def test_an_agent_id_that_climbs_out_reads_nothing(self):
+        (self.own("x").parent / "agent-x").mkdir()
+        self.used(300_000, self.tmp / "secret.jsonl")
+        self.assertEqual(self.tool("x/../../../secret"), "")
+
+    def test_a_line_nested_past_the_parser_s_depth_is_read_past(self):
+        self.used(160_000)
+        with open(self.own(), "a") as f:
+            f.write('{"usage":' + "[" * 200_000 + "\n")
+        self.assertEqual(self.tool(), self.WARNING.format("160,000"))
+
+    def test_an_absent_or_garbage_transcript_says_nothing(self):
+        self.assertEqual(self.tool(), "")
+        for garbage in ("", "not json\n", "[1, 2]\n", '{"type": "assistant"}\n', '{"type": "assistant", "message": 3}\n',
+                        '{"type": "assistant", "message": {"usage": "x"}}\n',
+                        '{"type": "assistant", "message": {"usage": {"input_tokens": "900000"}}}\n',
+                        '{"type": "user", "usage": {"input_tokens": 900000}}\n'):
+            self.own().write_text(garbage)
+            self.assertEqual(self.tool(), "", garbage)
+        self.own().write_bytes(b'\xff\xfe{"usage"\n')
+        self.assertEqual(self.tool(), "")
+        self.own().unlink()
+        self.own().mkdir()
+        self.assertEqual(self.tool(), "")
+        for transcript in (42, "x\0y.jsonl"):
+            self.assertEqual(self.tool(transcript_path=transcript), "")
+
+    def test_a_torn_last_line_falls_back_on_the_entry_before_it(self):
+        self.used(160_000)
+        with open(self.own(), "a") as f:
+            f.write(json.dumps(self.assistant(190_000))[:60])
+        self.assertEqual(self.tool(), self.WARNING.format("160,000"))
+
+    def test_an_entry_with_an_empty_usage_is_read_past(self):
+        self.used(160_000)
+        self.tool()
+        with open(self.own(), "a") as f:
+            f.write(json.dumps({"type": "assistant", "message": {"usage": {"input_tokens": 0}}}) + "\n")
+        self.assertEqual(self.tool(), "")
+        self.used(161_000)
+        self.assertEqual(self.tool(), "")  # the empty entry armed nothing
+
+    def test_it_reads_the_tail_and_never_the_whole_file(self):
+        self.used(300_000)
+        pad = json.dumps({"type": "user", "pad": "x" * 1000}) + "\n"
+        with open(self.own(), "a") as f:
+            f.write(pad * 300)  # 300 KB past the entry: beyond the tail, so the entry is not seen
+        self.assertEqual(self.tool(), "")
+
+    def test_a_line_the_tail_cuts_in_two_is_dropped(self):
+        entry = self.assistant(300_000)
+        entry["message"]["content"][0]["input"] = "x" * 300_000  # before usage: the cut leaves usage in the tail
+        self.own().write_text(json.dumps(entry) + "\n")
+        self.assertEqual(self.tool(), "")
+
+
 class RefusalCase(FleetCase):
     """A fleet whose CLI is a stand-in that records its argv, and the PermissionDenied hook run on a refused call."""
 

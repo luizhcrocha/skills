@@ -2925,6 +2925,20 @@ A handler of SessionStart and Stop tells the host of the machine's news ([The ne
   <team>\`` ([The project room](#the-project-room-fleet-room)). A SessionStart says it whenever any is unread; a
   Stop once per new line (the session's `fleet-room` state keeps the last line told per folder). No process.
 
+A PostToolUse handler of the same dispatcher tells a fleet's subagent its own size (coordinator MODELS.md, Rules):
+
+- **The context warning** (`fleet_context_warning`, PostToolUse). A subagent cannot see its own context,
+  so for a subagent of a fleet (`agent_id`, and `fleet_dirs` or a moved folder the session served) the hook
+  reads the last 256 KiB of its transcript, `<session>/subagents/agent-<agent_id>.jsonl` (the payload names
+  only the session's), through `_regular_bytes`, which reads no FIFO or symlink, and sums `input_tokens`,
+  `cache_read_input_tokens` and `cache_creation_input_tokens` of the last assistant line. At 150,000 it tells
+  the subagent the size and the worker's rule at 150k with its handoff, in MODELS.md's words, as PostToolUse
+  `additionalContext`, and again at each 50,000 past that (the session's `context-<agent>` state); a size that
+  falls, as after a compaction, arms the line again. A session's main thread, a subagent outside a fleet, a
+  `tstack:advisor` or `fork` by the payload's `agent_type` (an advisor runs long by design, and a fork starts
+  with its parent's context), an `agent_id` other than letters, digits, `_` and `-`, and a missing or
+  unreadable transcript hear nothing.
+
 A Stop handler of the same dispatcher keeps a coordinator at work while work waits (coordinator SKILL.md, Track):
 
 - **The idle guard** (`fleet_idle_guard`, Stop). For each fleet the Stop guard's membership finds (a moved one
