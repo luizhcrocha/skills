@@ -76,7 +76,7 @@ these:
 | `agent`, `step`, `milestone`, `event`, `keep`, `set` | `worker`, `step`, `milestone`, `event`, `keep`, `set` |
 | `event --kind decision` (your own choice, for the record) | `event("note", …)`: the cloud refuses a program's decision event |
 | `chat … say` | `say` |
-| `decision` (any `--kind`, `permission` with `tool`, `call`, `then` and `root`) | `decision.open` |
+| `decision` (any `--kind`, `permission` with `tool`, `call`, `then` and `root`) | `decision.open`; a call that runs a script stays `fleet state`, below |
 | `decision --decide` | none: the owner's answer on the page records itself ([The owner answers on the card](#the-owner-answers-on-the-card)) |
 | `decision` with new fields and `--log` | `decision.revise(id, fields, log)` |
 | `decision --hold`, `--unhold`, `--withdraw` | `decision.hold`, `decision.unhold`, `decision.withdraw` |
@@ -143,7 +143,7 @@ return records.apply(ops);
 
 After the yes, run the call as a Bash call of its own, unchanged, once.
 
-A program opens a permission only for a call that runs no script by its path. A call that does (`bash
+A program's shorthand opens a permission only for a call that runs no script by its path. A call that does (`bash
 /abs/deploy.sh`, `source /abs/env.sh`, also past an assignment or an output redirect: `CI=1 bash /abs/x.sh`,
 `> /tmp/x bash /abs/x.sh`) is bound to the sha256 of each file it runs, read on this machine, and so is a `fleet ws
 <dir> trash` to its repo's `.fleet/ws-pre-remove` hook, or to the hook's absence where the repo has none (a hook
@@ -151,9 +151,13 @@ that appears after the ask grants nothing): a program's card carries none, so th
 opens. It refuses there too a call no page ask can hold (whyNoAsk, DASHBOARD.md's permission row): one that does not name what it runs (`$(…)` or backticks, `bash -x
 /abs/x.sh`, a script by a relative path), a program given by its path (`/abs/deploy.sh`), a wrapper (`env`,
 `timeout`, `sudo`), an assignment that changes what runs (`PATH=`, `BASH_ENV=`), inline code (`node -e`), and any
-program a page ask does not know. Open a script call from the machine: run it as a Bash call of its own, and when
-auto mode refuses it, the hook opens its card with the files it runs. A card that opens leaves you a note beside a
-later tool call with its id, for your call or a worker's: read the `decisions` row with that id, not a search of
+program a page ask does not know. Open a script call from the machine, before it runs: `fleet state <dir> decision
+<id> --kind permission --tool Bash --call '<call>' --root <root> --title … --why … --recommend … --reason …` (the
+coordinator skill's "Ask for the permission before the call") hashes the files, sends the card and prints its id (exit
+3: queued, the card is not open yet). A
+call that command refuses keeps the old route: a `decision` card first, then the call as a Bash call of its own, and
+when auto mode refuses it, the hook opens its card with the files it runs. A card the hook opens leaves you a note
+beside a later tool call with its id, for your call or a worker's: read the `decisions` row with that id, not a search of
 `state.json`. When the hook knows no open card for your
 refused call (a pipe, which no exact rule clears, anything above, a fleet that refused or never answered the card,
 a queued card), it leaves you a note: why, and the call that gets one (`bash /abs/x.sh 2>&1` for `bash /abs/x.sh
