@@ -16,6 +16,7 @@ import resource
 import select
 import shlex
 import shutil
+import signal
 import statistics
 import subprocess
 import sys
@@ -5496,6 +5497,53 @@ for fd in 0 1 2; do readlink /proc/$PPID/fd/$fd >>{seen}; done
         steps = '[{"id":"l1","title":"p: push","status":"current","agent":"p"}]'
         self.fleet_run(f"""echo '{{"status":"completed","result":[{{"record":{{"steps":{steps}}}}}]}}'""")
         self.assertSilent(self.push("jj git push --bookmark master"))
+
+    def slow_stand_ins(self, dry_run="", turn="echo 'turn: p does not hold the landing turn (l1)' >&2; exit 1"):
+        """The environment of a push whose jj dry run runs `dry_run` first and whose `fleet turn` runs `turn`."""
+        bindir = self.tmp / "slow-bin"
+        bindir.mkdir(exist_ok=True)
+        (bindir / "jj").write_text(f"""#!/bin/sh
+for a in "$@"; do if [ "$a" = --dry-run ]; then {dry_run or ':'}; break; fi; done
+exec {shutil.which('jj')} "$@"
+""")
+        (bindir / "jj").chmod(0o755)
+        cli = self.tmp / "slow-fleet"
+        cli.write_text(f'#!/bin/sh\nif [ "$1" = turn ]; then {turn}; fi\n')
+        cli.chmod(0o755)
+        return {"PATH": f"{bindir}:{self.env['PATH']}", "TSTACK_FLEET_CLI": str(cli), "TSTACK_GUARD_DEADLINE_S": "2"}
+
+    def test_a_guard_past_the_hooks_deadline_denies_the_call(self):
+        """Past the hook's timeout in hooks.json Claude Code discards its output and runs the call, so the gate's own
+        limits, each under it, must not add up to more: a slow dry run here, one for each push of a line in the field."""
+        self.manager(("l1", "current", "infra"))
+        env = self.slow_stand_ins(dry_run="exec sleep 30")
+        started = time.monotonic()
+        r = self.push("jj git push --bookmark master; jj git push --bookmark master", env=env)
+        took = time.monotonic() - started
+        self.assertTrue(self.reason(r).startswith("tstack guard land_turn_gate ran past the hook's deadline: denied."), r.stdout)
+        self.assertLess(took, 10)
+
+    def test_a_turn_cut_off_by_the_deadline_leaves_nothing_running(self):
+        """`fleet turn` runs in a session of its own, so the hook's end does not stop it."""
+        self.manager(("l1", "current", "infra"))
+        pid = self.tmp / "turn.pid"
+        env = self.slow_stand_ins(turn=f"echo $$ >{pid}; exec sleep 30")
+        self.assertIn("ran past the hook's deadline", self.reason(self.push("jj git push --bookmark master", env=env)))
+        turn = int(pid.read_text())
+        for _ in range(100):
+            try:
+                os.kill(turn, 0)
+            except ProcessLookupError:
+                break
+            time.sleep(0.05)
+        else:
+            os.kill(turn, signal.SIGKILL)
+            self.fail("`fleet turn` outlived the hook")
+
+    def test_only_a_pretooluse_guard_has_a_deadline(self):
+        self.assertEqual(self.hook("PostToolUse", {**self.payload("PostToolUse"), "tool_name": "Bash"},
+                                   env={"TSTACK_GUARD_DEADLINE_S": "0"}).stdout, "")
+        self.assertNotIn("failed", self.log())
 
     def test_a_push_with_the_turn_is_allowed(self):
         self.manager(("l1", "done", "infra"), ("l2", "current", "p"))

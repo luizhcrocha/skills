@@ -16,6 +16,7 @@ the process exits 0 having written nothing to stdout.
 import json
 import os
 import re
+import signal
 import sys
 import time
 import traceback
@@ -6999,6 +7000,31 @@ HANDLERS = {
 GUARDS = frozenset({fleet_spawn_effort, fleet_moved_writes, land_turn_gate, push_attribution, suite_gate, onepw_hold,
                     fleet_monitor_watch, rm_guard, fleet_grant_alone})
 
+# Past the 30 s hooks.json gives a Bash PreToolUse hook, Claude Code discards its output and runs the call, so a deny
+# must be out before them. Each guard's calls have their own limits, which can add up to more (two pushes in a command).
+GUARD_DEADLINE_S = 27
+
+
+class GuardDeadline(BaseException):
+    """A guard ran past the deadline. Not an Exception: a guard's own broad `except` must not swallow it and run on."""
+
+
+def _alarm(signum, frame):
+    raise GuardDeadline
+
+
+def _guard(handler, hook, started):
+    """handler(hook), raising GuardDeadline inside it once the deadline counted from `started` passes."""
+    left = started + float(hook.env.get("TSTACK_GUARD_DEADLINE_S") or GUARD_DEADLINE_S) - time.monotonic()
+    if left <= 0:
+        raise GuardDeadline
+    signal.signal(signal.SIGALRM, _alarm)
+    signal.setitimer(signal.ITIMER_REAL, left)
+    try:
+        return handler(hook)
+    finally:
+        signal.setitimer(signal.ITIMER_REAL, 0)
+
 
 def _context(event, text):
     return json.dumps({"hookSpecificOutput": {"hookEventName": event, "additionalContext": text}})
@@ -7024,8 +7050,9 @@ def dispatch(event, raw, env):
     output into the block decision, whose reason (every handler's text) Claude reads as it goes on. On
     PreToolUse, a handler's Deny refuses the call, with the Deny texts alone as the reason; else an Allow (an Agent
     call the office host granted) allows it; else a Note is context beside the call's result, with no decision; any other
-    text decides nothing. A PreToolUse handler that can deny (GUARDS) and fails denies the call, naming itself and
-    the error; any other handler that fails is logged and decides nothing.
+    text decides nothing. A PreToolUse handler that can deny (GUARDS) and fails, or runs past GUARD_DEADLINE_S counted
+    from here, denies the call, naming itself and the error, and no handler runs after a deadline; any other handler
+    that fails is logged and decides nothing.
     Under TSTACK_ROLE=tape (a tape builder's own `claude -p` call) no handler runs: no wake lands in the
     compaction prompt, and nothing is written or spawned (docs/design/tape.md, section 4)."""
     if env.get("TSTACK_ROLE") == "tape":
@@ -7036,14 +7063,19 @@ def dispatch(event, raw, env):
     hook = Hook(event, data, env)
     parts, denials, allows, notes = [], [], [], []
     blocked = False
+    started = time.monotonic()
+    late = False
     for handler in HANDLERS.get(event, ()):
+        guard = event == "PreToolUse" and handler in GUARDS
         try:
-            text = handler(hook)
-        except Exception as e:  # one handler failing does not take the others down
+            text = _guard(handler, hook, started) if guard else handler(hook)
+        except (Exception, GuardDeadline) as e:  # one handler failing does not take the others down
             log(hook.data_dir, f"{event} {handler.__name__} failed\n{traceback.format_exc()}")
-            if event != "PreToolUse" or handler not in GUARDS:
+            if not guard:
                 continue
-            text = Deny(f"tstack guard {handler.__name__} failed ({type(e).__name__}): denied. A guard that cannot "
+            late = isinstance(e, GuardDeadline)
+            how = "ran past the hook's deadline" if late else f"failed ({type(e).__name__})"
+            text = Deny(f"tstack guard {handler.__name__} {how}: denied. A guard that cannot "
                         f"decide a call refuses it; the trace is in {hook.data_dir / 'hook.log'}.")
         if text and text.strip():
             parts.append(text.strip())
@@ -7055,6 +7087,8 @@ def dispatch(event, raw, env):
                 allows.append(text.strip())
             if isinstance(text, Note):
                 notes.append(text.strip())
+        if late:
+            break
     if not parts or event not in EMIT:
         return ""
     if denials and event == "PreToolUse":

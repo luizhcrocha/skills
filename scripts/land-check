@@ -996,17 +996,23 @@ def landing_turn(fleet=None, timeout=60, env=None):
                                 start_new_session=True, env=env)
     except OSError:
         return None
-    try:
-        out, err = proc.communicate(timeout=timeout)
-    except subprocess.TimeoutExpired:
+    def kill_group():
         # the whole group: the launcher and a `bun install` it may be running; the next launcher takes over
         # an install lock whose holder is dead (fleet/bin/fleet)
         try:
             os.killpg(proc.pid, signal.SIGKILL)
         except OSError:
             pass
+
+    try:
+        out, err = proc.communicate(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        kill_group()
         proc.communicate()
         return None
+    except BaseException:  # the hook's deadline: its own session would outlive the hook
+        kill_group()
+        raise
     return proc.returncode, (out if proc.returncode == 0 else err).strip()
 
 
