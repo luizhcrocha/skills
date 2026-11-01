@@ -38,6 +38,9 @@ describe("a folder holding cloud.json", () => {
     ["set", "--now", "elsewhere"],
     ["step", "s1", "--milestone", "m1", "--title", "T"],
     ["decision", "D1", "--decide", "x"],
+    ["decision", "P1", "--kind", "permission", "--title", "no call"],
+    ["decision", "P1", "--kind", "permission", "--tool", "Bash", "--call", "echo hi", "--root", "/tmp", "--decide", "allow-once"],
+    ["decision", "P1", "--kind", "permission", "--tool", "Bash", "--call", "echo hi", "--root", "/tmp", "--title", "T", "--why", "W", "--recommend", "allow-once", "--reason", "R", "--body", "b.html"],
     ["init", "--project", "p", "--goal", "g"],
   ];
 

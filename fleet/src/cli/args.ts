@@ -58,6 +58,11 @@ export class Args {
     this.values = values;
   }
 
+  /** Every argument given, by its dest. */
+  given(): readonly string[] {
+    return [...this.values.keys()];
+  }
+
   /** A string argument, or undefined when not given. */
   str(dest: string): string | undefined {
     const v = this.values.get(dest);

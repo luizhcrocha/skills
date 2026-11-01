@@ -53,6 +53,11 @@ const WAIT_MAX_S = 15;
 /** The program that reads a moved manager's landing queue. */
 const QUEUE_PROGRAM = `return records.read({ kind: "milestone", key: "${LANDINGS}" });\n`;
 
+/** The program that takes a moved team's programs: $TSTACK_FLEET_RUN, else the shim beside this CLI. */
+export function fleetRunBin(machine: Machine): string {
+  return machine.env("TSTACK_FLEET_RUN") ?? join(import.meta.dir, "..", "..", "bin", "fleet-run");
+}
+
 /** The fleet at `dir`: its entry when served, else the team moved to the cloud there. */
 function fleetAt(machine: Machine, dir: string): Entry | undefined {
   return machine.registry.find(dir) ?? movedTeam(dir);
@@ -103,7 +108,7 @@ function queueIn(text: string): CloudRead {
 
 /** Why a fleet-run that exited `code` brought no queue. A `queued` answer is the host's outbox: offline, or online
  * behind programs not yet drained, which the answer does not tell apart; `waiting` counts this read too. */
-function failedRun(code: number | null, stdout: string, stderr: string): string {
+export function failedRun(code: number | null, stdout: string, stderr: string): string {
   const outcome = Option.getOrUndefined(parseObject(stdout));
   const status = asString(outcome?.["status"]);
 
@@ -120,7 +125,7 @@ function failedRun(code: number | null, stdout: string, stderr: string): string 
 
 /** The moved manager's landing queue as the cloud holds it. */
 function cloudQueue(machine: Machine, manager: Entry, waitS: number): CloudRead {
-  const bin = machine.env("TSTACK_FLEET_RUN") ?? join(import.meta.dir, "..", "..", "bin", "fleet-run");
+  const bin = fleetRunBin(machine);
   // SIGKILL: spawnSync waits for the child, so one that ignores TERM would run the command past the gate's limit.
   const done = spawnSync(bin, [], { input: QUEUE_PROGRAM, encoding: "utf8", env: { ...process.env, FLEET_DIR: manager.dir }, timeout: Math.ceil(waitS * 1000), killSignal: "SIGKILL" });
 

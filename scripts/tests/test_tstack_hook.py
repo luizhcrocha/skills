@@ -7802,7 +7802,7 @@ class PreToolUseDecisionTest(unittest.TestCase):
             raise RuntimeError("a note that broke")
         self.assertIsNone(self.decide(broken))
         self.assertEqual(self.decide(broken, lambda hook: self.mod.Allow("granted")), "allow")
-        self.assertEqual(set(self.saved) - self.mod.GUARDS, {self.mod.fleet_agent_grant})
+        self.assertEqual(set(self.saved) - self.mod.GUARDS, {self.mod.fleet_agent_grant, self.mod.fleet_moved_card})
 
     def test_the_gates_return_only_a_deny(self):
         import inspect

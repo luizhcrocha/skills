@@ -33,6 +33,7 @@ import { EFFORTS, offPolicy } from "../ledger/roles.ts";
 import { activeWorkspaces, draftsLeft, idleWorkspaces, leftOpen, overlapping, staleNow, staleRows, unpruned, unrecorded, untoldDrafts } from "../ledger/warnings.ts";
 import { draftLine } from "../ledger/refusal-draft.ts";
 import { readObject } from "../registry.ts";
+import { asksOnMoved, movedAsk } from "./moved-ask.ts";
 import { pruneOutlook } from "./ws.ts";
 import { World, type Machine } from "../world.ts";
 import { opt, parseCommand, usageWidth, type Args, type CommandSpec } from "./args.ts";
@@ -325,7 +326,15 @@ function runCommand(machine: Machine, argv: readonly string[]): Effect.Effect<nu
     const root = resolvePath(dir);
     const moved = spec.name === "show" ? undefined : movedRefusal(root);
 
-    if (moved !== undefined) return yield* Effect.fail(stateRefusal(moved));
+    if (moved !== undefined) {
+      if (!asksOnMoved(spec.name, args)) return yield* Effect.fail(stateRefusal(moved));
+      const ledger = loadLedger(join(root, "state.json"));
+
+      if (ledger === undefined || ledger instanceof Refusal) return yield* Effect.fail(ledger ?? stateRefusal(`no state.json in ${root}`));
+
+      return yield* movedAsk(machine, root, args, ledger);
+    }
+
     makeDirs(root);
 
     // The ledger is read, changed and written under its lock: the hub's rename writes it too.

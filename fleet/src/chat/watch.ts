@@ -3,6 +3,7 @@
  * with a manager's or coordinator's `!` lines) and `wait` (the user's answer to one of these decisions).
  * They poll the store every 0.3 s; a pinned clock (FLEET_NOW) dates what they measure, not their pace.
  */
+import { spawnSync } from "node:child_process";
 import { closeSync, openSync, utimesSync } from "node:fs";
 import { join } from "node:path";
 
@@ -16,7 +17,7 @@ import { answeredAt, answeredGrill, answerRecorded, closeProgram, decisionRow, e
 import { Out } from "../io.ts";
 import { asArray, asNumber, asObject, asString, dumps, parseObject, pyRepr, type Json, type JsonObject } from "../json.ts";
 import { decodeLedger, type Decision, type Ledger } from "../ledger/model.ts";
-import { refusalRev } from "../ledger/permission.ts";
+import { callsOf, refusalRev } from "../ledger/permission.ts";
 import { draftLine, draftReminder } from "../ledger/refusal-draft.ts";
 import { lanesMeet } from "../ledger/lanes.ts";
 import { staleDrafts, untoldDrafts } from "../ledger/warnings.ts";
@@ -51,10 +52,17 @@ import { FORWARD_S, forwardReminders, roomPointer, RoomWatch } from "../room/roo
 import { isHost, liveHost, type Host } from "../host.ts";
 import { displacedLine } from "../takeover.ts";
 import { foreign, forgetOwner, isWatch, orphaned, ownerWords, readOwner, recordOwner, sessionAbove, type Owner } from "./watchers.ts";
+import { fleetRunBin } from "../cli/turn.ts";
 import { readChat, Tail, type Message } from "./store.ts";
 import * as Option from "effect/Option";
 
 const POLL_MS = 300;
+
+/** How long `wait` gives the host on a moved team unless $FLEET_HOST_WAIT_S says otherwise ({@link hostWaitS}). */
+const HOST_WAIT_S = 30;
+
+/** How often `wait` asks the cloud after a write: each is a fleet-run. */
+const GRANT_POLL_MS = 1000;
 
 /** A `--once` watch's quiet time after a new line before it exits (FLEET_WATCH_SETTLE, `--settle`). */
 export const SETTLE_S = 30;
@@ -865,32 +873,90 @@ function answerLine(root: string, id: string): number | undefined {
   return line !== undefined && Number.isInteger(line) ? line : undefined;
 }
 
-/** What `wait` says of a moved team's card `d` the user answered on the page with their line #`line`. */
-function answeredOnCard(label: string, d: Decision, line: number): string {
+/** What `wait` says of a moved team's card `d` the user answered on the page with their line #`line`; `grant` is what became of a permission's yes ({@link grantNews}). */
+function answeredOnCard(label: string, d: Decision, line: number, grant: string | undefined): string {
   const answer = d.answer ?? "";
 
-  return `-> the user answered ${label} on the card, which records it (${d.status}: ${answer !== "" ? answer : (d.resolution ?? "None")}): answer #${line} and act on it\n`;
+  return `-> the user answered ${label} on the card, which records it (${d.status}: ${answer !== "" ? answer : (d.resolution ?? "None")}): answer #${line} and ${grant ?? "act on it"}\n`;
+}
+
+/** How long, in seconds, `wait` gives the host on a moved team: to export a card just opened, and to settle a yes. */
+function hostWaitS(machine: Machine): number {
+  const given = Number(machine.env("FLEET_HOST_WAIT_S") ?? HOST_WAIT_S);
+
+  return Number.isFinite(given) ? given : HOST_WAIT_S;
+}
+
+/** The owner's answer's write to card `id` as the cloud holds it: `refused` and its reason never reach the folder. Undefined when fleet-run gave no answer. */
+function answerWrite(machine: Machine, root: string, id: string): JsonObject | undefined {
+  const program = `return (await records.read({ kind: "write" })).map((row) => row.record).filter((write) => write.what === "answer" && write.decision === ${JSON.stringify(id)});\n`;
+  const done = spawnSync(fleetRunBin(machine), [], { input: program, encoding: "utf8", env: { ...process.env, FLEET_DIR: root }, cwd: root, timeout: HOST_WAIT_S * 1000, killSignal: "SIGKILL" });
+
+  return done.status === 0 ? asObject((asArray(Option.getOrUndefined(parseObject(done.stdout))?.["result"]) ?? []).at(-1)) : undefined;
+}
+
+/** What became of the yes on a moved team's permission `d`, once the office host settled it; undefined for any other card. The write's `granted` or `refused` is the host's word, read from the cloud, as the folder holds neither. */
+function grantNews(machine: Machine, root: string, d: Decision): Effect.Effect<string | undefined> {
+  return Effect.gen(function* () {
+    if (!isMoved(root) || d.kind !== "permission" || d.refusal === undefined || d.refusal === null || d.status !== "decided" || !(d.answer ?? "").startsWith("allow")) return undefined;
+    const until = performance.now() + hostWaitS(machine) * 1000;
+
+    for (;;) {
+      const write = answerWrite(machine, root, d.id);
+      const status = asString(write?.["status"]);
+
+      if (status === "granted") return `run it, the grant stands: each, unchanged, once, as a Bash call of its own:\n  ${callsOf(d.refusal).join("\n  ")}`;
+
+      if (status === "refused") {
+        return `run nothing of it: the office host refused the grant (${asString(write?.["reason"]) ?? "no reason given"}). Ask again under a new id, once what changed is what the user should allow`;
+      }
+
+      if (performance.now() >= until) return "run nothing of it yet: no grant has landed. Re-arm this wait; if it says the same, see that fleet-host runs, then ask again under a new id";
+      yield* Effect.sleep(GRANT_POLL_MS);
+    }
+  });
+}
+
+/** Card `key` once the host's export brings it, within {@link hostWaitS}: an ask prints its wait as it is sent, and the row lands a moment later. Undefined when it does not. */
+function exportedCard(machine: Machine, root: string, key: string): Effect.Effect<Decision | undefined, never, Out> {
+  return Effect.gen(function* () {
+    const out = yield* Out;
+    const wait = hostWaitS(machine);
+    const until = performance.now() + wait * 1000;
+
+    if (wait > 0) out.err(`no card '${key}' in ${root} yet: holding up to ${wait} s for the host's export\n`);
+
+    while (performance.now() < until) {
+      yield* Effect.sleep(POLL_MS);
+      const ledger = numberedLedger(root);
+      const d = ledger === undefined ? undefined : findDecision(ledger, key);
+
+      if (d !== undefined) return d;
+    }
+
+    return undefined;
+  });
 }
 
 /** What `wait` says of a decision already closed: on a moved team, one the user answered on the page (it has an
  * `answer_line`) is that answer, whether a chat line has come yet or not. */
-function closedLine(root: string, d: Decision): string {
+function closedLine(root: string, d: Decision, grant?: string): string {
   const label = d.ref !== undefined && d.ref !== "" ? d.ref : d.id;
   const line = isMoved(root) ? answerLine(root, d.id) : undefined;
   const answer = d.answer ?? "";
 
-  return line !== undefined ? answeredOnCard(label, d, line) : `${label} is already ${d.status}: ${answer !== "" ? answer : (d.resolution ?? "None")}\n`;
+  return line !== undefined ? answeredOnCard(label, d, line, grant) : `${label} is already ${d.status}: ${answer !== "" ? answer : (d.resolution ?? "None")}\n`;
 }
 
 /** What `wait` says of the user's line `m` on a moved team's card `w`, read again as the line came: the card closed
  * meanwhile ({@link closedLine}); a grilling with no question left open, to close with grill.close; an action that
  * failed, to revise or withdraw; a line the card recorded (a grilling's question answered on the page, a hold), to act on
  * and wait again; else a line that left the card open, to answer with the on-card reply. */
-function movedNews(root: string, w: { readonly key: string; readonly label: string; readonly kind: string }, m: Message): string {
+function movedNews(root: string, w: { readonly key: string; readonly label: string; readonly kind: string }, m: Message, grant: string | undefined): string {
   const ledger = numberedLedger(root);
   const card = ledger === undefined ? undefined : findDecision(ledger, w.key);
 
-  if (card !== undefined && card.status !== "open") return closedLine(root, card);
+  if (card !== undefined && card.status !== "open") return closedLine(root, card, grant);
 
   if (card !== undefined && answeredGrill(card)) {
     return `-> the user answered every question of ${w.label} on the card: close it now with ${closeProgram(root, w.key, "grilling finished")}, then answer #${m.id} and act on it\n`;
@@ -926,13 +992,19 @@ export function wait(machine: Machine, root: string, keys: readonly string[]): E
     const moved = isMoved(root);
 
     for (const key of keys) {
-      const d = ledger === undefined ? undefined : findDecision(ledger, key);
+      const here = ledger === undefined ? undefined : findDecision(ledger, key);
+      const d = here === undefined && moved ? yield* exportedCard(machine, root, key) : here;
 
-      if (d === undefined) return yield* Effect.fail(new ChatError({ reason: `no decision '${key}' in ${root}` }));
+      if (d === undefined) {
+        const why = moved ? `: a moved team's card reaches this folder with the host's export, which has not brought it. A queued ask opens when the link is back; else see that fleet-host runs, and read state.json before you ask again` : "";
+
+        return yield* Effect.fail(new ChatError({ reason: `no decision '${key}' in ${root}${why}` }));
+      }
+
       const label = d.ref !== undefined && d.ref !== "" ? d.ref : d.id;
 
       if (d.status !== "open") {
-        out.out(closedLine(root, d));
+        out.out(closedLine(root, d, yield* grantNews(machine, root, d)));
 
         return;
       }
@@ -963,7 +1035,10 @@ export function wait(machine: Machine, root: string, keys: readonly string[]): E
         for (const line of renderLines(machine, root, [m])) out.out(`${line}\n`);
 
         if (moved) {
-          out.out(movedNews(root, d, m));
+          const fresh = numberedLedger(root);
+          const card = fresh === undefined ? undefined : findDecision(fresh, d.key);
+
+          out.out(movedNews(root, d, m, card === undefined ? undefined : yield* grantNews(machine, root, card)));
 
           return;
         }
@@ -985,7 +1060,7 @@ export function wait(machine: Machine, root: string, keys: readonly string[]): E
       const closed = [...wanted.keys()].map((id) => (now === undefined ? undefined : findDecision(now, id))).find((d) => d !== undefined && d.status !== "open");
 
       if (closed !== undefined) {
-        out.out(closedLine(root, closed));
+        out.out(closedLine(root, closed, yield* grantNews(machine, root, closed)));
 
         return;
       }

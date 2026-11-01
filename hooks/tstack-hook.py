@@ -765,7 +765,8 @@ def fleet_moved_writes(hook):
     """PreToolUse (Bash): the old CLI's writers are refused for a moved fleet (decision 48): `fleet state DIR VERB`
     for every verb but `show`, `fleet chat DIR say`, `fleet ws DIR add|split|prune --apply` (each writes the
     workspaces row), `fleet preview DIR VERB` for every verb but `status`, and `fleet render DIR/state.json OUT` (it
-    stamps the ledger), when DIR holds cloud.json. Its readers stay allowed (`state show`, `chat watch` and `wait`,
+    stamps the ledger), when DIR holds cloud.json. `fleet state DIR decision ... --kind permission` passes: it writes
+    no ledger, it sends the card through fleet-run, and the CLI refuses every other shape of it. Its readers stay allowed (`state show`, `chat watch` and `wait`,
     `brief`, `turn`, `ws list`, a dry-run `ws prune`, `preview status`). A relative DIR is resolved against the line's own `cd`, else the
     session's cwd; a DIR named by a variable is not resolved here: the old CLI refuses that folder itself."""
     tool_input = hook.input.get("tool_input") if isinstance(hook.input.get("tool_input"), dict) else {}
@@ -781,6 +782,8 @@ def fleet_moved_writes(hook):
                     or (sub == "ws" and (verb in ("add", "split", "trash") or (verb == "prune" and "--apply" in words[i + 4:])))
                     or (sub == "preview" and verb != "status" and not verb.startswith("-")) or sub == "render"):
                 continue
+            if sub == "state" and verb == "decision" and _asks_permission(words[i + 4:]):
+                continue
             path = os.path.expanduser(os.path.dirname(d) if sub == "render" else d)
             if not os.path.isabs(path):
                 if cwd is None:
@@ -793,6 +796,11 @@ def fleet_moved_writes(hook):
                             f"show`, `chat watch`) are not. Record with one program: `FLEET_DIR={d} {run} <<'EOF'` … `EOF`; `{run} --types` "
                             f"prints what a program calls, and the coordinator skill's PROGRAMS.md has the worked calls.")
     return None
+
+
+def _asks_permission(words):
+    """Whether these words of a `fleet state DIR decision` name --kind permission."""
+    return "--kind=permission" in words or ("--kind", "permission") in zip(words, words[1:])
 
 
 def _moved_write_candidates(command, cwd):
@@ -4412,7 +4420,7 @@ def _take(hook, d, grant):
     return None
 
 
-def _moved_file(grant):
+def _moved_file(grant, since="the user allowed it"):
     """Why a file the grant binds is no longer the one the user allowed (the office host put each one's sha256 on the record of
     issued grants when it granted: _latest_grants takes `runs` from there); None when every one is, or it binds none.
     A ws hook bound by its absence (ABSENT_SHA256) must still be absent."""
@@ -4437,7 +4445,7 @@ def _moved_file(grant):
         except OSError as e:
             return f"the file it runs, {path}, cannot be read ({e.strerror})"
         if digest.hexdigest() != sha:
-            return f"the file it runs, {path}, changed after the user allowed it"
+            return f"the file it runs, {path}, changed after {since}"
     return None
 
 
@@ -4568,6 +4576,138 @@ def _alone_denial(hook, d, grant, grants, now):
             log(hook.data_dir, f"{hook.event} fleet_grant_alone could not revoke {ref}\n{traceback.format_exc()}")
         return Deny(f"tstack: the user allowed this call once ({ref}), and {moved}: the grant was for the file as it was, "
                     f"so it is gone (with what was left of its list). {ASK_AGAIN}")
+    return None
+
+
+# A deploy the user was asked about on the ask route must not run while its question is unanswered, refused, or its
+# grant failed, as auto mode cannot be trusted to refuse it; no other call is this handler's business. Such a card reaches
+# this machine only through the host's export, DIR/state.json, which every Bash call reads: a search of its bytes for the
+# command as JSON text, about 1 ms on 1.5 MB, so only a command that is a card's call parses it. A ledger past the bound
+# is logged and read as naming nothing.
+CARD_LEDGER_MAX_BYTES = 32 * 1024 * 1024
+# The card's `under`, set by the ask route alone (moved-ask.ts) and on no card the hook opens from a refusal. `runs` and an
+# empty `cause` do not tell them apart: refusal cards carry `runs`, and older asks and some refusal cards have no cause.
+ASK_ROUTE = "ask"
+# The host's refusal stays in the cloud, so a yes with no grant reads the same whatever became of it: a card that closed
+# without a grant denies for a day, long enough for the reason to be read and asked again, and never for good.
+ASK_DENIES_S = 24 * 60 * 60
+ASK_OPEN_DENIES_S = 7 * ASK_DENIES_S
+
+
+def _ledger_bytes(d):
+    """DIR/state.json's bytes. OSError when it is no regular file within the bound: non-blocking, so a pipe there hangs no call."""
+    import stat
+    with os.fdopen(os.open(os.path.join(d, "state.json"), os.O_RDONLY | os.O_NONBLOCK), "rb") as f:
+        info = os.fstat(f.fileno())
+        if not stat.S_ISREG(info.st_mode) or info.st_size > CARD_LEDGER_MAX_BYTES:
+            raise OSError(f"{d}/state.json is no regular file of at most {CARD_LEDGER_MAX_BYTES} bytes")
+        return f.read(CARD_LEDGER_MAX_BYTES)
+
+
+def _ask_calls(row):
+    """The calls of `row` when it is a card of the ask route; else none."""
+    refusal = row.get("refusal") if isinstance(row, dict) else None
+    if not isinstance(refusal, dict) or row.get("under") != ASK_ROUTE or refusal.get("tool") != "Bash":
+        return []
+    more = refusal.get("more") if isinstance(refusal.get("more"), list) else []
+    return [call for call in [refusal.get("call"), *more] if isinstance(call, str)]
+
+
+def _card_runs(refusal):
+    """A card's `runs` as a grant's: its entries read `<n> <sha256> <path>`."""
+    entries = [str(e).split(" ", 2) for e in refusal.get("runs") or []] if isinstance(refusal.get("runs"), list) else []
+    return [{"path": e[2], "sha256": e[1]} for e in entries if len(e) == 3]
+
+
+def _owner_holds(hook, refusal):
+    """Whether the card's rule is in its folder's settings with no grant: the owner's own, which the host keeps and answers
+    `granted` for, writing no grant."""
+    root, rule = refusal.get("root"), refusal.get("rule")
+    if not isinstance(root, str) or not root:
+        return False
+    return rule in (_allow_of(hook, os.path.join(root, ".claude", GRANT_FILES[0])) or [])
+
+
+def _card_why(hook, d, row, grants):
+    """What state of `row`, the newest ask of a call no grant stands behind, stops that call and what to do; None when
+    the card is finished: withdrawn, its grant used or lapsed, or past ASK_DENIES_S (open: ASK_OPEN_DENIES_S), so an
+    abandoned card blocks nothing for good."""
+    key, ref, status = row.get("id"), row.get("ref") or row.get("id"), row.get("status")
+    answer = row.get("answer") if isinstance(row.get("answer"), str) else ""
+    wait = f"`{fleet_cli()} chat {d} wait {key}`"
+    if status == "open":
+        opened = _instant(row.get("opened"))
+        if not opened or not 0 <= fleet_now(hook.env) - opened < ASK_OPEN_DENIES_S:
+            return None
+        return (f"its card {ref} is open: the user has not answered, and it runs only after their yes. Keep {wait} armed in "
+                "the background, and run it when that says the grant stands.")
+    closed = _instant(row.get("closed")) or _instant(row.get("opened"))
+    if status != "decided" or answer == "withdrawn" or not closed or not 0 <= fleet_now(hook.env) - closed < ASK_DENIES_S:
+        return None
+    if not answer.startswith("allow"):
+        return f"the user said {answer or 'no'} on {ref}, and that stands: act on their note. {ASK_AGAIN}"
+    if any(g.get("decision") == key for g in grants) or _owner_holds(hook, row["refusal"]):
+        return None
+    changed = _moved_file({"runs": _card_runs(row["refusal"])}, "the ask")
+    if changed:
+        return f"the user allowed it on {ref}, and the office host refused the grant: {changed}. {ASK_AGAIN}"
+    return (f"the user allowed it on {ref}, and no grant stands yet: the office host has not written it, or refused it. {wait} "
+            f"says which. Run nothing of it until a grant stands; if it was refused: {ASK_AGAIN}")
+
+
+def _card_denial(hook, d, raw, command):
+    """The denial of `command` by the newest ask in the ledger bytes `raw` whose call it is, or None when no card of the
+    ask route has it for a call (a text of the file that only reads like one) or a grant stands for it, which
+    fleet_grant_alone then holds to one run."""
+    try:
+        ledger = json.loads(raw)
+    except ValueError as e:
+        return Deny(f"tstack: this command is a call that {d}/state.json may name as a card's, and that file cannot be read just "
+                    f"now ({type(e).__name__}), so the card's answer cannot be told. The host's export rewrites it in place: run it "
+                    "again in a moment.")
+    rows = ledger.get("decisions") if isinstance(ledger, dict) else None
+    asks = [row for row in rows if command in _ask_calls(row)] if isinstance(rows, list) else []
+    if not asks:
+        return None
+    text, _ = _read_grants(d)
+    grants = [] if text is None else [g for g in _latest_grants(hook, text) if _bash_call(g["rule"]) is not None]
+    if any(_live(hook, g) and _bash_call(g["rule"]) == command for g in grants):
+        return None
+    why = _card_why(hook, d, asks[-1], grants)
+    return Deny(f"tstack: this command is the call a moved team's card asks for, and no grant stands for it: {why}") if why else None
+
+
+def fleet_moved_card(hook):
+    """PreToolUse (Bash, Monitor), ahead of fleet_grant_alone: a call asked for on the ask route of a moved team runs only
+    on a standing grant, while its card is open, denied, its grant refused because the script changed, or not yet written.
+    The whole command, trimmed, is compared: `cd x && <call>` is no match, and stays a matter of discipline. A used or
+    withdrawn card, and every card the hook opened from a refusal, denies nothing. This is no GUARD, so its failure and a
+    ledger that cannot be read (logged) deny nothing; past a match, a failure denies, as the command is a card's call."""
+    command = _shell_command(hook)
+    if command is None or hook.denied:
+        return None
+    command = command.strip()
+    text = json.dumps(command).encode()
+    for d in grant_state_dirs(hook):
+        if not moved(d):
+            continue
+        try:
+            raw = _ledger_bytes(d)
+        except FileNotFoundError:
+            continue
+        except OSError as e:
+            log(hook.data_dir, f"{hook.event} fleet_moved_card cannot read {d}/state.json, no card read: {e}")
+            continue
+        if text not in raw:
+            continue
+        try:
+            denial = _card_denial(hook, d, raw, command)
+        except Exception:
+            log(hook.data_dir, f"{hook.event} fleet_moved_card failed on a call a card names\n{traceback.format_exc()}")
+            denial = Deny(f"tstack: this command is a call {d} names, and the check of its card failed, so no grant can be "
+                          f"told; the trace is in {hook.data_dir / 'hook.log'}.")
+        if denial:
+            return denial
     return None
 
 
@@ -7068,7 +7208,7 @@ HANDLERS = {
     "Stop": [memo_nudge, fleet_listen_guard, fleet_idle_guard, fleet_said_once, fleet_news, fleet_room, fleet_heartbeat],
     "PreCompact": [memo_precompact],
     "PreToolUse": [fleet_agent_grant, fleet_spawn_effort, fleet_moved_writes, land_turn_gate, push_attribution, suite_gate,
-                   onepw_hold, rm_guard, fleet_monitor_watch, fleet_grant_alone],
+                   onepw_hold, rm_guard, fleet_moved_card, fleet_monitor_watch, fleet_grant_alone],
     "PostToolUse": [fleet_heartbeat, fleet_grant_sweep, fleet_refusal_forgotten, fleet_refusal_note, fleet_context_warning,
                     fleet_chat_nudge, onepw_watch],
     "PostToolUseFailure": [fleet_heartbeat, fleet_grant_sweep, onepw_watch],
@@ -7079,7 +7219,8 @@ HANDLERS = {
 }
 
 # The PreToolUse handlers that can deny, each of which denies the call when it fails (dispatch); fleet_agent_grant
-# only allows, and its failure allows nothing.
+# only allows, and its failure allows nothing; fleet_moved_card denies only a call a card names, so its failure past
+# that match denies by itself, and any other failure of it denies no call.
 GUARDS = frozenset({fleet_spawn_effort, fleet_moved_writes, land_turn_gate, push_attribution, suite_gate, onepw_hold,
                     fleet_monitor_watch, rm_guard, fleet_grant_alone})
 

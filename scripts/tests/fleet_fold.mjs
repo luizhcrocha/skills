@@ -12,13 +12,15 @@
 // prelude runs too, over a `work` connector that keeps no answer. Its read answers the input's `work` rows (a
 // program's own `work` in their place), filtered as the cloud's work.read filters them (packages/cloud/src/
 // program-object.ts: by repo, and by the row's team, work.ts's teamOf, `team` by default and none for team: null).
-// node fleet_fold.mjs FLEET_CHECKOUT < {"programs": [{"name", "body", "fresh"?, "work"?}], "gate"?: ISO time,
-//   "work"?: WorkRow[], "team"?: the fleet the programs run as}
+// An entry with `ops` runs no program: its ops go on the mirror as the fleet object stores them (the owner's answer,
+// a write the host moved: fleet_host.mjs). With `mirrorTo`, the last mirror is written to that file.
+// node fleet_fold.mjs FLEET_CHECKOUT < {"programs": [{"name", "body", "fresh"?, "work"?} | {"name", "ops"}], "gate"?: ISO time,
+//   "work"?: WorkRow[], "team"?: the fleet the programs run as, "mirrorTo"?: path}
 // prints [{"name", "returned", "applied": OpResult[]} | {"name", "thrown"}]; `fresh` starts that program on a mirror
 // holding only the first program's records (the setup), so one program's records do not meet another's. `gate` is the
 // owner-answer gate's time (the Worker's OWNER_ANSWERS_FROM, takeLog's ownerAnswersFrom): from it, the fold refuses
 // a program's decide.
-import { readFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 
@@ -30,7 +32,7 @@ const { bodySentences, CARD_ID, EVIDENCE_LIMIT_BYTES, revisionOf } = await load(
 const { PROGRAM_LIMIT_BYTES } = await load("packages/ledger/src/wire.ts");
 const { applyOps, emptyMirror } = await load("packages/ledger/src/mirror.ts");
 const { takeLog } = await load("packages/cloud/src/take-log.ts");
-const { programs, gate, work: rows = [], team: ownTeam = "skills" } = JSON.parse(readFileSync(0, "utf8"));
+const { programs, gate, work: rows = [], team: ownTeam = "skills", mirrorTo } = JSON.parse(readFileSync(0, "utf8"));
 const worked = rows.length > 0 || programs.some((p) => p.work?.length);
 const { teamOf } = worked ? await load("packages/ledger/src/work.ts") : {};
 const workOf = (given) => ({
@@ -87,6 +89,11 @@ const records = (applied) => ({
 
 const out = [];
 for (const [i, p] of programs.entries()) {
+  if (p.ops !== undefined) {
+    mirror = applyOps(mirror, p.ops).mirror;
+    out.push({ name: p.name, returned: null, applied: [] });
+    continue;
+  }
   if (p.fresh) mirror = setup;
   const applied = [];
   try {
@@ -100,4 +107,5 @@ for (const [i, p] of programs.entries()) {
   }
   if (i === 0) setup = mirror;
 }
+if (mirrorTo !== undefined) writeFileSync(mirrorTo, JSON.stringify(mirror));
 process.stdout.write(JSON.stringify(out));

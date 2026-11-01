@@ -91,7 +91,9 @@ given. Every ID argument also takes the row's number (D3, L2, R1) where rows hav
    **2** with usage on stderr, and nothing runs.
 3a. *TypeScript only.* **A moved team** (fleet slice 3, decision 48): when `DIR/cloud.json` exists, every
    command but `show` is refused, `this team records through programs: fleet-run. DIR/cloud.json says this
-   fleet has moved to the cloud: …`, before DIR is made or the ledger read. `chat DIR say` is refused the same
+   fleet has moved to the cloud: …`, before DIR is made or the ledger read, but for one write: `decision ID --kind
+   permission --call CALL`, an ask with nothing else in it ([Permission grants](#permission-grants), Asking on a moved
+   team). `chat DIR say` is refused the same
    way, and so are `ws DIR add`, `split`, `trash NAME` and `prune --apply`, every `preview DIR` command but `status`,
    `render DIR/state.json` (it stamps the ledger), and any other writer through `ws`'s `save` (the workspace
    hook's report); the chat's readers, `ws list`, a dry-run `ws prune` and `preview status` stay. The host service exports that folder's ledger from the cloud.
@@ -2078,6 +2080,32 @@ run of each exact command shown; the next run of the same command asks again.
   (`json.dumps(..., sort_keys=True, ensure_ascii=False, separators=(",", ":"))`, the hook's `_agent_call`),
   and the rule `Agent(<call>)`, which only the plugin's hook matches; the CLI and the office host refuse an Agent
   call that is no JSON object.
+- **Asking on a moved team** (`src/cli/moved-ask.ts`). The cloud reads no file, so its fold refuses a program's script
+  card with no `runs`, and the host hashes the files again at the yes (fleet repo: `whyNoGrant`, `grantOf`). So the
+  opener is this machine: `fleet state DIR decision ID --kind permission --call CALL`, with only the flags of an ask
+  (not `--body`, which writes the folder, nor `--decide`, `--withdraw` or `--cause`), runs the `decision` handler over the
+  export in memory and sends the row as one `decision.open` through fleet-run (`$TSTACK_FLEET_RUN`, else `bin/fleet-run`).
+  DIR is not written. The recommendation joins the why: the fold refuses a program's `recommend`. A call, title, why,
+  recommendation or reason that reads as a credential (the hook's SECRET_IN_CALL, kept equal by the test) is refused
+  before anything is sent. It prints the applied op's `key` and the calls; the fold's refusal is its refusal; a queued
+  program says the card is not open yet and exits 3, fleet-run's own code, and a later refusal of it reaches no one. An
+  unknown outcome (fleet-run's 5) goes again once under its id. The plugin hook's moved-writes guard passes a `decision`
+  with `--kind permission` and leaves the rest of the check to this command. The end to end test is
+  `scripts/tests/test_moved_ask.py`.
+- **The call of an ask on a moved team** (the hook's `fleet_moved_card`). An ask must not run while its question is
+  unanswered, refused, or its grant failed, as auto mode cannot be trusted to refuse it; nothing else is this check's
+  business. The ask route's card has `under: "ask"`, a field the cloud and the export keep and only a notice shows; a
+  card the hook opens from a refusal has none, and neither `runs` nor an empty `cause` tells the two apart. The hook
+  searches the export's bytes at every Bash or Monitor call of the team's sessions for the whole command, trimmed, as
+  JSON text, and parses the file only on a hit. A command equal to a call of such a card, with no standing grant, is
+  denied by the newest such card for 7 days from its `opened` while it is open, and for 24 hours from its `closed` when it was denied, its grant
+  refused (the bound file changed) or not yet written: the host's refusal stays in the cloud, so the bound is what
+  ends a denial. A used, lapsed or withdrawn card denies nothing, nor does a yes the owner's own rule already holds,
+  where the host writes no grant. `cd x && <call>` is no match, and stays a matter of discipline. A ledger that cannot
+  be read or is past 32 MiB denies nothing; past a hit, a failure denies.
+- **`chat wait` on a moved team.** It holds `$FLEET_HOST_WAIT_S` (default 30) for a card the export has not brought, and
+  then fails naming the export. On a permission's yes it reads the answer's write through fleet-run, up to the same
+  time: `granted` prints the calls, `refused` the host's reason and that nothing runs. The folder holds neither.
 - **Opening** (`fleet state DIR decision ID --kind permission --tool Bash|Agent --call CALL --cause CAUSE
   --root ROOT [--agent-id AID] [--agent WORKER] [--blocking]`: the hook's record of a refused Agent spawn,
   and a refused Bash call recorded by hand; a `--title`, `--question` or `--why` given with it is ignored):
