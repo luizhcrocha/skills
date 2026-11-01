@@ -55,7 +55,7 @@ Luiz decided both on 2026-10-28 (decision "frontiercode", answer a; evidence in 
 **Effort escalation.** An Implementer lane's first attempt runs at Opus high (in the trial, at the effort its rotation names). It reruns at Opus xhigh, as a fresh worker with the finding or the handoff in its brief, when any of these happens:
 
 1. Review returns FIX with an Important finding a second time. The first FIX goes back to the same worker once, or to a fresh worker with the handoff in its brief when that worker is past 150k tokens ([Review levels](SKILL.md#review-levels)); the second starts the rerun in place of a third round. The rerun's own first FIX with an Important finding goes to the advisor. Nits and Pre-existing findings never count.
-2. The same check fails twice after the worker's fixes. A load flake that passes alone does not count.
+2. The same check fails twice after the worker's fixes. A red the lander proved flaky ([Integrate](SKILL.md#7-integrate) has the evidence) does not count.
 3. The worker reports `blocked` on a technical problem. Waiting on Luiz, a decision, a secret or a permission does not count.
 4. The worker hands off at about 150k tokens short of its done criterion.
 
