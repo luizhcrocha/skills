@@ -2063,6 +2063,9 @@ describe("the manager relays the unanswered", () => {
 });
 
 describe("the manager hears the fleets (watch --fleets)", () => {
+  /** Enough for a watch started on a full machine: seen to take 3 s to its first read there. */
+  const WATCH_MS = 20_000;
+
   let infra: string;
   let billing: string;
 
@@ -2086,9 +2089,10 @@ describe("the manager hears the fleets (watch --fleets)", () => {
     if (sent instanceof ChatError) throw new Error(sent.reason);
   }
 
-  /** A manager's watch with --fleets, and all it prints once it ends. */
+  /** A manager's watch with --fleets, its next printed line, and all it prints once it ends. */
   interface Watching {
     readonly proc: Bun.Subprocess<"ignore", "pipe", "inherit">;
+    readonly next: () => Promise<string>;
     readonly out: () => Promise<string>;
   }
 
@@ -2096,7 +2100,16 @@ describe("the manager hears the fleets (watch --fleets)", () => {
     const { proc, lines } = start(["chat", root, "watch", "--as", "manager", "--all", "--fleets", ...args], env);
     procs.push(proc);
 
-    return { proc, out: async () => lines.rest() };
+    return { proc, next: async () => lines.next(), out: async () => lines.rest() };
+  }
+
+  /** Until the first watch of a test has read the fleets once: a --once watch saves the cursors right after that
+   * read, and a line written before it is never told, as a fleet seen for the first time is read from then on. */
+  async function reading(): Promise<void> {
+    const cursors = join(root, "watch-manager.fleets.json");
+
+    for (let tries = 0; tries < 200 && !existsSync(cursors); tries += 1) await sleep(50);
+    expect(existsSync(cursors), "the watch read the fleets").toBe(true);
   }
 
   beforeEach(() => {
@@ -2119,16 +2132,16 @@ describe("the manager hears the fleets (watch --fleets)", () => {
 
   test("a user answer on another fleet wakes the manager's watch", async () => {
     const { proc, out: procOut } = watchFleets("--resume", "--once", "--batch", "0");
-    await sleep(1000);
+    await reading();
     expect(proc.exitCode, "a fleet seen for the first time is read from then on: nothing yet").toBeNull();
     on(infra, "user", "Re-run after the cost improvements work is done\nthanks", { decision: "rerun" });
     expect(await proc.exited).toBe(0);
     expect(await procOut()).toBe("infra: you answered A1 Re-run CA1014: Re-run after the cost improvements work is done …\n");
-  });
+  }, WATCH_MS);
 
   test("cursors are per fleet: resume misses nothing and tells nothing twice", async () => {
     const { proc, out: procOut } = watchFleets("--resume", "--once", "--batch", "0");
-    await sleep(1000);
+    await reading();
     on(billing, "user", "where are we?");
     expect(await proc.exited).toBe(0);
     expect(await procOut()).toBe("billing: you wrote to coordinator: where are we?\n");
@@ -2147,7 +2160,7 @@ describe("the manager hears the fleets (watch --fleets)", () => {
     expect(await thirdOut(), "the manager's own chat prints once, and nothing from a fleet is told twice").toBe(
       "#1 user -> infra: @infra and you?\n",
     );
-  });
+  }, WATCH_MS);
 
   test("decided, withdrawn, held, and opened for the user", () => {
     const news = new FleetNews(m, root, false);
@@ -2165,31 +2178,31 @@ describe("the manager hears the fleets (watch --fleets)", () => {
   });
 
   test("a burst is one wake", async () => {
-    const { proc, out: procOut } = watchFleets("--resume", "--once", "--batch", "2");
-    await sleep(1000);
+    const { proc, next, out: procOut } = watchFleets("--resume", "--once", "--batch", "2");
+    await reading();
     const started = performance.now();
     on(infra, "user", "first");
+    expect(await next()).toBe("infra: you wrote to coordinator: first\n");
     await sleep(800);
     expect(proc.exitCode, "the first news waits for more").toBeNull();
     on(billing, "user", "second");
     change(infra, "upload", { asks: "user" });
     expect(await proc.exited).toBe(0);
     expect(performance.now() - started).toBeGreaterThanOrEqual(1900);
-    expect(await procOut()).toBe(
-      "infra: you wrote to coordinator: first\nbilling: you wrote to coordinator: second\ninfra A2 opened for you: Small test upload\n",
-    );
-  });
+    expect(await procOut()).toBe("billing: you wrote to coordinator: second\ninfra A2 opened for you: Small test upload\n");
+  }, WATCH_MS);
 
   test("the manager's own chat still wakes at once", async () => {
-    const { proc, out: procOut } = watchFleets("--resume", "--once", "--batch", "60");
-    await sleep(1000);
+    const { proc, next, out: procOut } = watchFleets("--resume", "--once", "--batch", "60");
+    await reading();
     on(infra, "user", "first");
+    expect(await next()).toBe("infra: you wrote to coordinator: first\n");
     await sleep(800);
     expect(proc.exitCode).toBeNull();
     user("are you there?");
     expect(await proc.exited).toBe(0);
-    expect(await procOut()).toBe("infra: you wrote to coordinator: first\n#1 user -> manager: are you there?\n");
-  });
+    expect(await procOut()).toBe("#1 user -> manager: are you there?\n");
+  }, WATCH_MS);
 
   test("only the manager follows the fleets", () => {
     const out = fleet(["chat", infra, "watch", "--as", "coordinator", "--fleets"], env);

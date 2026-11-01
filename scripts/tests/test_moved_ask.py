@@ -66,6 +66,26 @@ def not_run(why):
     return unittest.SkipTest(why)
 
 
+def shared_folder(cls, *calls):
+    """A fleet folder made once by `fleet state` CALLS, for copy_folder in each test of `cls`: one bun process per
+    call per test was a quarter of this file's time, and no test proves the setup."""
+    base = Path(tempfile.mkdtemp(prefix="moved-folder-")).resolve()
+    cls.addClassCleanup(shutil.rmtree, base, ignore_errors=True)
+    folder = base / "fleet"
+    env = {**os.environ, "HOME": str(base), "FLEET_NO_FORWARD": "1", "FLEET_DIR": str(folder), "CLAUDE_PROJECT_DIR": str(base),
+           "CLAUDE_PLUGIN_DATA": str(base / "data")}
+    for call in calls:
+        subprocess.run([str(FLEET), "state", str(folder), *call], capture_output=True, text=True, env=env, timeout=60, check=True)
+    return folder
+
+
+def copy_folder(folder, target):
+    """A test's own copy of a shared_folder; only the brief names its folder."""
+    shutil.copytree(folder, target)
+    brief = target / "brief.md"
+    brief.write_text(brief.read_text().replace(str(folder), str(target)))
+
+
 class MovedAsk(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -74,6 +94,9 @@ class MovedAsk(unittest.TestCase):
             raise not_run(f"no fleet host and fold at {CHECKOUT} ({missing[0]} is missing)")
         if not shutil.which("node") or not shutil.which("bun"):
             raise not_run("the run needs node (the fleet's fold and host) and bun (the fleet CLI)")
+        cls.folder = shared_folder(cls, ("init", "--project", "p", "--goal", "g", "--no-render"),
+                                   ("milestone", "m1", "--title", "M", "--no-render"),
+                                   ("step", "s1", "--milestone", "m1", "--title", "T", "--no-render"))
 
     def setUp(self):
         self.base = Path(tempfile.mkdtemp(prefix="moved-ask-")).resolve()
@@ -89,9 +112,7 @@ class MovedAsk(unittest.TestCase):
                     "CLAUDE_PROJECT_DIR": str(self.root),
                     "TSTACK_FLEET_RUN": str(TESTS / "fleet_run_fold.py"), "FOLD_PROGRAMS": str(self.base / "programs.json"),
                     "FOLD_CHECKOUT": str(CHECKOUT), "FOLD_GATE": GATE, "CLAUDE_PLUGIN_DATA": str(self.base / "data")}
-        self.fleet("state", str(self.dir), "init", "--project", "p", "--goal", "g", "--no-render")
-        self.fleet("state", str(self.dir), "milestone", "m1", "--title", "M", "--no-render")
-        self.fleet("state", str(self.dir), "step", "s1", "--milestone", "m1", "--title", "T", "--no-render")
+        copy_folder(self.folder, self.dir)
         (self.dir / "cloud.json").write_text(json.dumps({"fleet": "skills"}))
         self.transcript = self.base / "t.jsonl"
         self.transcript.touch()
@@ -392,6 +413,7 @@ class MovedAskHere(unittest.TestCase):
     def setUpClass(cls):
         if not shutil.which("bun"):
             raise not_run("the run needs bun (the fleet CLI)")
+        cls.folder = shared_folder(cls, ("init", "--project", "p", "--goal", "g", "--no-render"))
 
     def setUp(self):
         self.base = Path(tempfile.mkdtemp(prefix="moved-here-")).resolve()
@@ -407,7 +429,7 @@ class MovedAskHere(unittest.TestCase):
         self.env = {**os.environ, "HOME": str(self.home), "FLEET_NO_FORWARD": "1", "FLEET_DIR": str(self.dir),
                     "CLAUDE_PROJECT_DIR": str(self.root), "TSTACK_FLEET_RUN": str(self.run_bin),
                     "CLAUDE_PLUGIN_DATA": str(self.base / "data")}
-        self.fleet("state", str(self.dir), "init", "--project", "p", "--goal", "g", "--no-render")
+        copy_folder(self.folder, self.dir)
         self.transcript = self.base / "t.jsonl"
         self.transcript.touch()
 
