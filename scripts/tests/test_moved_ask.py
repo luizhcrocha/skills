@@ -558,6 +558,7 @@ class MovedAskHere(unittest.TestCase):
 
     def test_a_call_no_card_names_is_let_alone(self):
         self.carded()
+        Path(f"{self.script}.other").write_text("#!/bin/sh\necho other\n")
         for line in ("ls", f"bash {self.script}.other", f"grep 'bash {self.script}' README", f"cat {self.script}"):
             with self.subTest(line=line):
                 self.assertIsNone(self.denial(line))

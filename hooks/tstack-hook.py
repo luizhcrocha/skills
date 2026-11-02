@@ -3513,10 +3513,10 @@ def _encodes(record):
     return True
 
 
-def _regular_bytes(path, tail=None):
-    """The bytes of the regular file at `path`, or only its last `tail` bytes; None when it is not there, cannot be read
-    or is anything else: opened O_NOFOLLOW, and O_NONBLOCK so a FIFO swapped in after a check does not hang the open,
-    then checked on the open file."""
+def _regular_bytes(path, tail=None, head=None):
+    """The bytes of the regular file at `path`, or only its last `tail` or first `head` bytes; None when it is not there,
+    cannot be read or is anything else: opened O_NOFOLLOW, and O_NONBLOCK so a FIFO swapped in after a check does not hang
+    the open, then checked on the open file."""
     import stat
     try:
         fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
@@ -3529,7 +3529,7 @@ def _regular_bytes(path, tail=None):
                 return None
             if tail is not None:
                 f.seek(max(0, status.st_size - tail))
-            return f.read(tail)
+            return f.read(tail if head is None else head)
     except OSError:
         return None
 
@@ -4767,6 +4767,33 @@ def _alone_without_fleet(hook, command):
                           "works for no fleet whose record could hold it to one run. Run it from the fleet's own session.")
     hook._allows.clear()
     return denial
+
+
+# A production deploy in a fleet waits for its yes (fleet/SPEC.md, "A deploy that never asked"). The code is
+# hooks/tstack-hook-deploy.py, executed into this module for a Bash call in a session that serves a fleet (_deploys). In a
+# fleet that is every Bash call: a script's text is what names a deploy, so a command's words cannot rule one out.
+def _fleets_of_session(hook):
+    """The fleets this session belongs to: the one $FLEET_DIR names, a worker's, and each the registry gave this session
+    (_served_dirs). A ledger a session merely holds in its scratchpad is none, so Luiz's own sessions never count."""
+    given = hook.env.get("FLEET_DIR")
+    named = [given] if given and (os.path.isfile(os.path.join(given, "state.json")) or moved(given)) else []
+    return named + _served_dirs(hook)
+
+
+def fleet_deploy_gate(hook):
+    """PreToolUse (Bash), ahead of fleet_grant_alone: in a fleet's session, coordinator or worker, moved or not, a call that
+    reaches a production deploy runs only on a standing grant for that exact call or an owner's rule, and is refused with the
+    command that asks (_deploy_gate in the part); a session of no fleet says nothing and reads no part. This is no GUARD, as
+    fleet_moved_card is not: a part that does not load is logged by dispatch and decides nothing, a failure of the part on a
+    call that names no deploy denies nothing, and past that name it denies. A Monitor command is fleet_monitor_watch's. This
+    handler never allows."""
+    command = _shell_command(hook) if hook.input.get("tool_name") == "Bash" else None
+    if command is None or hook.denied:
+        return None
+    dirs = _fleets_of_session(hook)
+    if not dirs:
+        return None
+    return _deploys()["_deploy_gate"](hook, command.strip(), dirs)
 
 
 def fleet_monitor_watch(hook):
@@ -6539,9 +6566,8 @@ def shutil_which(name):
 
 # 1Password locked (fleet/SPEC.md, "1Password locked"): a failed command that shows 1Password is locked records it once
 # for the machine, and until it clears a command of that kind is denied in every fleet's session. The code is
-# hooks/tstack-hook-onepw.py, executed into this module only for a call that can matter to it (_onepw): a part is
-# compiled from source each time a call reads it (only this module's bytecode is cached), so what a call does not need
-# it should not carry. The two handlers below end every other call at a test of its first word, then of a file's
+# hooks/tstack-hook-onepw.py, executed into this module only for a call that can matter to it (_onepw): what a call does
+# not need it should not carry. The two handlers below end every other call at a test of its first word, then of a file's
 # existence or two fixed strings.
 ONEPW_TOOLS = frozenset(("jj", "git", "ssh", "op", "secretspec", "gh", "aws"))
 ONEPW_TEXTS = ("sign_and_send_pubkey: signing failed", "[ERROR] ")
@@ -6549,15 +6575,31 @@ ONEPW_TEXTS = ("sign_and_send_pubkey: signing failed", "[ERROR] ")
 
 # The hook's parts: files beside it that it executes into this module only for a call that needs them, each known as
 # read by a name it defines.
-PARTS = {"onepw_use": "tstack-hook-onepw.py", "monitor_denial": "tstack-hook-monitor.py"}
+PARTS = {"onepw_use": "tstack-hook-onepw.py", "monitor_denial": "tstack-hook-monitor.py", "deploys_of": "tstack-hook-deploy.py"}
+
+
+def _part_code(path):
+    """A part's code from the bytecode Python keeps in hooks/__pycache__, as the launcher keeps this module's. A cache Python
+    cannot read is removed, and the part is compiled from source this once; where the folder cannot be written, each read
+    compiles it."""
+    from importlib.machinery import SourceFileLoader
+    from importlib.util import cache_from_source
+    loader = SourceFileLoader(path.stem, str(path))
+    try:
+        return loader.get_code(loader.name)
+    except Exception:  # noqa: BLE001 - whatever the cache did, the source decides
+        try:
+            os.remove(cache_from_source(str(path)))
+        except OSError:
+            pass
+        return compile(path.read_bytes(), str(path), "exec")
 
 
 def _part(defines):
     """This module's namespace with the part that defines this name in it, read from its file the first time."""
     names = globals()
     if defines not in names:
-        path = Path(__file__).resolve().with_name(PARTS[defines])
-        exec(compile(path.read_text(encoding="utf-8"), str(path), "exec"), names)
+        exec(_part_code(Path(__file__).resolve().with_name(PARTS[defines])), names)
     return names
 
 
@@ -6569,6 +6611,11 @@ def _onepw():
 def _monitor():
     """This module's namespace with the Monitor part in it (fleet_monitor_watch)."""
     return _part("monitor_denial")
+
+
+def _deploys():
+    """This module's namespace with the deploy part in it (fleet_deploy_gate). Not `_deploy`: the part leaves that name set."""
+    return _part("deploys_of")
 
 
 def __getattr__(name):
@@ -7208,7 +7255,7 @@ HANDLERS = {
     "Stop": [memo_nudge, fleet_listen_guard, fleet_idle_guard, fleet_said_once, fleet_news, fleet_room, fleet_heartbeat],
     "PreCompact": [memo_precompact],
     "PreToolUse": [fleet_agent_grant, fleet_spawn_effort, fleet_moved_writes, land_turn_gate, push_attribution, suite_gate,
-                   onepw_hold, rm_guard, fleet_moved_card, fleet_monitor_watch, fleet_grant_alone],
+                   onepw_hold, rm_guard, fleet_moved_card, fleet_deploy_gate, fleet_monitor_watch, fleet_grant_alone],
     "PostToolUse": [fleet_heartbeat, fleet_grant_sweep, fleet_refusal_forgotten, fleet_refusal_note, fleet_context_warning,
                     fleet_chat_nudge, onepw_watch],
     "PostToolUseFailure": [fleet_heartbeat, fleet_grant_sweep, onepw_watch],
@@ -7220,7 +7267,8 @@ HANDLERS = {
 
 # The PreToolUse handlers that can deny, each of which denies the call when it fails (dispatch); fleet_agent_grant
 # only allows, and its failure allows nothing; fleet_moved_card denies only a call a card names, so its failure past
-# that match denies by itself, and any other failure of it denies no call.
+# that match denies by itself, and any other failure of it denies no call; fleet_deploy_gate does the same for a call that
+# names a deploy.
 GUARDS = frozenset({fleet_spawn_effort, fleet_moved_writes, land_turn_gate, push_attribution, suite_gate, onepw_hold,
                     fleet_monitor_watch, rm_guard, fleet_grant_alone})
 

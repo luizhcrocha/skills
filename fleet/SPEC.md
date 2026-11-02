@@ -2103,6 +2103,25 @@ run of each exact command shown; the next run of the same command asks again.
   ends a denial. A used, lapsed or withdrawn card denies nothing, nor does a yes the owner's own rule already holds,
   where the host writes no grant. `cd x && <call>` is no match, and stays a matter of discipline. A ledger that cannot
   be read or is past 32 MiB denies nothing; past a hit, a failure denies.
+- **A deploy that never asked** (the hook's `fleet_deploy_gate`; its code is `hooks/tstack-hook-deploy.py`, which the hook
+  executes into itself for every Bash call of a fleet's session and for nothing else, as a script's text is what names a
+  deploy; a part that does not load is logged and refuses nothing). In a session of a fleet, coordinator or worker, moved or
+  not, the hook refuses a Bash call that reaches a production deploy (`DEPLOYS` in that file is the whole list) and prints
+  the command that asks: a script with the call's arguments, or a deploy found by name as it is; a form the ask cannot hold
+  is told it needs a script. Three things let it through: a standing grant the call holds, which `fleet_grant_alone` then
+  holds to that exact call and one run, with its own refusal for anything longer; an allow-kind answer, which writes the
+  same grant; and an owner's rule in the folder's settings or `~/.claude/settings.json`. The hook reads the command and each
+  shell script it runs, one level into a script's own `bash other.sh`, with the session's variables and what the text
+  assigned. A file's own `#!` says what it is, by the interpreter's exact name; a file of a language (`.ts`, `.js`, `.py`...)
+  with no shell's `#!` is not read. A script's text decides whenever it can be read. A file that cannot be read passes, as a
+  missing one cannot run, but for one named for a deploy whose text cannot be known yet, at a path with an unresolved `$` or
+  written by the same call: that refusal says to split the call and prints no ask, which the CLI would refuse. No flag
+  after a script makes it a read, `--help` included, apart from `deploy-worker`'s named modes in `DEPLOY_SCRIPT_READS`. This guards against forgetting, not against a
+  determined agent, and when in doubt it lets a call pass, as a false refusal is the worse failure: a word built at runtime,
+  `eval`, an alias, a recipe or a node program that hides a deploy under another name, what `ssh` runs elsewhere, a
+  here-document fed to a shell, a script found by a glob, a call or script past 256 KB, and a push whose CI deploys all stay
+  unseen. `$FLEET_DIR` and the registry's entries of the session decide who counts, so a session Luiz runs by hand is
+  untouched.
 - **`chat wait` on a moved team.** It holds `$FLEET_HOST_WAIT_S` (default 30) for a card the export has not brought, and
   then fails naming the export. On a permission's yes it reads the answer's write through fleet-run, up to the same
   time: `granted` prints the calls, `refused` the host's reason and that nothing runs. The folder holds neither.
@@ -3800,7 +3819,9 @@ namespace (`_onepw`) only for a call that can matter:
 | any other: a state is on disk, or the output holds one of the two texts | the part is read and compiled, then `onepw_use` reads the command: about 10 ms (59 ms to 69 ms), as before the split |
 
 So with nothing locked the feature costs a hook call about half a millisecond, and while a kind is locked
-only a command whose first word is one of the tools pays the 10 ms. `LatencyTest`'s budget is unchanged.
+only a command whose first word is one of the tools pays the 10 ms. `LatencyTest`'s budget is unchanged. The 10 ms
+is from when each read compiled the part; a part now loads through the bytecode Python keeps in `hooks/__pycache__`
+(`_part_code`), and compiles only on the first read or where that folder cannot be written.
 
 ### Why the hook asks 1Password nothing itself
 

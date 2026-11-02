@@ -4132,11 +4132,11 @@ class GrantAloneTest(GrantCase):
 
     def test_a_command_that_only_names_the_call_is_left_alone(self):
         """In a string, a longer word, a comment or a here-document's body, the granted call does not run."""
-        self.grant(rule="Bash(just deploy)")
-        self.write_settings({"permissions": {"allow": ["Bash(just deploy)"]}})
-        for command in ('grep -n "just deploy" README.md', "just deploy-check", "jj describe -m 'docs: how to just deploy'",
-                        "cat justfile", "echo done # ; just deploy", "cat > notes.md <<'EOF'\njust deploy\nEOF",
-                        "just deploy --dry-run", "sudo just deploy"):
+        self.grant(rule="Bash(just build)")
+        self.write_settings({"permissions": {"allow": ["Bash(just build)"]}})
+        for command in ('grep -n "just build" README.md', "just build-check", "jj describe -m 'docs: how to just build'",
+                        "cat justfile", "echo done # ; just build", "cat > notes.md <<'EOF'\njust build\nEOF",
+                        "just build --dry-run", "sudo just build"):
             self.assertIsNone(self.before(command), command)
 
     def test_the_exact_call_and_other_commands_are_left_alone(self):
@@ -4874,7 +4874,7 @@ class MonitorWatchTest(GrantCase):
 
     def test_bash_and_every_other_tool_are_left_to_the_permission_check(self):
         for tool in ("Bash", "Read", "Write", "TaskStop"):
-            self.assertIsNone(self.before(self.DEPLOY, tool=tool), tool)
+            self.assertIsNone(self.before("just build", tool=tool), tool)
         self.assertIsNone(self.before("tail -f /tmp/x.log"))
         for tool_input in ({}, {"command": ""}, {"command": "  \n"}, {"command": 7}, {"description": "x"}):
             self.assertIsNone(self.before(**tool_input), tool_input)
@@ -4907,7 +4907,7 @@ class MonitorWatchTest(GrantCase):
     def test_only_a_fleets_monitor_call_loads_the_code_and_it_never_allows(self):
         import inspect
         mod = load_hook(onepw=False)
-        self.assertEqual(self.dispatch(mod, "Bash", command=self.DEPLOY), "")
+        self.assertEqual(self.dispatch(mod, "Bash", command="just build"), "")
         alone = {**self.base("PreToolUse"), "session_id": "sess-2", "tool_name": "Monitor",
                  "tool_input": {"command": self.DEPLOY}}
         self.assertEqual(mod.dispatch("PreToolUse", json.dumps(alone), self.env), "")
@@ -7270,7 +7270,7 @@ class OnepwTest(FleetCase):
                 ("git fetch ../other", {}), ("git push /srv/bare.git main", {}), ("ssh nixbox uptime", {}),
                 ("scp a.txt b.txt", {}), ("git push --dry-run", {}), ("jj git push --dry-run", {}), ("ssh -V", {}),
                 ("timeout 60 jj git push", {}), ("sh -c 'git fetch'", {}), ("cd . && jj git push", {}),
-                ("./deploy.sh", {}), ("just deploy", {}), ("pnpm build", {}), ("cat deploy.log", {}),
+                ("./build.sh", {}), ("just build", {}), ("pnpm build", {}), ("cat deploy.log", {}),
                 # the other kind
                 ("op read op://v/i/f", {}), ("secretspec run -- node x", {}), ("secretspec check", {}), ("gh pr list", {}),
                 ("aws s3 ls", {})):
@@ -7292,8 +7292,8 @@ class OnepwTest(FleetCase):
                 ("secretspec run -- node x", {"env": token}), ("secretspec run --provider dotenv -- node x.js", {}),
                 ("timeout 60 gh pr list", {}), ("env GH_TOKEN=x gh api user", {}), ("sh -c 'gh pr list'", {}),
                 ("pnpm exec secretspec run -- x", {}), ("devenv shell -- secretspec run -- x", {}),
-                ("nu -c 'secretspec run -- node x'", {}), ("devenv-run secretspec run -- x", {}), ("./deploy.sh", {}),
-                ("just deploy", {}), ("op whoami", {}), ("op --version", {}), ("op account list", {}), ("gh --version", {}),
+                ("nu -c 'secretspec run -- node x'", {}), ("devenv-run secretspec run -- x", {}), ("./build.sh", {}),
+                ("just build", {}), ("op whoami", {}), ("op --version", {}), ("op account list", {}), ("gh --version", {}),
                 ("/usr/bin/gh pr list", {}), ("gh pr list | head", {}), ("cat op.log", {}),
                 # the other kind
                 ("jj git push --bookmark main", {}), ("git fetch", {"repo": "ssh"}), ("git ls-remote", {"repo": "ssh"}),
@@ -7802,7 +7802,8 @@ class PreToolUseDecisionTest(unittest.TestCase):
             raise RuntimeError("a note that broke")
         self.assertIsNone(self.decide(broken))
         self.assertEqual(self.decide(broken, lambda hook: self.mod.Allow("granted")), "allow")
-        self.assertEqual(set(self.saved) - self.mod.GUARDS, {self.mod.fleet_agent_grant, self.mod.fleet_moved_card})
+        self.assertEqual(set(self.saved) - self.mod.GUARDS,
+                         {self.mod.fleet_agent_grant, self.mod.fleet_moved_card, self.mod.fleet_deploy_gate})
 
     def test_the_gates_return_only_a_deny(self):
         import inspect
