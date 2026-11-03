@@ -4648,6 +4648,11 @@ def _card_why(hook, d, row, grants):
         return f"the user said {answer or 'no'} on {ref}, and that stands: act on their note. {ASK_AGAIN}"
     if any(g.get("decision") == key for g in grants) or _owner_holds(hook, row["refusal"]):
         return None
+    calls = _ask_calls(row)
+    if any(_bash_call(g["rule"]) in calls and (_instant(g.get("at")) or 0) >= closed for g in grants):
+        return (f"the user allowed it on {ref}, and a later grant of this call has run. Under a live 24-hour grant, ask for "
+                f"the next run with `{fleet_cli()} grant use {d} --call <this call>`; `{fleet_cli()} grants {d}` lists them. "
+                f"If none covers it: {ASK_AGAIN}")
     changed = _moved_file({"runs": _card_runs(row["refusal"])}, "the ask")
     if changed:
         return f"the user allowed it on {ref}, and the office host refused the grant: {changed}. {ASK_AGAIN}"

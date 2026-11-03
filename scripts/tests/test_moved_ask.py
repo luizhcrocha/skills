@@ -211,6 +211,18 @@ class MovedAsk(unittest.TestCase):
         self.assertEqual(self.answer("deploy-0067", grant=False)["status"], "landed")
         self.assertIn("no grant stands yet", self.denial(self.call) or "")
 
+    def test_a_used_grant_under_another_decision_points_at_grant_use_not_the_wait(self):
+        self.ask()
+        self.export()
+        self.answer("deploy-0067", grant=False)
+        line = {"op": "grant", "decision": "kind-deploy", "rule": f"Bash({self.call})", "at": stamp(-1),
+                "file": str(self.root / ".claude" / "settings.local.json")}
+        with open(self.dir / "grants.jsonl", "a") as f:
+            f.write(json.dumps(line) + "\n")
+        said = self.denial(self.call) or ""
+        self.assertIn("grant use", said)
+        self.assertNotIn("no grant stands yet", said)
+
     def test_wait_says_no_grant_has_landed_rather_than_act_on_it(self):
         self.ask()
         self.export()
@@ -249,14 +261,6 @@ class MovedAsk(unittest.TestCase):
         self.assertIsNone(self.denial(self.call))
         self.run_hook("PostToolUse", self.call, tool_response={"stdout": "deployed", "stderr": ""})
         self.assertIsNone(self.denial(self.call), "a used card blocks nothing: a later run has its own card")
-
-    def test_an_allow_kind_card_denies_nothing_once_used(self):
-        self.ask()
-        self.export()
-        self.assertEqual(self.answer("deploy-0067", option="allow-kind")["status"], "granted")
-        self.assertIsNone(self.denial(self.call))
-        self.run_hook("PostToolUse", self.call, tool_response={"stdout": "deployed", "stderr": ""})
-        self.assertIsNone(self.denial(self.call))
 
     def test_a_withdrawn_card_denies_nothing(self):
         self.ask()
