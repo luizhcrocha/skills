@@ -9,7 +9,7 @@
  * the fleet. DIR and $FLEET_DIR may name a team moved to the cloud (its folder holds cloud.json); the
  * plugin's push gate sets $FLEET_DIR to the moved folder its session serves.
  *
- * A manager moved to the cloud is read from its folder, which its host service exports from the cloud. It is
+ * A manager moved to the cloud is read from its folder, which the machine's host service exports from the cloud. It is
  * present while its ledger's status is running and a session of its runs (registry.ts `movedManagerAway`):
  * no registry entry of its goes away when it stops or its session closes, and then the turn is every fleet's.
  *
@@ -187,7 +187,7 @@ function run(machine: Machine, argv: readonly string[]): Effect.Effect<number, R
     if (mine !== undefined && cloud?.unread !== undefined) {
       return yield* refuse(
         `${fleet.id} cannot confirm the landing turn: the manager's ledger could not be read from the cloud (${cloud.unread}), and its folder here, which can be behind the cloud, says ${mine.id} (${mine.title}) has it. ` +
-          `A landing needs the cloud's word, so this machine must reach its host service and the cloud (\`FLEET_DIR=${manager.dir} fleet-run --status\` says how they stand): try again once it does`,
+          `A landing needs the cloud's word, so this machine must reach its host service and the cloud (\`FLEET_DIR=${manager.dir} fleet-run --status\` says how they stand; \`systemctl --user status fleet-host\` and \`journalctl --user -u fleet-host -g 'fleet-host: ${manager.id}:' -n 50 --no-pager\` show the service and the manager's lines in its journal): try again once it does`,
       );
     }
 

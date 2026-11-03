@@ -606,7 +606,7 @@ describe("fleet turn", () => {
     /** The refusal when the cloud's read failed for `why` and the folder says acme holds l1. */
     const unconfirmed = (why: string): string =>
       `turn: acme cannot confirm the landing turn: the manager's ledger could not be read from the cloud (${why}), and its folder here, which can be behind the cloud, says l1 (acme: push) has it. ` +
-      `A landing needs the cloud's word, so this machine must reach its host service and the cloud (\`FLEET_DIR=${manager} fleet-run --status\` says how they stand): try again once it does\n`;
+      `A landing needs the cloud's word, so this machine must reach its host service and the cloud (\`FLEET_DIR=${manager} fleet-run --status\` says how they stand; \`systemctl --user status fleet-host\` and \`journalctl --user -u fleet-host -g 'fleet-host: manager:' -n 50 --no-pager\` show the service and the manager's lines in its journal): try again once it does\n`;
 
     const steps = '[{"id":"l1","title":"acme: push","status":"current","agent":"acme"}]';
 

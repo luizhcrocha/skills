@@ -97,11 +97,15 @@ given. Every ID argument also takes the row's number (D3, L2, R1) where rows hav
    way, and so are `ws DIR add`, `split`, `trash NAME` and `prune --apply`, every `preview DIR` command but `status`,
    `render DIR/state.json` (it stamps the ledger), and any other writer through `ws`'s `save` (the workspace
    hook's report); the chat's readers, `ws list`, a dry-run `ws prune` and `preview status` stay. The host service exports that folder's ledger from the cloud.
-   A moved team stays in the machine's view after `fleet serve --stop` takes it out of the registry: every folder beside the
+   A moved team stays in the machine's view after `fleet serve --stop` takes it out of tstack's local registry: every folder beside the
    registry home (`~/.local/state/fleet/<team>`, the home's sibling `fleet`) that holds `cloud.json` is listed after
    the served fleets by `fleets list` (`(coordinator, <status>, moved to the cloud)`), `fleets waiting`, `fleets show`,
    `fleets decision`, the manager's page and the manager's `watch --fleets`, read from the exported `state.json` and
-   `chat.jsonl`. Its page is `<cloud>/<fleet>` (cloud.json's `cloud` and `fleet`). No process of tstack
+   `chat.jsonl`. Its page is `<cloud>/<fleet>` (cloud.json's `cloud` and `fleet`). The machine's one host service serves
+   the teams its unit's `--team` flags and `<state>/teams.json` name, and the teams the cloud's registry names for this
+   machine whose `<state>/<team>` holds `cloud.json`. It skips a team of an archived project, a `teams.json` team whose
+   project the cloud's registry no longer lists, and a folder holding the ledger of another or an older project.
+   No process of tstack
    serves `/f/<fleet>/…` now: the preview server answers 404 outside `/f/<fleet>/preview/`. The manager's page shows such a team's card as a link to it on the cloud
    page, never a frame, and fetches none of its files. Every write to it stays refused.
 4. `DIR` is created (mkdir -p), even when the command then fails (open-17).
@@ -4513,7 +4517,9 @@ rule's disposition are in [RULES.md](RULES.md)). Beside the refusals and warning
   (<why>): reading its folder here, which can be behind it`. A folder that says the fleet holds the turn is not enough,
   since the turn may just have been taken back: exit 1, `turn: acme cannot confirm the landing turn: the manager's ledger
   could not be read from the cloud (<why>), and its folder here ... says l1 (...) has it. A landing needs the cloud's
-  word, so this machine must reach its host service and the cloud ...: try again once it does`. `<why>` says how the
+  word, so this machine must reach its host service and the cloud (... `systemctl --user status fleet-host` and
+  `journalctl --user -u fleet-host -g 'fleet-host: <manager>:' -n 50 --no-pager` ...): try again once it does`. The
+  machine has one `fleet-host` for every team, and a team's journal lines start `fleet-host: <team>:`. `<why>` says how the
   read failed: no answer in N s, fleet-run's exit and its status and first stderr line, the host's outbox holding the
   read (fleet-run exit 3, `queued`: offline, or online behind programs not drained, which the answer does not tell
   apart; the read runs later and changes nothing, and the next try goes through once they drain), or what a completed
