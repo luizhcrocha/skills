@@ -49,7 +49,7 @@ function repoName(repo: CallKind["repo"]): string {
 }
 
 /** The kind in plain words. */
-function kindWords(kind: CallKind): string {
+export function kindWords(kind: CallKind): string {
   const name = repoName(kind.repo);
 
   if (kind.action === "push") return `push ${kind.bookmark ?? "?"} of repo ${name}, from any workspace`;

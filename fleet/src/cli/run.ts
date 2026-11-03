@@ -24,6 +24,7 @@ import { onepwCli } from "./onepw.ts";
 import { previewCli } from "./preview.ts";
 import { CONTROL_CLIS, controlCli } from "./control.ts";
 import { previewServerCli, SERVER_VERBS } from "./preview-serve.ts";
+import { grantCli, grantsWith } from "./grant.ts";
 import { projectCli } from "./project.ts";
 import { roomCli } from "./room.ts";
 import { stateCli } from "./state.ts";
@@ -32,7 +33,7 @@ import { turnCli } from "./turn.ts";
 import { TRASH_COMMANDS, wsCli } from "./ws.ts";
 import { wasteCli } from "./waste.ts";
 
-const USAGE = "usage: fleet {version,ls,state,chat,fleets,news,secrets,ws,preview,brief,turn,advisor,team,waste,serve,render,usage,spend,served,room,project} ...\n";
+const USAGE = "usage: fleet {version,ls,state,chat,fleets,news,secrets,ws,preview,brief,turn,advisor,team,waste,serve,render,usage,spend,served,room,project,grant,grants} ...\n";
 
 /** This copy of tstack: its version (from the plugin's manifest) and where it is, for `fleet version`. */
 function versionLine(): string {
@@ -43,7 +44,7 @@ function versionLine(): string {
 }
 
 /** The commands whose first argument is a fleet's directory. */
-const DIR_CLIS: ReadonlySet<string> = new Set(["state", "chat", "ws", "preview", "brief", "turn", "advisor", "waste", "serve", "spend"]);
+const DIR_CLIS: ReadonlySet<string> = new Set(["state", "chat", "ws", "preview", "brief", "turn", "advisor", "waste", "serve", "spend", "grants"]);
 
 /** A name that fits several served fleets: say which. */
 export interface Ambiguous {
@@ -130,6 +131,10 @@ function route(argv: readonly string[]): Effect.Effect<number, never, Out | Worl
 
   if (cli === "project") return projectCli(rest);
 
+  if (cli === "grant") return grantCli(rest);
+
+  if (cli === "grants") return grantsWith(rest);
+
   // `onepw` is the name `secrets` had before 2026-10-29: a hidden alias, in no usage, for sessions on an
   // older copy and older rule text.
   if (cli === "secrets" || cli === "onepw") return onepwCli(rest);
@@ -154,7 +159,7 @@ function route(argv: readonly string[]): Effect.Effect<number, never, Out | Worl
   return Effect.gen(function* () {
     const out = yield* Out;
 
-    out.err(`${USAGE}fleet: error: the first argument is state, chat, fleets, news, secrets, ws, preview, brief, turn, advisor, team, waste, serve, render, usage, spend, served, room or project\n`);
+    out.err(`${USAGE}fleet: error: the first argument is state, chat, fleets, news, secrets, ws, preview, brief, turn, advisor, team, waste, serve, render, usage, spend, served, room, project, grant or grants\n`);
 
     return 2;
   });

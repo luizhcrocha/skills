@@ -55,7 +55,7 @@ The cloud's projects, through this machine's fleet-host (FLEET_RUN_URL, else htt
 join and manage run in the repo: its identity is its origin remote's owner/name, else its folder under ~/repos.`;
 
 /** A host service's answer: its status and its body. */
-interface Reply {
+export interface Reply {
   readonly status: number;
   readonly body: JsonObject | undefined;
   readonly text: string;
@@ -91,7 +91,7 @@ const str = (value: Json | undefined): string => asString(value) ?? "?";
 const strs = (value: Json | undefined): string => (asArray(value) ?? []).map(str).join(", ");
 
 /** The host service's origin, or why `$FLEET_RUN_URL` is not one. */
-function hostOf(machine: Machine): { readonly origin: string } | Why {
+export function hostOf(machine: Machine): { readonly origin: string } | Why {
   const given = machine.env("FLEET_RUN_URL");
   const text = given === undefined || given === "" ? HOST : given;
   const url = URL.parse(text);
@@ -102,7 +102,7 @@ function hostOf(machine: Machine): { readonly origin: string } | Why {
 }
 
 /** `method path` asked of the host service at `origin`, with `body` as JSON; the reply, or why none came. */
-async function call(origin: string, method: "GET" | "POST", path: string, body?: JsonObject): Promise<Reply | Why> {
+export async function call(origin: string, method: "GET" | "POST", path: string, body?: JsonObject): Promise<Reply | Why> {
   const init: RequestInit = { method, redirect: "error", signal: AbortSignal.timeout(60_000) };
 
   if (body !== undefined) {
