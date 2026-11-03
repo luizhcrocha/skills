@@ -749,7 +749,7 @@ class LiveKindDraftCase(DeployGateCase):
         subprocess.run(["jj", "git", "init"], cwd=self.project, env=env, capture_output=True, check=True)
         subprocess.run(["jj", "git", "remote", "add", "origin", "git@github.com:o/fleet.git"], cwd=self.project, env=env, capture_output=True, check=True)
         self.main = os.path.realpath(self.project / ".jj" / "repo")
-        self.deploy = f"bash {self.script('deploy.sh', '#!/bin/sh' + chr(10) + 'wrangler deploy' + chr(10))}"
+        self.deploy = f"bash {self.script('deploy.sh', '#!/bin/sh' + chr(10) + 'wrangler deploy --keep-vars' + chr(10))}"
         self.plain = self.refused(self.deploy, cwd=str(self.project))
         self.kinds = Path(self.env["HOME"]) / ".claude" / "tstack-grants" / "kinds.json"
         self.kinds.parent.mkdir(parents=True, exist_ok=True)
@@ -787,6 +787,9 @@ class LiveKindDraftCase(DeployGateCase):
             with self.subTest(text=text):
                 self.kinds.write_text(text)
                 self.assertEqual(self.refused(self.deploy, cwd=str(self.project)), self.plain)
+
+    def test_a_word_split_over_a_line_continuation_is_still_a_deploy(self):
+        self.assertIn("--kind permission", self.refused("wrang\\\nler deploy", cwd=str(self.project)))
 
     def test_a_call_the_matcher_refuses_gets_no_proposal(self):
         self.holds()
