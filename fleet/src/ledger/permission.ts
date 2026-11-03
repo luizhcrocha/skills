@@ -19,10 +19,10 @@ import { stateRefusal, type Refusal } from "../errors.ts";
 import { isFleetCli } from "../files.ts";
 import { asArray, asObject, asString, type Json } from "../json.ts";
 import { HOOK_FILES } from "../ws/hook.ts";
-import { ALLOW_KIND, ALLOW_KIND_LABEL, allowKindWords, offersKind } from "./allow-kind.ts";
+import { ALLOW_24H, ALLOW_24H_LABEL, allow24hWords, ALLOW_KIND, offers24h } from "./allow-kind.ts";
 import type { Choice, RefusedCall } from "./model.ts";
 
-export { ALLOW_KIND, ALLOW_KIND_LABEL, allowKindWords, offersKind } from "./allow-kind.ts";
+export { ALLOW_24H, ALLOW_24H_LABEL, allow24hWords, ALLOW_KIND, ALLOW_KIND_LABEL, allowKindWords, offers24h, offersKind } from "./allow-kind.ts";
 
 /** The tools a permission handles: a shell command, and a subagent's spawn. */
 export const PERMISSION_TOOLS: readonly string[] = ["Bash", "Agent"];
@@ -30,11 +30,16 @@ export const PERMISSION_TOOLS: readonly string[] = ["Bash", "Agent"];
 /** The option that grants the call once. */
 export const ALLOW_ONCE = "allow-once";
 
-/** Whether an answer to a permission lets its calls through, once: it begins with allow-once or allow-kind. */
+/** Whether an answer to a permission lets its calls through: it begins with allow-once, allow-24h or allow-kind. */
 export function allows(answer: string): boolean {
   const text = answer.trim().toLowerCase();
 
-  return text.startsWith(ALLOW_ONCE) || text.startsWith(ALLOW_KIND);
+  return text.startsWith(ALLOW_ONCE) || text.startsWith(ALLOW_24H) || text.startsWith(ALLOW_KIND);
+}
+
+/** Whether an answer to a permission grants its kind for 24 hours: it begins with allow-24h. */
+export function asks24h(answer: string): boolean {
+  return answer.trim().toLowerCase().startsWith(ALLOW_24H);
 }
 
 /** Whether an answer to a permission asks for a rule for its kind: it begins with allow-kind. */
@@ -744,13 +749,12 @@ export function makeRefusedCall(given: RefusedGiven): Effect.Effect<RefusedCall,
 }
 
 /** A permission's options, which the CLI sets itself, each saying what it means for the user: allow-once, then
- * allow-kind on a Bash card its opener did not hold to once (`offersKind`), then deny. The rule and the file it
- * goes into show with the call on the page. */
+ * allow-24h on a card of one kind (`offers24h`), then deny. The rule and the file it goes into show with the call on
+ * the page. */
 export function permissionOptions(refusal: RefusedCall): Choice[] {
   const count = callsOf(refusal).length;
   const who = isAsk(refusal) ? "the fleet" : "the worker";
   const stopped = isAsk(refusal) ? "the fleet does not run it; your note goes to it" : "the worker stays stopped; your note goes to it";
-  const kind: Choice[] = offersKind(refusal) ? [{ id: ALLOW_KIND, label: ALLOW_KIND_LABEL, consequence: allowKindWords(count) }] : [];
 
   if (count > 1) {
     return [
@@ -759,7 +763,6 @@ export function permissionOptions(refusal: RefusedCall): Choice[] {
         label: `Allow these ${String(count)} calls, once each`,
         consequence: `${who} runs exactly the ${String(count)} calls shown above, once each, and nothing like them after: each one-time grant goes once its call ran, and any left go after ${String(GRANT_TTL_MIN)} minutes`,
       },
-      ...kind,
       { id: "deny", label: "Deny", consequence: stopped.replace("run it", "run any of them") },
     ];
   }
@@ -772,7 +775,7 @@ export function permissionOptions(refusal: RefusedCall): Choice[] {
       label: "Allow this call once",
       consequence: `${who} ${what}, and nothing like it after: the one-time grant goes once it is used, or after ${String(GRANT_TTL_MIN)} minutes`,
     },
-    ...kind,
+    ...(refusal.kind !== undefined && offers24h(refusal) ? [{ id: ALLOW_24H, label: ALLOW_24H_LABEL, consequence: allow24hWords(refusal.kind) }] : []),
     { id: "deny", label: "Deny", consequence: stopped },
   ];
 }

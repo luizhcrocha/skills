@@ -5,6 +5,7 @@
  * what the rows cannot hold (a missing required key, a value of the wrong JSON type); everything else a
  * row may get wrong (an unknown status, a duplicate id) is the final check's ({@link ./validate.ts}).
  */
+import { callKindOf, type CallKind } from "./allow-kind.ts";
 import * as Option from "effect/Option";
 
 import { invalid, type Refusal } from "../errors.ts";
@@ -122,8 +123,10 @@ export interface RefusedCall {
   more?: string[];
   /** The files the calls are bound to, `<n> <sha256> <path>` each (permission.ts `runsOf`); absent when none is. */
   runs?: string[];
-  /** The opener's word that this kind of call is never saved: no allow-kind option (permission.ts `offersKind`); absent when not given. */
+  /** The opener's word that this kind of call is never saved or granted for 24 hours: no allow-24h option (`offers24h`), and no allow-kind answer (`offersKind`); absent when not given. */
   once?: boolean;
+  /** The kind the matcher read from the call at the ask (ledger/kind-match.ts); absent when it read none. */
+  kind?: CallKind;
 }
 
 /** A decision, input, secret, action, grilling or permission: what waits on the user (or the manager). */
@@ -780,7 +783,7 @@ export const DECISION_KEYS = [
   "undo",
 ] as const;
 
-export const REFUSAL_KEYS = ["tool", "call", "rule", "cause", "root", "agent_id", "more", "runs", "once"] as const;
+export const REFUSAL_KEYS = ["tool", "call", "rule", "cause", "root", "agent_id", "more", "runs", "once", "kind"] as const;
 
 function readRefusal(decision: string): (object: JsonObject) => Fields | RefusedCall {
   return (object) => {
@@ -793,6 +796,9 @@ function readRefusal(decision: string): (object: JsonObject) => Fields | Refused
     const once = f.optBool("once");
 
     if (once !== undefined) row.once = once;
+    const kind = callKindOf(object["kind"]);
+
+    if (kind !== undefined) row.kind = kind;
 
     return f.done(row, REFUSAL_KEYS);
   };

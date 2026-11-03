@@ -308,7 +308,7 @@ class MovedAsk(unittest.TestCase):
         sha = hashlib.sha256(self.script.read_bytes()).hexdigest()
         self.assertEqual(card["refusal"]["runs"], [f"1 {sha} {self.script}"])
         self.assertEqual((card["refusal"]["call"], card["refusal"]["rule"], card["refusal"]["cause"]), (self.call, f"Bash({self.call})", ""))
-        self.assertEqual([o["id"] for o in card["options"]], ["allow-once", "allow-kind", "deny"])
+        self.assertEqual([o["id"] for o in card["options"]], ["allow-once", "deny"])
         self.assertIn("the tests passed on this release", card["why"])
         self.assertIn(self.call, card["question"], "the CLI writes the question from the call")
         self.assertEqual(self.allowed(), [], "nothing is allowed before the owner answers")

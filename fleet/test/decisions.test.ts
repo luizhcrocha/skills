@@ -2,8 +2,9 @@
  * The decisions seam (ported from the coordinator's tests/test_decisions.py): what waits on the user,
  * through the state CLI, and the rule for what an answer may be.
  */
+import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { appendFileSync, chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { appendFileSync, chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -1165,7 +1166,6 @@ describe("permission", () => {
         label: "Allow this call once",
         consequence: "the worker runs exactly the call shown above, once, and nothing like it after: the one-time grant goes once it is used, or after 30 minutes",
       },
-      { id: "allow-kind", label: "Allow once and save this kind", consequence: "allows this call now; then I draft a rule for this kind of command for you to add" },
       { id: "deny", label: "Deny", consequence: "the worker stays stopped; your note goes to it" },
     ]);
   });
@@ -1349,7 +1349,6 @@ describe("permission", () => {
       expect(d["refusal"]).toEqual({ tool: "Bash", call: DEPLOY, rule: `Bash(${DEPLOY})`, cause: "", root: "/work/repo", agent_id: null, runs: [`1 ${sha("deploy-worker")} ${TASKS}/deploy-worker`] });
       expect(asArray(d["options"])?.map((o) => asObject(o)?.["consequence"])).toEqual([
         "the fleet runs exactly the call shown above, once, and nothing like it after: the one-time grant goes once it is used, or after 30 minutes",
-        "allows this call now; then I draft a rule for this kind of command for you to add",
         "the fleet does not run it; your note goes to it",
       ]);
       expect(said).not.toContain("Then explain it");
@@ -1365,7 +1364,7 @@ describe("permission", () => {
       // Each call that runs a script by its path is bound to the file; a command found by name is bound to none.
       expect(r?.["runs"]).toEqual([`1 ${sha("deploy-worker")} ${TASKS}/deploy-worker`, `2 ${sha("migrate-db.sh")} ${TASKS}/migrate-db.sh`, `4 ${sha("smoke")} ${TASKS}/smoke`]);
       expect(d["question"]).toBe("Let the coordinator run these 4 exact calls, once each? Read each one in full below before you answer.");
-      expect(asArray(d["options"])?.map((o) => asObject(o)?.["label"])).toEqual(["Allow these 4 calls, once each", "Allow once and save this kind", "Deny"]);
+      expect(asArray(d["options"])?.map((o) => asObject(o)?.["label"])).toEqual(["Allow these 4 calls, once each", "Deny"]);
     });
 
     test("a script that changed since the ask is another thing to allow: the same command again is a revision", () => {
@@ -1381,31 +1380,27 @@ describe("permission", () => {
     test("only the user's answer on the page grants: --decide allow-once with none is refused", () => {
       ok(...ask("one"));
       const none = refused("decision", "one", "--decide", "allow-once: Allow this call once", "--resolution", "answered on the page (#1)");
-      expect(none).toContain("P1 has no allow-once or allow-kind answer from the user since it last changed: only their answer on the fleet page grants the call");
+      expect(none).toContain("P1 has no allow-once, allow-24h or allow-kind answer from the user since it last changed: only their answer on the fleet page grants the call");
       expect(none).toContain("wait one");
       expect(item("one")["status"]).toBe("open");
       // A no, a note, or a yes given to the call as it was before a revision is no yes to this one.
       userAnswers("one", "deny: Deny\nnot today", "2999-01-01T00:00:00+00:00");
-      expect(refused("decision", "one", "--decide", "allow-once", "--resolution", "r")).toContain("has no allow-once or allow-kind answer");
+      expect(refused("decision", "one", "--decide", "allow-once", "--resolution", "r")).toContain("has no allow-once, allow-24h or allow-kind answer");
       userAnswers("other", "allow-once: Allow this call once", "2999-01-01T00:01:00+00:00");
-      expect(refused("decision", "one", "--decide", "allow-once", "--resolution", "r")).toContain("has no allow-once or allow-kind answer");
+      expect(refused("decision", "one", "--decide", "allow-once", "--resolution", "r")).toContain("has no allow-once, allow-24h or allow-kind answer");
       userAnswers("one", "allow-once: Allow this call once", "2000-01-01T00:00:00+00:00");
-      expect(refused("decision", "one", "--decide", "allow-once", "--resolution", "r")).toContain("has no allow-once or allow-kind answer");
+      expect(refused("decision", "one", "--decide", "allow-once", "--resolution", "r")).toContain("has no allow-once, allow-24h or allow-kind answer");
       userAnswers("one", "allow-once: Allow this call once", "2999-01-01T00:02:00+00:00");
       expect(ok("decision", "one", "--decide", "allow-once", "--resolution", "answered on the page (#5)")).toContain("P1 is allowed once");
     });
 
-    test("a Bash card offers allow-kind after allow-once, --once takes it away, and recording it grants once, marks the card and asks for a rule card", () => {
+    test("no new card offers allow-kind, --once still marks a card, and an allow-kind answer still grants once, marks the card and asks for a rule card", () => {
       const options = (id: string): unknown[] => (asArray(item(id)["options"]) ?? []).map((o) => asObject(o)?.["id"]);
       ok(...ask("check"));
-      expect(options("check")).toEqual(["allow-once", "allow-kind", "deny"]);
-      expect(asObject(asArray(item("check")["options"])?.[1] ?? null)).toEqual({ id: "allow-kind", label: "Allow once and save this kind", consequence: "allows this call now; then I draft a rule for this kind of command for you to add" });
+      expect(options("check")).toEqual(["allow-once", "deny"]);
       ok(...ask("three", "--then", MIGRATE));
-      expect(asObject(asArray(item("three")["options"])?.[1] ?? null)?.["consequence"]).toBe("allows these calls now; then I draft a rule for this kind of command for you to add");
       ok(...ask("marked", "--once"));
       expect([options("marked"), asObject(item("marked")["refusal"] ?? null)?.["once"]]).toEqual([["allow-once", "deny"], true]);
-      ok("decision", "check", "--once", "--log", "this check spends money");
-      expect(options("check")).toEqual(["allow-once", "deny"]);
       expect(refused("decision", "a9", "--kind", "input", "--title", "T", "--question", "q", "--why", "w", "--once")).toContain("--once marks a permission");
       ok(...ask("again"));
       userAnswers("again", "allow-kind: Allow once and save this kind");
@@ -1418,6 +1413,70 @@ describe("permission", () => {
       userAnswers("marked", "allow-once: Allow this call once");
       expect(refused("decision", "marked", "--decide", "allow-kind", "--resolution", "r")).toContain("does not offer allow-kind");
       expect([item("marked")["status"], item("marked")["kind_requested"]]).toEqual(["open", undefined]);
+    });
+
+    describe("a call the matcher reads as one kind", () => {
+      const ORIGIN = "git@github.com:luizhcrocha/fleet.git";
+      const KIND_LINE = "deploy repo fleet, from any workspace, for 24 hours from your tap. Every run is listed, and you can revoke it any time.";
+      let repo = "";
+
+      beforeEach(() => {
+        repo = tmp();
+        const jj = (...args: string[]): void => void spawnSync("jj", args, { cwd: repo, env: { ...process.env, HOME: repo }, stdio: "ignore" });
+        jj("git", "init");
+        jj("git", "remote", "add", "origin", ORIGIN);
+      });
+
+      const askAt = (id: string, call: string, ...more: string[]): string[] => ["decision", id, "--kind", "permission", "--tool", "Bash", "--call", call, "--root", repo, "--title", "T", "--why", "w", "--recommend", "allow-once", "--reason", "r", ...more];
+      const ids = (id: string): unknown[] => (asArray(item(id)["options"]) ?? []).map((o) => asObject(o)?.["id"]);
+
+      test("offers allow-24h between allow-once and deny, with the kind in plain words", () => {
+        ok(...askAt("k1", "wrangler deploy"));
+        expect(asArray(item("k1")["options"])?.map((o) => asObject(o)?.["id"])).toEqual(["allow-once", "allow-24h", "deny"]);
+        expect(asArray(item("k1")["options"])?.[1]).toEqual({ id: "allow-24h", label: "Allow for 24 hours", consequence: KIND_LINE });
+        expect(asObject(item("k1")["refusal"] ?? null)?.["kind"]).toEqual({ action: "deploy", repo: { main: realpathSync(join(repo, ".jj", "repo")), origin: ORIGIN } });
+      });
+
+      test("--once and a list of calls do not get it, and neither does a call with no kind or two", () => {
+        ok(...askAt("held", "wrangler deploy", "--once"));
+        expect(ids("held")).toEqual(["allow-once", "deny"]);
+        ok(...askAt("list", "wrangler deploy", "--then", "echo done"));
+        expect(ids("list")).toEqual(["allow-once", "deny"]);
+        ok(...askAt("plain", "echo hello"));
+        expect(ids("plain")).toEqual(["allow-once", "deny"]);
+        ok(...askAt("twice", "wrangler deploy; jj git push --bookmark master"));
+        expect(ids("twice")).toEqual(["allow-once", "deny"]);
+      });
+
+      test("a remote URL holding a password hides the option, since a moved card goes to the cloud", () => {
+        spawnSync("jj", ["git", "remote", "set-url", "origin", "https://me:hunter2@example.com/o/fleet.git"], { cwd: repo, env: { ...process.env, HOME: repo }, stdio: "ignore" });
+        ok(...askAt("cred", "wrangler deploy"));
+        expect(ids("cred")).toEqual(["allow-once", "deny"]);
+        expect(JSON.stringify(item("cred"))).not.toContain("hunter2");
+      });
+
+      test("a later --once takes it away", () => {
+        ok(...askAt("later", "wrangler deploy"));
+        ok("decision", "later", "--once", "--log", "this one is irreversible");
+        expect(ids("later")).toEqual(["allow-once", "deny"]);
+      });
+
+      test("the user's answer is the only yes; recording it prints the call and how to use the kind, and asks for no rule card", () => {
+        ok(...askAt("yes", "wrangler deploy"));
+        expect(refused("decision", "yes", "--decide", "allow-24h", "--resolution", "r")).toContain("has no allow-once, allow-24h or allow-kind answer");
+        userAnswers("yes", "allow-24h: Allow for 24 hours");
+        const said = ok("decision", "yes", "--decide", "allow-24h: Allow for 24 hours", "--resolution", "answered on the page (#9)");
+        expect(said).toContain("run exactly this call now, byte for byte, as a Bash call of its own:\n  wrangler deploy\n");
+        expect(said).toContain("fleet grant use");
+        expect(said).not.toContain("--kind rule");
+        expect(item("yes")["kind_requested"]).toBeUndefined();
+      });
+
+      test("recording allow-24h on a card that does not offer it is refused", () => {
+        ok(...askAt("held2", "wrangler deploy", "--once"));
+        userAnswers("held2", "allow-24h");
+        expect(refused("decision", "held2", "--decide", "allow-24h", "--resolution", "r")).toContain("does not offer allow-24h");
+      });
     });
 
     test("recording the yes prints the exact calls to run; a no says it stays stopped", () => {

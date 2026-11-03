@@ -370,14 +370,14 @@ describe("the host asks the user in its own words, for the command that needs th
     ]);
     // Only the part the host asked for is the call; the cause is what the classifier said of the worker's attempt.
     expect(d?.["refusal"]).toEqual({ tool: "Bash", call: PART, rule: `Bash(${PART})`, cause: CAUSE, root: "/work/repo", agent_id: HARNESS });
-    expect((asArray(d?.["options"]) ?? []).map((o) => asObject(o)?.["id"])).toEqual(["allow-once", "allow-kind", "deny"]);
+    expect((asArray(d?.["options"]) ?? []).map((o) => asObject(o)?.["id"])).toEqual(["allow-once", "deny"]);
     expect(rows("refusals").map((r) => [r["id"], r["status"], r["closed"], r["resolution"]])).toEqual([["p-db7f9e47", "asked", OPENED, "asked as a permission of the same id"]]);
     expect(run("event", "x").stderr).not.toContain("is a call auto mode refused");
   });
 
   test("it is a permission as any other: only the user's answer on the page grants, and recording it prints the exact call", () => {
     ok(...worded("p-db7f9e47", PART));
-    expect(refused("decision", "p-db7f9e47", "--decide", "allow-once", "--resolution", "x")).toContain("P1 has no allow-once or allow-kind answer from the user since it last changed");
+    expect(refused("decision", "p-db7f9e47", "--decide", "allow-once", "--resolution", "x")).toContain("P1 has no allow-once, allow-24h or allow-kind answer from the user since it last changed");
     writeFileSync(join(root, "chat.jsonl"), `${JSON.stringify({ id: 9, at: "2026-01-05T09:05:00+00:00", from: "user", to: ["coordinator"], text: "allow-once: Allow this call once", re: null, decision: "p-db7f9e47" })}\n`, { flag: "a" });
     const said = ok("decision", "P1", "--decide", "allow-once", "--resolution", "answered on the page (#9)").stdout;
     expect(said).toContain(`P1 is allowed once: run exactly this call now, byte for byte, as a Bash call of its own:\n  ${PART}\n`);

@@ -32,7 +32,8 @@ import { find, findDecision, highest, milestoneOfStep, misnumbered, nextStepId, 
 import { approvalNumber, nextDecisionRef, refusedFor, Unreachable } from "./shared-numbers.ts";
 import { approvalSource, comesFrom, namesOf, NoSource, refOf, sameSource } from "./approvals.ts";
 import { LINK_KINDS, linkKind, OLD_LINK_KINDS, type LinkKind } from "./links.ts";
-import { allows, asksKind, callsLine, callsOf, grantFileOf, isAsk, makeRefusedCall, offersKind, permissionOptions, refusalRev } from "./permission.ts";
+import { kindOfCall } from "./kind-match.ts";
+import { allows, asks24h, asksKind, callsLine, callsOf, grantFileOf, isAsk, makeRefusedCall, offers24h, offersKind, permissionOptions, refusalRev } from "./permission.ts";
 import { foldersOf, permissionWords, type RefusedBy, type Spawn } from "./permission-words.ts";
 import { askedDraft, callerOf, draftCommands, draftLine, openDraft, partOfRefused, shown } from "./refusal-draft.ts";
 import { roleDefaults, spawnLine } from "./roles.ts";
@@ -1717,7 +1718,7 @@ function sameRefusal(a: RefusedCall, b: RefusedCall): boolean {
   const alike = (x: readonly string[], y: readonly string[]): boolean => x.length === y.length && x.every((item, k) => item === y[k]);
 
   // The files too: a script that changed since the user was asked is another thing to allow.
-  return same && alike(a.more ?? [], b.more ?? []) && alike(a.runs ?? [], b.runs ?? []) && a.once === b.once;
+  return same && alike(a.more ?? [], b.more ?? []) && alike(a.runs ?? [], b.runs ?? []) && a.once === b.once && JSON.stringify(a.kind) === JSON.stringify(b.kind);
 }
 
 /** A permission's call from the flags given, over the one it had, with the two options that follow from it;
@@ -1737,7 +1738,7 @@ function setRefusal(run: Run, d: Decision, draft?: RefusalDraft, worded = false)
     if (then.length > 0) named.push("then");
     const once = args.flag("once");
 
-    if (once && d.kind !== "permission") return yield* refuse("--once marks a permission (--kind permission) as one whose kind is never saved: no Allow once and save this kind");
+    if (once && d.kind !== "permission") return yield* refuse("--once marks a permission (--kind permission) as one that stays one call: no Allow for 24 hours");
 
     if (d.kind !== "permission") {
       if (named.length === 0) return false;
@@ -1745,7 +1746,7 @@ function setRefusal(run: Run, d: Decision, draft?: RefusalDraft, worded = false)
       return yield* refuse(`--${named.map((k) => k.replace("_", "-")).join(", --")} name the call of a permission (--kind permission)`);
     }
 
-    if ((args.list("option") ?? []).length > 0) return yield* refuse("a permission's options are allow-once, allow-kind (on a Bash card not given --once) and deny, which the CLI sets: --option is not taken");
+    if ((args.list("option") ?? []).length > 0) return yield* refuse("a permission's options are allow-once, allow-24h (on a card of one call of one kind, not given --once) and deny, which the CLI sets: --option is not taken");
     const ask = asksAhead(args, before, worded) || (draft !== undefined && args.str("cause") === undefined);
 
     if (args.str("recommend") !== undefined && named.length > 0 && !ask) {
@@ -1758,7 +1759,7 @@ function setRefusal(run: Run, d: Decision, draft?: RefusalDraft, worded = false)
 
     if (named.length === 0 && before !== undefined) {
       if (!once || before.once === true) return false;
-      // The opener's word that this card's kind is never saved: Allow once and save this kind is no longer offered.
+      // The opener's word that this card stays one call: Allow for 24 hours is no longer offered.
       d.refusal = { ...before, once: true };
       d.options = permissionOptions(d.refusal);
 
@@ -1786,6 +1787,9 @@ function setRefusal(run: Run, d: Decision, draft?: RefusalDraft, worded = false)
     const refusal: RefusedCall = { ...made, root: yield* sessionRootOf(run, made.root) };
 
     if (once || before?.once === true) refusal.once = true;
+    const kind = refusal.tool === "Bash" && refusal.once !== true && more.length === 0 ? kindOfCall(run.machine, refusal.call, refusal.root) : undefined;
+
+    if (kind !== undefined) refusal.kind = kind;
     d.refusal = refusal;
     d.options = permissionOptions(refusal);
 
@@ -1833,11 +1837,12 @@ function afterAnswer(d: Decision, answer: string): string | undefined {
       : `run exactly these ${String(calls.length)} calls now, in this order, each byte for byte as a Bash call of its own:\n${calls.map((call, k) => `  ${String(k + 1)}. ${call}`).join("\n")}`;
 
   return (
-    `${ref} is allowed once: ${what}\n` +
+    `${ref} is allowed ${asks24h(answer) ? "with its kind for 24 hours" : "once"}: ${what}\n` +
     `Each grant is an exact rule in ${grantFileOf(r.tool, r.root)}: it goes when its call ran, pass or fail, or 30 minutes after the answer, and the next run asks again. ` +
     "A call that differs by one character has no grant, and the plugin's hook refuses a longer command that holds a granted call, a second run, a call out of its turn, " +
     `and a call whose script changed since the user allowed it.${calls.length === 1 ? "" : " The list is a sequence: a call that fails takes the rest of the list with it, and you ask again for what is left."}${who}` +
-    (asksKind(answer) ? `\n${KIND_ASK}` : "")
+    (asksKind(answer) ? `\n${KIND_ASK}` : "") +
+    (asks24h(answer) ? `\n${KIND_USE}` : "")
   );
 }
 
@@ -1848,6 +1853,11 @@ const KIND_ASK =
   "(a write passing as the kind, a secret printed, code that can change under the rule), apply its fixes, and open a rule card: " +
   '`fleet state <dir> decision ID --kind rule --rule-file FILE --title T --question "<what this lets every agent do without asking>" --why "<the card numbers it came from, and what the review concluded>"`. ' +
   "Nothing is added until the user taps Add this rule on that card.";
+
+/** What an allow-24h answer tells the coordinator of every later call of the kind (SKILL.md "Allow for 24 hours"). */
+const KIND_USE =
+  'For each later call of this kind, in any workspace of the repo, open no card: run `fleet grant use <dir> --call "<the exact call>"` first, then that call, unchanged, once, as a Bash call of its own. ' +
+  "`fleet grants <dir>` lists the kinds and their end times.";
 
 function setBody(run: Run, d: Decision): Step$ {
   const target = join(run.root, "decisions", `${d.id}.html`);
@@ -2666,7 +2676,7 @@ export function decision(ledger: Ledger, run: Run): Effect.Effect<Ledger, Refusa
 
     if (decide !== undefined && d.kind === "permission" && allows(decide) && !allowedByUser(d, said)) {
       return yield* refuse(
-        `${d.ref ?? d.id} has no allow-once or allow-kind answer from the user since it last changed: only their answer on the fleet page grants the call, ` +
+        `${d.ref ?? d.id} has no allow-once, allow-24h or allow-kind answer from the user since it last changed: only their answer on the fleet page grants the call, ` +
           `and --decide records an answer, it gives none. Wait for it (\`fleet chat ${run.root} wait ${d.id}\`) and run nothing of it until then; ` +
           'or --withdraw "why" when the call is no longer needed',
       );
@@ -2677,6 +2687,10 @@ export function decision(ledger: Ledger, run: Run): Effect.Effect<Ledger, Refusa
         `${d.ref ?? d.id} does not offer allow-kind (its opener held it to once, or it is an Agent spawn): the page grants such an answer as allow-once, ` +
           "so record it as one: --decide allow-once",
       );
+    }
+
+    if (decide !== undefined && d.kind === "permission" && asks24h(decide) && (d.refusal === undefined || d.refusal === null || !offers24h(d.refusal))) {
+      return yield* refuse(`${d.ref ?? d.id} does not offer allow-24h (it is held to once, a list of calls, an Agent spawn, or a call of no kind): record it as --decide allow-once`);
     }
 
     if (decide !== undefined && d.kind === RULE_KIND && addsRule(decide) && !ruleAdded(run.root, d, run.machine.env("HOME"))) {
