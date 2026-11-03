@@ -3,6 +3,7 @@ auto mode says. Real files on disk, the real hook as a process; the classifier's
 
 import json
 import os
+import shlex
 import shutil
 import subprocess
 import sys
@@ -737,6 +738,62 @@ class PartTest(DeployGateCase):
         self.assertEqual(mod.SHELL_READS, shells | {".", "source"})  # the attribute reads the part
         self.assertIs(mod.SHELLS, shells)
         self.assertIn("deploys_of", vars(mod))
+
+
+class LiveKindDraftCase(DeployGateCase):
+    """A refused deploy that a live kind covers: its draft proposes `fleet grant use`; any other draft stays as it is."""
+
+    def setUp(self):
+        super().setUp()
+        env = {**os.environ, "HOME": self.env["HOME"]}
+        subprocess.run(["jj", "git", "init"], cwd=self.project, env=env, capture_output=True, check=True)
+        subprocess.run(["jj", "git", "remote", "add", "origin", "git@github.com:o/fleet.git"], cwd=self.project, env=env, capture_output=True, check=True)
+        self.main = os.path.realpath(self.project / ".jj" / "repo")
+        self.deploy = f"bash {self.script('deploy.sh', '#!/bin/sh' + chr(10) + 'wrangler deploy' + chr(10))}"
+        self.plain = self.refused(self.deploy, cwd=str(self.project))
+        self.kinds = Path(self.env["HOME"]) / ".claude" / "tstack-grants" / "kinds.json"
+        self.kinds.parent.mkdir(parents=True, exist_ok=True)
+
+    def holds(self, **fields):
+        kind = {"id": "k1", "action": "deploy", "repo": {"main": self.main, "origin": "git@github.com:o/fleet.git"},
+                "until": "2026-01-05T12:00:00+00:00", "uses": [], **fields}
+        self.kinds.write_text(json.dumps({"kinds": [kind]}))
+
+    def test_a_refused_deploy_a_live_kind_covers_proposes_grant_use_and_no_card(self):
+        self.assertIn("--kind permission", self.plain)
+        self.holds()
+        said = self.refused(self.deploy, cwd=str(self.project))
+        self.assertIn(" grant use ", said)
+        self.assertIn(shlex.quote(self.deploy), said)
+        self.assertIn("k1", said)
+        self.assertIn("2026-01-05T12:00:00+00:00", said)
+        self.assertNotIn("--kind permission", said)
+
+    def test_the_proposed_command_passes_the_gate(self):
+        self.holds()
+        said = self.refused(self.deploy, cwd=str(self.project))
+        line = next(part for part in said.split(chr(10) * 2) if " grant use " in part)
+        self.assertIsNone(self.before(line, cwd=str(self.project)))
+
+    def test_anything_short_of_a_live_kind_leaves_the_draft_as_it_is(self):
+        for fields in ({"until": "2026-01-05T09:00:00+00:00"}, {"ended": {"why": "revoked", "at": "2026-01-05T09:01:00+00:00"}},
+                       {"repo": {"main": "/elsewhere/.jj/repo", "origin": None}}, {"action": "push", "bookmark": "master"}, {"until": "soon"}):
+            with self.subTest(fields=fields):
+                self.holds(**fields)
+                self.assertEqual(self.refused(self.deploy, cwd=str(self.project)), self.plain)
+
+    def test_a_kinds_file_that_does_not_read_leaves_the_draft_as_it_is(self):
+        for text in ("{", "[]", '{"kinds": 3}', '{"kinds": [3]}'):
+            with self.subTest(text=text):
+                self.kinds.write_text(text)
+                self.assertEqual(self.refused(self.deploy, cwd=str(self.project)), self.plain)
+
+    def test_a_call_the_matcher_refuses_gets_no_proposal(self):
+        self.holds()
+        twice = f"bash {self.script('twice.sh', '#!/bin/sh' + chr(10) + 'wrangler deploy' + chr(10) + 'jj git push --bookmark master' + chr(10))}"
+        said = self.refused(twice, cwd=str(self.project))
+        self.assertNotIn(" grant use ", said)
+        self.assertIn("--kind permission", said)
 
 
 if __name__ == "__main__":

@@ -4780,6 +4780,54 @@ def _fleets_of_session(hook):
     return named + _served_dirs(hook)
 
 
+def _live_kind(home, kind, now):
+    """The record in <home>/.claude/tstack-grants/kinds.json (the host writes it, fleet/src/cli/grant.ts reads it) that holds
+    the matcher's `kind` at `now`: same action, repo and target, not ended, before its end time. None for any other."""
+    import json
+    try:
+        with open(os.path.join(home, ".claude", GRANT_RECORDS, "kinds.json"), encoding="utf-8") as f:
+            rows = json.load(f)["kinds"]
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+    target = lambda row: tuple(row.get(key) for key in ("action", "bookmark", "service"))
+    for row in rows if isinstance(rows, list) else ():
+        if not isinstance(row, dict) or not isinstance(row.get("repo"), dict) or row.get("ended"):
+            continue
+        until = _instant(row.get("until"))
+        if until and until > now and target(row) == target(kind) and row["repo"].get("main") == kind["repo"]["main"]:
+            return row
+    return None
+
+
+def _under_live_kind(hook, denied):
+    """A deploy refusal that proposes `fleet grant use` in place of its card, when a live kind covers the call it would have
+    asked for; else None, and the refusal stands as it is. The call is read from the refusal's own ask, the one word the part
+    holds it in, and the matcher gets only what the host's matcher gets. Nothing here allows: the host decides at the use."""
+    import shlex
+    try:
+        ask = next((part for part in str(denied or "").split("\n\n") if " --kind permission " in part), None)
+        words = shlex.split(ask) if ask else ()
+        if "--call" not in words:
+            return None
+        said = lambda flag: words[words.index(flag) + 1] if flag in words else None
+        call, home = said("--call"), hook.env.get("HOME")
+        env = {name: hook.env[name] for name in ("HOME", "CLAUDE_PROJECT_DIR") if name in hook.env}
+        kind = _deploys()["_match"](call, hook.cwd, env).get("kind")
+        row = _live_kind(home, kind, fleet_now(hook.env)) if kind and home else None
+        if not row:
+            return None
+        agent = said("--agent-id")
+        use = (f"{fleet_cli()} grant use {shlex.quote(words[words.index('state') + 1])} --call {shlex.quote(call)} "
+               f"--root {shlex.quote(said('--root'))}{f' --agent-id {shlex.quote(agent)}' if agent else ''}")
+        step = "Send your coordinator this command to run, and stop there" if fleet_worker(hook) else "Get its one-time grant with this command"
+        return Deny(f"tstack: this call is of a kind the owner allowed for 24 hours ({row.get('id')}, until {row['until']}), and no "
+                    f"grant stands for it yet. Open no card. {step}:\n\n{use}\n\nWhen it says the grant stands, run that call by "
+                    "itself, unchanged, once. If it refuses, ask on a card.")
+    except Exception:
+        log(hook.data_dir, f"{hook.event} _under_live_kind failed\n{traceback.format_exc()}")
+        return None
+
+
 def fleet_deploy_gate(hook):
     """PreToolUse (Bash), ahead of fleet_grant_alone: in a fleet's session, coordinator or worker, moved or not, a call that
     reaches a production deploy runs only on a standing grant for that exact call or an owner's rule, and is refused with the
@@ -4793,7 +4841,8 @@ def fleet_deploy_gate(hook):
     dirs = _fleets_of_session(hook)
     if not dirs:
         return None
-    return _deploys()["_deploy_gate"](hook, command.strip(), dirs)
+    denied = _deploys()["_deploy_gate"](hook, command.strip(), dirs)
+    return _under_live_kind(hook, denied) or denied
 
 
 def fleet_monitor_watch(hook):
