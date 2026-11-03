@@ -52,6 +52,7 @@ SECRET_IN_CALL = re.compile(r"\bBearer\s|\bAuthorization:|\bAKIA[0-9A-Z]{12}|---
                             r"|\b(?:mysql|mysqldump|mysqladmin|mariadb)\b[^;&|\n]*\s-p\S"
                             r"|\b(?:sshpass|docker\s+login)\b[^;&|\n]*\s-p\b", re.I)
 OP_REFERENCE = re.compile(r"op://")
+SET_FROM_A_VARIABLE = re.compile(r"""[\w-]+=(?:"\$\{?\w+\}?"|\$\{?\w+\}?)(?=\s|$)""", re.M)
 
 
 class Refused(Exception):
@@ -118,7 +119,7 @@ def _card_text(path, data):
         raise Refused(f"{path} is not UTF-8") from error
     if any(c not in "\n\t" and unicodedata.category(c) in INVISIBLE for c in text):
         raise Refused(f"{path} holds an invisible character (a control, zero-width, bidi, tag or private-use one)")
-    if SECRET_IN_CALL.search(text) or OP_REFERENCE.search(text):
+    if SECRET_IN_CALL.search(SET_FROM_A_VARIABLE.sub("", text)) or OP_REFERENCE.search(text):
         raise Refused(f"{path} reads as if it holds a credential, and a card goes to the cloud")
     return text
 

@@ -329,6 +329,14 @@ class ScriptTextCase(KindMatchCase):
             with self.subTest(line=line):
                 self.assertIn("credential", self.refused(self.script(f"#!/bin/sh\n{line}\n".encode())))
 
+    def test_a_name_set_from_a_variable_holds_no_credential_in_the_text(self):
+        for line in ("CLOUDFLARE_API_TOKEN=$CF_WORKERS_EDIT_TOKEN wrangler deploy --keep-vars", 'export TOKEN="${CF_TOKEN}"'):
+            with self.subTest(line=line):
+                self.assertEqual(self.kind(self.script(f"#!/bin/sh\n{line}\n".encode()))["action"], "deploy")
+        for line in ("TOKEN=$CF_TOKEN TOKEN=abc", 'TOKEN="abc$CF_TOKEN"', "TOKEN=$(cat secret-file)"):
+            with self.subTest(line=line):
+                self.assertIn("credential", self.refused(self.script(f"#!/bin/sh\n{line}\n".encode())))
+
     def test_the_credential_check_is_the_hooks(self):
         def pattern(path, name):
             found = re.search(rf"^{name} = re\.compile\((.*?)\)$", path.read_text(), re.S | re.M)
