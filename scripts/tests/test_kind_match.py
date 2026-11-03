@@ -333,7 +333,8 @@ class ScriptTextCase(KindMatchCase):
         for line in ("CLOUDFLARE_API_TOKEN=$CF_WORKERS_EDIT_TOKEN wrangler deploy --keep-vars", 'export TOKEN="${CF_TOKEN}"'):
             with self.subTest(line=line):
                 self.assertEqual(self.kind(self.script(f"#!/bin/sh\n{line}\n".encode()))["action"], "deploy")
-        for line in ("TOKEN=$CF_TOKEN TOKEN=abc", 'TOKEN="abc$CF_TOKEN"', "TOKEN=$(cat secret-file)"):
+        for line in ("TOKEN=$CF_TOKEN TOKEN=abc", 'TOKEN="abc$CF_TOKEN"', "TOKEN=$(cat secret-file)", "PASSWORD=$3cret", 'PASSWORD="$3cret"',
+                     "SECRET=$hunter2", "API_KEY=$AKIAIOSFODNN7EXAMPLE"):
             with self.subTest(line=line):
                 self.assertIn("credential", self.refused(self.script(f"#!/bin/sh\n{line}\n".encode())))
 
