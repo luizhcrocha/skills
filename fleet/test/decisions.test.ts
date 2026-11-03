@@ -1417,63 +1417,71 @@ describe("permission", () => {
 
     describe("a call the matcher reads as one kind", () => {
       const ORIGIN = "git@github.com:luizhcrocha/fleet.git";
-      const KIND_LINE = "deploy repo fleet, from any workspace, for 24 hours from your tap. Every run is listed, and you can revoke it any time.";
+      const SCRIPT = "#!/bin/sh\nwrangler deploy\n";
+      const SHA = createHash("sha256").update(SCRIPT).digest("hex");
+      const KIND_LINE = `deploy-page in repo fleet, from any workspace, this script as it stands (tasks/grant/deploy-page.sh, sha256 ${SHA.slice(0, 12)}), for 24 hours from your tap. Every run is listed, and you can revoke it any time.`;
       let repo = "";
+      let task = "";
 
       beforeEach(() => {
-        repo = tmp();
+        repo = realpathSync(tmp());
+        task = `bash ${repo}/tasks/grant/deploy-page.sh`;
         const jj = (...args: string[]): void => void spawnSync("jj", args, { cwd: repo, env: { ...process.env, HOME: repo }, stdio: "ignore" });
         jj("git", "init");
         jj("git", "remote", "add", "origin", ORIGIN);
+        mkdirSync(join(repo, "tasks", "grant"), { recursive: true });
+        writeFileSync(join(repo, "tasks", "grant", "deploy-page.sh"), SCRIPT);
+        jj("commit", "-m", "add a task");
       });
 
       const askAt = (id: string, call: string, ...more: string[]): string[] => ["decision", id, "--kind", "permission", "--tool", "Bash", "--call", call, "--root", repo, "--title", "T", "--why", "w", "--recommend", "allow-once", "--reason", "r", ...more];
       const ids = (id: string): unknown[] => (asArray(item(id)["options"]) ?? []).map((o) => asObject(o)?.["id"]);
 
       test("offers allow-24h between allow-once and deny, with the kind in plain words", () => {
-        ok(...askAt("k1", "wrangler deploy"));
+        ok(...askAt("k1", task));
         expect(asArray(item("k1")["options"])?.map((o) => asObject(o)?.["id"])).toEqual(["allow-once", "allow-24h", "deny"]);
         expect(asArray(item("k1")["options"])?.[1]).toEqual({ id: "allow-24h", label: "Allow for 24 hours", consequence: KIND_LINE });
-        expect(asObject(item("k1")["refusal"] ?? null)?.["kind"]).toEqual({ action: "deploy", repo: { main: realpathSync(join(repo, ".jj", "repo")), origin: ORIGIN } });
+        expect(asObject(item("k1")["refusal"] ?? null)?.["kind"]).toEqual({ action: "deploy", repo: { main: realpathSync(join(repo, ".jj", "repo")), origin: ORIGIN }, task: "tasks/grant/deploy-page.sh", sha256: SHA });
       });
 
       test("--once and a list of calls do not get it, and neither does a call with no kind or two", () => {
-        ok(...askAt("held", "wrangler deploy", "--once"));
+        ok(...askAt("held", task, "--once"));
         expect(ids("held")).toEqual(["allow-once", "deny"]);
-        ok(...askAt("list", "wrangler deploy", "--then", "echo done"));
+        ok(...askAt("list", task, "--then", "echo done"));
         expect(ids("list")).toEqual(["allow-once", "deny"]);
-        ok(...askAt("plain", "echo hello"));
+        ok(...askAt("plain", "wrangler deploy"));
         expect(ids("plain")).toEqual(["allow-once", "deny"]);
-        ok(...askAt("twice", "wrangler deploy; jj git push --bookmark master"));
+        ok(...askAt("twice", `${task} --now`));
         expect(ids("twice")).toEqual(["allow-once", "deny"]);
       });
 
-      test("a remote URL holding a password hides the option, since a moved card goes to the cloud", () => {
+      test("a remote URL holding a password keeps the option, with the password out of the card, since a moved card goes to the cloud", () => {
         spawnSync("jj", ["git", "remote", "set-url", "origin", "https://me:hunter2@example.com/o/fleet.git"], { cwd: repo, env: { ...process.env, HOME: repo }, stdio: "ignore" });
-        ok(...askAt("cred", "wrangler deploy"));
-        expect(ids("cred")).toEqual(["allow-once", "deny"]);
+        ok(...askAt("cred", task));
+        expect(ids("cred")).toEqual(["allow-once", "allow-24h", "deny"]);
+        expect(asObject(asObject(item("cred")["refusal"] ?? null)?.["kind"] ?? null)?.["repo"]).toEqual({ main: realpathSync(join(repo, ".jj", "repo")), origin: "https://example.com/o/fleet.git" });
         expect(JSON.stringify(item("cred"))).not.toContain("hunter2");
       });
 
       test("a later --once takes it away", () => {
-        ok(...askAt("later", "wrangler deploy"));
+        ok(...askAt("later", task));
         ok("decision", "later", "--once", "--log", "this one is irreversible");
         expect(ids("later")).toEqual(["allow-once", "deny"]);
       });
 
       test("the user's answer is the only yes; recording it prints the call and how to use the kind, and asks for no rule card", () => {
-        ok(...askAt("yes", "wrangler deploy"));
+        ok(...askAt("yes", task));
         expect(refused("decision", "yes", "--decide", "allow-24h", "--resolution", "r")).toContain("has no allow-once, allow-24h or allow-kind answer");
         userAnswers("yes", "allow-24h: Allow for 24 hours");
         const said = ok("decision", "yes", "--decide", "allow-24h: Allow for 24 hours", "--resolution", "answered on the page (#9)");
-        expect(said).toContain("run exactly this call now, byte for byte, as a Bash call of its own:\n  wrangler deploy\n");
+        expect(said).toContain(`run exactly this call now, byte for byte, as a Bash call of its own:\n  ${task}\n`);
         expect(said).toContain("fleet grant use");
         expect(said).not.toContain("--kind rule");
         expect(item("yes")["kind_requested"]).toBeUndefined();
       });
 
       test("recording allow-24h on a card that does not offer it is refused", () => {
-        ok(...askAt("held2", "wrangler deploy", "--once"));
+        ok(...askAt("held2", task, "--once"));
         userAnswers("held2", "allow-24h");
         expect(refused("decision", "held2", "--decide", "allow-24h", "--resolution", "r")).toContain("does not offer allow-24h");
       });

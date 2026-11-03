@@ -22,7 +22,7 @@ import { HOOK_FILES } from "../ws/hook.ts";
 import { ALLOW_24H, ALLOW_24H_LABEL, allow24hWords, ALLOW_KIND, offers24h } from "./allow-kind.ts";
 import type { Choice, RefusedCall } from "./model.ts";
 
-export { ALLOW_24H, ALLOW_24H_LABEL, allow24hWords, ALLOW_KIND, ALLOW_KIND_LABEL, allowKindWords, offers24h, offersKind } from "./allow-kind.ts";
+export { ALLOW_24H, ALLOW_24H_LABEL, allow24hWords, ALLOW_KIND, offers24h, offersKind } from "./allow-kind.ts";
 
 /** The tools a permission handles: a shell command, and a subagent's spawn. */
 export const PERMISSION_TOOLS: readonly string[] = ["Bash", "Agent"];

@@ -1,6 +1,7 @@
 """fleet_deploy_gate (PreToolUse, Bash): in a session of a fleet, a production deploy with no approval is refused, whatever
 auto mode says. Real files on disk, the real hook as a process; the classifier's table reads the hook's own function."""
 
+import hashlib
 import json
 import os
 import shlex
@@ -743,19 +744,26 @@ class PartTest(DeployGateCase):
 class LiveKindDraftCase(DeployGateCase):
     """A refused deploy that a live kind covers: its draft proposes `fleet grant use`; any other draft stays as it is."""
 
+    SCRIPT = "#!/bin/sh\nwrangler deploy --keep-vars\n"
+
     def setUp(self):
         super().setUp()
         env = {**os.environ, "HOME": self.env["HOME"]}
         subprocess.run(["jj", "git", "init"], cwd=self.project, env=env, capture_output=True, check=True)
         subprocess.run(["jj", "git", "remote", "add", "origin", "git@github.com:o/fleet.git"], cwd=self.project, env=env, capture_output=True, check=True)
         self.main = os.path.realpath(self.project / ".jj" / "repo")
-        self.deploy = f"bash {self.script('deploy.sh', '#!/bin/sh' + chr(10) + 'wrangler deploy --keep-vars' + chr(10))}"
+        task = self.project / "tasks" / "grant" / "deploy-page.sh"
+        task.parent.mkdir(parents=True)
+        task.write_text(self.SCRIPT)
+        subprocess.run(["jj", "commit", "-m", "add a task"], cwd=self.project, env=env, capture_output=True, check=True)
+        self.deploy = f"bash {task}"
         self.plain = self.refused(self.deploy, cwd=str(self.project))
         self.kinds = Path(self.env["HOME"]) / ".claude" / "tstack-grants" / "kinds.json"
         self.kinds.parent.mkdir(parents=True, exist_ok=True)
 
     def holds(self, **fields):
         kind = {"id": "k1", "action": "deploy", "repo": {"main": self.main, "origin": "git@github.com:o/fleet.git"},
+                "task": "tasks/grant/deploy-page.sh", "sha256": hashlib.sha256(self.SCRIPT.encode()).hexdigest(),
                 "until": "2026-01-05T12:00:00+00:00", "uses": [], **fields}
         self.kinds.write_text(json.dumps({"kinds": [kind]}))
 
@@ -777,7 +785,7 @@ class LiveKindDraftCase(DeployGateCase):
 
     def test_anything_short_of_a_live_kind_leaves_the_draft_as_it_is(self):
         for fields in ({"until": "2026-01-05T09:00:00+00:00"}, {"ended": {"why": "revoked", "at": "2026-01-05T09:01:00+00:00"}},
-                       {"repo": {"main": "/elsewhere/.jj/repo", "origin": None}}, {"action": "push", "bookmark": "master"}, {"until": "soon"}):
+                       {"repo": {"main": "/elsewhere/.jj/repo", "origin": None}}, {"action": "push"}, {"task": "tasks/grant/deploy-other.sh"}, {"sha256": "0" * 64}, {"until": "soon"}):
             with self.subTest(fields=fields):
                 self.holds(**fields)
                 self.assertEqual(self.refused(self.deploy, cwd=str(self.project)), self.plain)
@@ -793,8 +801,7 @@ class LiveKindDraftCase(DeployGateCase):
 
     def test_a_call_the_matcher_refuses_gets_no_proposal(self):
         self.holds()
-        twice = f"bash {self.script('twice.sh', '#!/bin/sh' + chr(10) + 'wrangler deploy' + chr(10) + 'jj git push --bookmark master' + chr(10))}"
-        said = self.refused(twice, cwd=str(self.project))
+        said = self.refused(f"{self.deploy} --now", cwd=str(self.project))
         self.assertNotIn(" grant use ", said)
         self.assertIn("--kind permission", said)
 

@@ -4780,23 +4780,36 @@ def _fleets_of_session(hook):
     return named + _served_dirs(hook)
 
 
+KIND_MATCH_SECONDS = 25
+
+
 def _live_kind(home, kind, now):
     """The record in <home>/.claude/tstack-grants/kinds.json (the host writes it, fleet/src/cli/grant.ts reads it) that holds
-    the matcher's `kind` at `now`: same action, repo and target, not ended, before its end time. None for any other."""
+    the matcher's `kind` at `now`: same action, repo, task and script hash, not ended, before its end time. None for any other."""
     import json
     try:
         with open(os.path.join(home, ".claude", GRANT_RECORDS, "kinds.json"), encoding="utf-8") as f:
             rows = json.load(f)["kinds"]
     except (OSError, ValueError, KeyError, TypeError):
         return None
-    target = lambda row: tuple(row.get(key) for key in ("action", "bookmark", "service"))
+    same = lambda row: all(row.get(key) == kind[key] for key in ("action", "repo", "task", "sha256"))
     for row in rows if isinstance(rows, list) else ():
-        if not isinstance(row, dict) or not isinstance(row.get("repo"), dict) or row.get("ended"):
+        if not isinstance(row, dict) or row.get("ended"):
             continue
         until = _instant(row.get("until"))
-        if until and until > now and target(row) == target(kind) and row["repo"].get("main") == kind["repo"]["main"]:
+        if until and until > now and same(row):
             return row
     return None
+
+
+def _kind_of_call(call, cwd, home):
+    """What hooks/tstack-kind-match.py reads from `call` (its head holds the contract); None for a refusal."""
+    import json
+    import subprocess
+    matcher = os.path.join(os.path.dirname(os.path.abspath(__file__)), "tstack-kind-match.py")
+    done = subprocess.run(["python3", "-I", matcher], input=json.dumps({"command": call, "cwd": cwd, "env": {"HOME": home}}),
+                          capture_output=True, text=True, timeout=KIND_MATCH_SECONDS, check=True)
+    return json.loads(done.stdout).get("kind")
 
 
 def _under_live_kind(hook, denied):
@@ -4811,9 +4824,8 @@ def _under_live_kind(hook, denied):
             return None
         said = lambda flag: words[words.index(flag) + 1] if flag in words else None
         call, home = said("--call"), hook.env.get("HOME")
-        env = {name: hook.env[name] for name in ("HOME", "CLAUDE_PROJECT_DIR") if name in hook.env}
-        kind = _deploys()["_match"](call, hook.cwd, env).get("kind")
-        row = _live_kind(home, kind, fleet_now(hook.env)) if kind and home else None
+        kind = _kind_of_call(call, hook.cwd, home) if home else None
+        row = _live_kind(home, kind, fleet_now(hook.env)) if kind else None
         if not row:
             return None
         agent = said("--agent-id")
