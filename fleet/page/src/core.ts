@@ -9,8 +9,9 @@
  */
 import { parseCardHash } from "../../src/ledger/card-address.ts";
 import { linkKind, type LinkKind } from "../../src/ledger/link-kind.ts";
-import { ALLOW_KIND, offersKind } from "../../src/ledger/allow-kind.ts";
+import { ALLOW_24H, ALLOW_KIND, offersKind } from "../../src/ledger/allow-option.ts";
 import { plainCause } from "../../src/ledger/permission-words.ts";
+import { sha256Hex } from "./sha256.ts";
 
 export type { LinkKind };
 
@@ -123,6 +124,8 @@ export interface RefusedCall {
   readonly runs?: readonly string[];
   /** The opener's word that the calls are allowed once at a time, never always. */
   readonly once?: boolean;
+  /** The task script a card's allow-24h would grant: its hash and its text (the fleet's `CallKind`). */
+  readonly kind?: { readonly sha256: string; readonly text?: string };
 }
 
 /** A file one call of a permission is bound to. */
@@ -155,10 +158,20 @@ function boundFiles(r: Pick<RefusedCall, "runs">, n: number): readonly BoundFile
 /** The id of the option an earlier change offered beside allow-once; a row that still has it shows it no longer. */
 const OLD_ALWAYS = "allow-always";
 
+/** What a card's allow-24h rests on: the script's text to read, when it hashes to the card's sha256, or why the page hides the option. Undefined on a card without the option. */
+function kindScript(d: Pick<Decision, "kind" | "refusal" | "options">): { readonly text: string } | { readonly why: string } | undefined {
+  if (d.kind !== "permission" || !(d.options || []).some((o) => o.id === ALLOW_24H)) return undefined;
+  const kind = d.refusal?.kind;
+
+  if (kind?.text === undefined) return { why: "Allow for 24 hours is hidden: this card does not carry the script's text, so you could not read what you would approve." };
+
+  return sha256Hex(kind.text) === kind.sha256 ? { text: kind.text } : { why: "Allow for 24 hours is hidden: the script's text on this card does not hash to its sha256, so what you would read may not be what would run." };
+}
+
 /**
  * The options the page offers for `d`: a decision's as it has them. A permission's "Allow once and save this kind" is on
  * no new card; a row that still has it shows it on a Bash card its opener did not hold to once (the fleet's `offersKind`,
- * which the CLI checks too).
+ * which the CLI checks too). Its "Allow for 24 hours" shows only over a script text that hashes to the card's sha256.
  */
 function shownOptions(d: Pick<Decision, "kind" | "refusal" | "options">): readonly DecisionOption[] {
   const options = d.options || [];
@@ -167,13 +180,16 @@ function shownOptions(d: Pick<Decision, "kind" | "refusal" | "options">): readon
   const r = d.refusal;
   const offered = r ? offersKind({ tool: r.tool, once: r.once === true }) : false;
 
-  return options.filter((o) => o.id !== OLD_ALWAYS && (o.id !== ALLOW_KIND || offered));
+  const script = kindScript(d);
+  const readable = script !== undefined && "text" in script;
+
+  return options.filter((o) => o.id !== OLD_ALWAYS && (o.id !== ALLOW_KIND || offered) && (o.id !== ALLOW_24H || readable));
 }
 
-/** Everything a yes would grant, as one text: a permission's calls, folder and files, a rule card's rule. The page
+/** Everything a yes would grant, as one text: a permission's calls, folder, files and script text, a rule card's rule. The page
  * clears a picked answer when it changes. */
 function grantShown(d: Pick<Decision, "kind" | "refusal" | "rule">): string {
-  if (d.kind === "permission" && d.refusal) return JSON.stringify(shownGrant(d.refusal));
+  if (d.kind === "permission" && d.refusal) return JSON.stringify([shownGrant(d.refusal), d.refusal.kind?.text ?? null]);
 
   return d.kind === "rule" ? JSON.stringify([["rule", d.rule ?? ""]]) : "";
 }
@@ -2477,6 +2493,7 @@ export const Core = {
   plainCause,
   callsOf,
   boundFiles,
+  kindScript,
   shownOptions,
   grantShown,
   isNotice,

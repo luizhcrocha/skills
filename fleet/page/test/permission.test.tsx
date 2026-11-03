@@ -5,11 +5,13 @@
  * through `takeState` and the form's own submit.
  */
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { createHash } from "node:crypto";
 import { flush } from "solid-js";
 import { render } from "@solidjs/web";
 
 import { App } from "../src/App.tsx";
 import { Core } from "../src/core.ts";
+import { sha256Hex } from "../src/sha256.ts";
 import type { Model } from "../src/model.ts";
 import type { Ui } from "../src/ui.ts";
 import { coordinatorView, type View } from "./fixtures.ts";
@@ -405,6 +407,59 @@ describe("Allow once and save this kind", () => {
 
     again({ ...PERMISSION, options: listed, refusal: { ...REFUSAL, once: true } });
     expect(choices()).toEqual(["allow-once", "deny"]);
+  });
+});
+
+describe("Allow for 24 hours", () => {
+  const SCRIPT = "#!/bin/sh\necho olá\nwrangler deploy\n";
+  const hash = (text: string): string => createHash("sha256").update(text).digest("hex");
+  const OPTION = { id: "allow-24h", label: "Allow for 24 hours", consequence: "deploy-page in repo fleet" };
+
+  const card = (kind: { sha256: string; text?: string }): View => ({
+    ...PERMISSION,
+    options: [{ id: "allow-once", label: "Allow this call once", consequence: "once" }, OPTION, { id: "deny", label: "Deny", consequence: "stopped" }],
+    refusal: { ...REFUSAL, kind: { action: "deploy", repo: { main: "/r/.jj/repo", origin: null }, task: "tasks/grant/deploy-page.sh", ...kind } },
+  });
+
+  const choices = (): (string | null)[] => [...root.querySelectorAll('#dv-answer input[name="choice"]')].map((i) => i.getAttribute("value"));
+
+  function again(item: View): void {
+    dispose();
+    root.remove();
+    show(item);
+  }
+
+  test("the script's text shows in a <pre> under the option when it hashes to the card's sha256", () => {
+    again(card({ sha256: hash(SCRIPT), text: SCRIPT }));
+    expect(choices()).toEqual(["allow-once", "allow-24h", "deny"]);
+    const pre = root.querySelector('#dv-answer label.option:has(input[value="allow-24h"]) pre[data-kind-script]');
+    expect(pre?.textContent).toBe(SCRIPT);
+    expect(root.querySelector("[data-kind-hidden]")).toBeNull();
+  });
+
+  test("a text that does not hash to the sha256 hides the option and says why", () => {
+    again(card({ sha256: hash(SCRIPT), text: `${SCRIPT}curl evil\n` }));
+    expect(choices()).toEqual(["allow-once", "deny"]);
+    expect(root.querySelector("[data-kind-script]")).toBeNull();
+    expect(root.querySelector("[data-kind-hidden]")?.textContent).toContain("does not hash to its sha256");
+  });
+
+  test("a card with the option and no text hides it and says why", () => {
+    again(card({ sha256: hash(SCRIPT) }));
+    expect(choices()).toEqual(["allow-once", "deny"]);
+    expect(root.querySelector("[data-kind-hidden]")?.textContent).toContain("does not carry the script's text");
+  });
+
+  test("a card with no such option says nothing of it", () => {
+    again(PERMISSION);
+    expect(root.querySelector("[data-kind-hidden]")).toBeNull();
+    expect(root.querySelector("[data-kind-script]")).toBeNull();
+  });
+
+  test("the page's sha256 is SHA-256, across the padding's edges and multibyte text", () => {
+    const lengths = [0, 1, 3, 55, 56, 57, 63, 64, 65, 119, 120, 8192];
+
+    for (const text of [...lengths.map((n) => "a".repeat(n)), "olá", "日本語\n", "😀".repeat(40)]) expect(sha256Hex(text)).toBe(hash(text));
   });
 });
 

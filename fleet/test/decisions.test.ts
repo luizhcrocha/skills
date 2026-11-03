@@ -1402,7 +1402,14 @@ describe("permission", () => {
       ok(...ask("marked", "--once"));
       expect([options("marked"), asObject(item("marked")["refusal"] ?? null)?.["once"]]).toEqual([["allow-once", "deny"], true]);
       expect(refused("decision", "a9", "--kind", "input", "--title", "T", "--question", "q", "--why", "w", "--once")).toContain("--once marks a permission");
+      ok(...ask("new"));
+      userAnswers("new", "allow-kind: Allow once and save this kind");
+      expect(refused("decision", "new", "--decide", "allow-kind", "--resolution", "r")).toContain("does not hold the option");
+      expect(item("new")["status"]).toBe("open");
       ok(...ask("again"));
+      const row = state();
+      const held = (row["decisions"] as Record<string, unknown>[]).map((d) => (d["id"] === "again" ? { ...d, options: [...(d["options"] as unknown[]), { id: "allow-kind", label: "Allow once and save this kind", consequence: "c" }] } : d));
+      writeFileSync(join(root, "state.json"), JSON.stringify({ ...row, decisions: held }));
       userAnswers("again", "allow-kind: Allow once and save this kind");
       const kind = ok("decision", "again", "--decide", "allow-kind: Allow once and save this kind", "--resolution", "answered on the page (#9)");
       expect(kind).toContain(`is allowed once: run exactly this call now, byte for byte, as a Bash call of its own:\n  ${DEPLOY}\n`);
@@ -1419,7 +1426,7 @@ describe("permission", () => {
       const ORIGIN = "git@github.com:luizhcrocha/fleet.git";
       const SCRIPT = "#!/bin/sh\nwrangler deploy\n";
       const SHA = createHash("sha256").update(SCRIPT).digest("hex");
-      const KIND_LINE = `deploy-page in repo fleet, from any workspace, this script as it stands (tasks/grant/deploy-page.sh, sha256 ${SHA.slice(0, 12)}), for 24 hours from your tap. Every run is listed, and you can revoke it any time.`;
+      const kindLine = (): string => `deploy-page in repo fleet (${repo}), from any workspace, with any commit id as its argument, this script as it stands (tasks/grant/deploy-page.sh, sha256 ${SHA.slice(0, 12)}), for 24 hours from your tap. Every run is listed, and you can revoke it any time.`;
       let repo = "";
       let task = "";
 
@@ -1440,8 +1447,8 @@ describe("permission", () => {
       test("offers allow-24h between allow-once and deny, with the kind in plain words", () => {
         ok(...askAt("k1", task));
         expect(asArray(item("k1")["options"])?.map((o) => asObject(o)?.["id"])).toEqual(["allow-once", "allow-24h", "deny"]);
-        expect(asArray(item("k1")["options"])?.[1]).toEqual({ id: "allow-24h", label: "Allow for 24 hours", consequence: KIND_LINE });
-        expect(asObject(item("k1")["refusal"] ?? null)?.["kind"]).toEqual({ action: "deploy", repo: { main: realpathSync(join(repo, ".jj", "repo")), origin: ORIGIN }, task: "tasks/grant/deploy-page.sh", sha256: SHA });
+        expect(asArray(item("k1")["options"])?.[1]).toEqual({ id: "allow-24h", label: "Allow for 24 hours", consequence: kindLine() });
+        expect(asObject(item("k1")["refusal"] ?? null)?.["kind"]).toEqual({ action: "deploy", repo: { main: realpathSync(join(repo, ".jj", "repo")), origin: ORIGIN }, task: "tasks/grant/deploy-page.sh", sha256: SHA, text: SCRIPT });
       });
 
       test("--once and a list of calls do not get it, and neither does a call with no kind or two", () => {

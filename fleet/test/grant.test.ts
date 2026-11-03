@@ -68,7 +68,7 @@ describe("fleet grant use", () => {
     expect(host.sent[0]?.body).toEqual({ dir: at.dir, call: CALL, cwd: "/r/ws/app", root: "/r/ws", agent_id: "agent-7", env: { HOME: at.home, CLAUDE_PROJECT_DIR: "/r/ws" } });
     expect(done).toEqual({
       code: 0,
-      stdout: `granted under the kind: deploy-page in repo fleet, from any workspace, until 2026-11-04T09:00:00Z. Run exactly this call now, unchanged, once, as a Bash call of its own; the rule is in /r/ws/.claude/settings.local.json:\n  ${CALL}\n`,
+      stdout: `granted under the kind: deploy-page in repo fleet (/r/fleet), from any workspace, until 2026-11-04T09:00:00Z. Run exactly this call now, unchanged, once, as a Bash call of its own; the rule is in /r/ws/.claude/settings.local.json:\n  ${CALL}\n`,
       stderr: "",
     });
   });
@@ -158,10 +158,10 @@ describe("fleet grants", () => {
     expect(await list(at)).toEqual({
       code: 0,
       stdout:
-        "k1: deploy-page in repo fleet, from any workspace: live until 2026-11-04T09:00:00Z, granted on P4 of fleet-a, 1 use\n" +
+        "k1: deploy-page in repo fleet (/r/fleet), from any workspace: live until 2026-11-04T09:00:00Z, granted on P4 of fleet-a, 1 use\n" +
         "  2026-11-03T10:00:00Z fleet-b /r/ws abc123: wrangler deploy\n" +
-        "k2: push-master in repo fleet, from any workspace: lapsed 2026-11-03T11:00:00Z, granted on P4 of fleet-a, 0 uses\n" +
-        "k3: deploy-host in repo other, from any workspace: revoked 2026-11-03T09:30:00Z, granted on P4 of fleet-a, 0 uses\n",
+        "k2: push-master in repo fleet (/r/fleet), from any workspace: lapsed 2026-11-03T11:00:00Z, granted on P4 of fleet-a, 0 uses\n" +
+        "k3: deploy-host in repo other (/r/other), from any workspace: revoked 2026-11-03T09:30:00Z, granted on P4 of fleet-a, 0 uses\n",
       stderr: "",
     });
     expect(readFileSync(file, "utf8")).toBe(before);

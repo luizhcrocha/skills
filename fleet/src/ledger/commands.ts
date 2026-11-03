@@ -33,7 +33,7 @@ import { approvalNumber, nextDecisionRef, refusedFor, Unreachable } from "./shar
 import { approvalSource, comesFrom, namesOf, NoSource, refOf, sameSource } from "./approvals.ts";
 import { LINK_KINDS, linkKind, OLD_LINK_KINDS, type LinkKind } from "./links.ts";
 import { kindOfCall } from "./kind-match.ts";
-import { allows, asks24h, asksKind, callsLine, callsOf, grantFileOf, isAsk, makeRefusedCall, offers24h, offersKind, permissionOptions, refusalRev } from "./permission.ts";
+import { ALLOW_KIND, allows, asks24h, asksKind, callsLine, callsOf, grantFileOf, isAsk, makeRefusedCall, offers24h, offersKind, permissionOptions, refusalRev } from "./permission.ts";
 import { foldersOf, permissionWords, type RefusedBy, type Spawn } from "./permission-words.ts";
 import { askedDraft, callerOf, draftCommands, draftLine, openDraft, partOfRefused, shown } from "./refusal-draft.ts";
 import { roleDefaults, spawnLine } from "./roles.ts";
@@ -2682,9 +2682,9 @@ export function decision(ledger: Ledger, run: Run): Effect.Effect<Ledger, Refusa
       );
     }
 
-    if (decide !== undefined && d.kind === "permission" && asksKind(decide) && (d.refusal === undefined || d.refusal === null || !offersKind(d.refusal))) {
+    if (decide !== undefined && d.kind === "permission" && asksKind(decide) && (d.refusal === undefined || d.refusal === null || !offersKind(d.refusal) || !(d.options ?? []).some((option) => option.id === ALLOW_KIND))) {
       return yield* refuse(
-        `${d.ref ?? d.id} does not offer allow-kind (its opener held it to once, or it is an Agent spawn): the page grants such an answer as allow-once, ` +
+        `${d.ref ?? d.id} does not offer allow-kind (its opener held it to once, it is an Agent spawn, or it is a card that does not hold the option): the page grants such an answer as allow-once, ` +
           "so record it as one: --decide allow-once",
       );
     }

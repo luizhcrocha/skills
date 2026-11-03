@@ -1,5 +1,5 @@
 /**
- * The kind of a call, read by hooks/tstack-kind-match.py (`python3 -I`; its head holds the contract and the threat model). The host runs the same matcher again before it grants anything, so this reading only words the card.
+ * The kind of a call, read by hooks/tstack-kind-match.py (`python3 -I`; its head holds the contract and the threat model). The host runs the same matcher again before it grants anything, so this reading only words the card and carries the script's text to the owner (`refusal.kind.text`).
  * What the matcher refuses, or a matcher that fails, is no kind, which hides the option.
  */
 import { spawnSync } from "node:child_process";

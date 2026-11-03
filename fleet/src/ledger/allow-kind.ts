@@ -12,12 +12,15 @@
  */
 import { asObject, asString, type Json } from "../json.ts";
 
-/** A kind as hooks/tstack-kind-match.py derives it: one task script's text, in a repo, across its workspaces. */
+export { ALLOW_24H, ALLOW_KIND, offersKind } from "./allow-option.ts";
+
+/** A kind as hooks/tstack-kind-match.py derives it: one task script's text, in a repo, across its workspaces. `text` is what the owner reads on a card, absent where a row needs only the hash (kinds.json). */
 export type CallKind = {
   readonly action: "deploy" | "push";
   readonly repo: { readonly main: string; readonly origin: string | null };
   readonly task: string;
   readonly sha256: string;
+  readonly text?: string;
 };
 
 const TASK = /^tasks\/grant\/(deploy|push)-[A-Za-z0-9_.-]+\.sh$/u;
@@ -33,14 +36,12 @@ export function callKindOf(value: Json | undefined): CallKind | undefined {
   const origin = asString(repo?.["origin"])?.split(/\s/u)[0] ?? null;
   const task = asString(kind?.["task"]);
   const sha256 = asString(kind?.["sha256"]);
+  const text = asString(kind?.["text"]);
 
   if ((action !== "deploy" && action !== "push") || main === undefined || task === undefined || sha256 === undefined) return undefined;
 
-  return TASK.exec(task)?.[1] === action && SHA256.test(sha256) ? { action, repo: { main, origin }, task, sha256 } : undefined;
+  return TASK.exec(task)?.[1] === action && SHA256.test(sha256) ? { action, repo: { main, origin }, task, sha256, ...(text === undefined ? {} : { text }) } : undefined;
 }
-
-/** The option that grants the call and its kind for 24 hours from the tap. */
-export const ALLOW_24H = "allow-24h";
 
 /** allow-24h's label, the same on every page. */
 export const ALLOW_24H_LABEL = "Allow for 24 hours";
@@ -52,26 +53,17 @@ function repoName(repo: CallKind["repo"]): string {
   return from.split(/[/:]/u).at(-1)?.replace(/\.git$/u, "") ?? from;
 }
 
-/** The kind in plain words. */
+/** The kind in plain words. It names the main path too, since an agent can set `origin`. */
 export function kindWords(kind: CallKind): string {
-  return `${kind.task.replace(/^.*\//u, "").replace(/\.sh$/u, "")} in repo ${repoName(kind.repo)}, from any workspace`;
+  return `${kind.task.replace(/^.*\//u, "").replace(/\.sh$/u, "")} in repo ${repoName(kind.repo)} (${kind.repo.main.replace(/\/\.jj\/repo$/u, "")}), from any workspace`;
 }
 
 /** The plain line under allow-24h. The end time is the tap's, so it says "from your tap". */
 export function allow24hWords(kind: CallKind): string {
-  return `${kindWords(kind)}, this script as it stands (${kind.task}, sha256 ${kind.sha256.slice(0, 12)}), for 24 hours from your tap. Every run is listed, and you can revoke it any time.`;
+  return `${kindWords(kind)}, with any commit id as its argument, this script as it stands (${kind.task}, sha256 ${kind.sha256.slice(0, 12)}), for 24 hours from your tap. Every run is listed, and you can revoke it any time.`;
 }
 
 /** Whether a permission offers allow-24h: one Bash call its opener did not hold to once, of a kind the matcher read at the ask. */
 export function offers24h(refusal: { readonly tool: string; readonly once?: boolean | undefined; readonly more?: readonly string[] | undefined; readonly kind?: CallKind | undefined }): boolean {
   return refusal.tool === "Bash" && refusal.once !== true && (refusal.more ?? []).length === 0 && refusal.kind !== undefined;
-}
-
-
-/** The option that grants the call once and asks the coordinator for a rule for its kind. */
-export const ALLOW_KIND = "allow-kind";
-
-/** Whether a permission offers allow-kind: a Bash call whose opener did not hold it to once (`--once`). */
-export function offersKind(refusal: { readonly tool: string; readonly once?: boolean | undefined }): boolean {
-  return refusal.tool === "Bash" && refusal.once !== true;
 }

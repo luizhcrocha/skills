@@ -272,50 +272,80 @@ function Evidence(props: { readonly d: Decision | undefined; readonly title?: st
 
 /** An option of a decision: to pick in the form, or to show once decided. */
 function Options(props: { readonly d: Decision; readonly pick: boolean }): JSX.Element {
+  const script = createMemo(() => Core.kindScript(props.d));
+
+  const scriptText = (): string | undefined => {
+    const said = script();
+
+    return said !== undefined && "text" in said ? said.text : undefined;
+  };
+
+  const scriptFault = (): string | undefined => {
+    const said = script();
+
+    return said !== undefined && "why" in said ? said.why : undefined;
+  };
+
   return (
-    <For each={Core.shownOptions(props.d)} keyed={(o) => o.id}>
-      {(o) => {
-        const chosen = (): boolean => !props.pick && props.d.status === "decided" && String(props.d.answer || "").startsWith(o().id + ":");
+    <>
+      <For each={Core.shownOptions(props.d)} keyed={(o) => o.id}>
+        {(o) => {
+          const chosen = (): boolean => !props.pick && props.d.status === "decided" && String(props.d.answer || "").startsWith(o().id + ":");
 
-        const inner = (): JSX.Element => (
-          <>
-            <span class="label" data-field={"option:" + o().id}>
-              <span>
-                {props.pick ? o().id + ": " : ""}
-                <Refs text={o().label} />
+          const inner = (): JSX.Element => (
+            <>
+              <span class="label" data-field={"option:" + o().id}>
+                <span>
+                  {props.pick ? o().id + ": " : ""}
+                  <Refs text={o().label} />
+                </span>
+                <Show when={o().id === props.d.recommend}>
+                  <PillAs cls="recommended plain" text="recommended" />
+                </Show>
               </span>
-              <Show when={o().id === props.d.recommend}>
-                <PillAs cls="recommended plain" text="recommended" />
+              <Show when={o().consequence}>
+                {(c) => (
+                  <div class="fd-wrap" data-field={"option:" + o().id + ":consequence"}>
+                    <Rich class="consequence" text={c()} refs="every" />
+                  </div>
+                )}
               </Show>
-            </span>
-            <Show when={o().consequence}>
-              {(c) => (
-                <div class="fd-wrap" data-field={"option:" + o().id + ":consequence"}>
-                  <Rich class="consequence" text={c()} refs="every" />
-                </div>
-              )}
-            </Show>
-          </>
-        );
+              <Show when={o().id === "allow-24h" ? scriptText() : undefined}>
+                {(text) => (
+                  <pre class="rule-text" data-kind-script>
+                    {text()}
+                  </pre>
+                )}
+              </Show>
+            </>
+          );
 
-        return (
-          <Show
-            when={props.pick}
-            fallback={
-              <div class={"option" + (chosen() ? " chosen" : "")}>
-                <span class="key">{o().id}</span>
+          return (
+            <Show
+              when={props.pick}
+              fallback={
+                <div class={"option" + (chosen() ? " chosen" : "")}>
+                  <span class="key">{o().id}</span>
+                  {inner()}
+                </div>
+              }
+            >
+              <label class="option">
+                <input type="radio" name="choice" value={o().id} />
                 {inner()}
-              </div>
-            }
-          >
-            <label class="option">
-              <input type="radio" name="choice" value={o().id} />
-              {inner()}
-            </label>
-          </Show>
-        );
-      }}
-    </For>
+              </label>
+            </Show>
+          );
+        }}
+      </For>
+      <Show when={scriptFault()}>
+        {(why) => (
+          <p class="call-runs" data-kind-hidden>
+            {why()}
+          </p>
+        )}
+      </Show>
+    </>
   );
 }
 
