@@ -482,7 +482,7 @@ The cloud's owner-answer gate (its `OWNER_ANSWERS_FROM`) is on since 2026-10-28 
   the user.
 - **A standing approval comes from the card, not from you.** Two answers back one: the user's plain yes (Yes,
   Approve, OK, Sim) on a card opened with `approval_question` and `approval_rule`, picked with no note while the page
-  showed the rule; or allow-kind with no note on a permission, when its rule covers every call it asked for. An
+  showed the rule; or allow-kind (only on a card from before Allow for 24 hours) with no note on a permission, when its rule covers every call it asked for. An
   allow-once never backs one, and neither does a yes on a card opened without `approval_question`. Then push the
   approval op under your next K, naming the card: `ops.push({ record: { kind: "approval", key: "K7" }, set: { ref:
   "D221", by: "luiz", status: "active" } })` (on a grilling, `question` names the question too). The cloud fills

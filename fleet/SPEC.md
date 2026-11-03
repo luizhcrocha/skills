@@ -1787,6 +1787,8 @@ other path is 404 `the preview server serves only /f/<fleet>/preview/; the pages
 
 ## Permission grants
 
+**Allow for 24 hours** (`allow-24h`). A kind is a committed task script, `tasks/grant/deploy-*.sh` or `push-*.sh`, run from any workspace of its repo. The card offers the option only when its one call is exactly `bash <absolute workspace>/tasks/grant/<name>.sh`, with at most one 40-hex argument, that `hooks/tstack-kind-match.py` reads as `{action, repo: {main, origin}, task, sha256}`; its head holds the contract and the threat model. No shell is parsed. A use needs the same action, repo, task and sha256, so a changed script is a new card. A later call goes through `fleet grant use DIR --call CALL` (the deploy gate's refusal proposes it), which asks the host for a one-time grant; `fleet grants DIR` lists kinds and uses. `--once` holds a card to one call, for a one-off or an irreversible step. "Allow once and save this kind" is on no new card; an answer on a card still open stays valid.
+
 TypeScript only: `state.py` has no `permission` kind, no trace has one, and the oracle's usage texts
 stay Python's (below). Auto mode refuses a tool call; the plugin's hook records it as a **refusal draft**
 for the fleet's host and tells the host at once, and nothing opens for the user (A refusal is a draft first,

@@ -141,7 +141,7 @@ const exact = (): Element | null => root.querySelector("#dv-answer [data-exact-c
 test("the refused call shows with its cause in plain words, the rule and the file it goes into", () => {
   const facts = [...root.querySelectorAll("#dv-answer .refused dl > *")].map((e) => e.textContent);
   expect(facts).toEqual(["Auto mode stopped it because", "it can erase work in git: history or changes not yet saved ([Git Destructive])", "Rule", RULE, "Goes into", FILE]);
-  expect([...root.querySelectorAll('#dv-answer input[name="choice"]')].map((i) => i.getAttribute("value"))).toEqual(["allow-once", "allow-kind", "deny"]);
+  expect([...root.querySelectorAll('#dv-answer input[name="choice"]')].map((i) => i.getAttribute("value"))).toEqual(["allow-once", "deny"]);
   expect(root.querySelector('#dv-answer textarea[name="note"]')).not.toBeNull();
 });
 
@@ -373,21 +373,28 @@ describe("Allow once and save this kind", () => {
     show(item);
   }
 
-  test("a Bash card shows it after Allow once, with its plain line under it, and the answer grants the one call as allow-once does", async () => {
+  const KIND_OPTION = { id: "allow-kind", label: "Allow once and save this kind", consequence: "allows this call now; then I draft a rule for this kind of command for you to add" };
+  const WITH_KIND: View = { ...PERMISSION, options: [{ id: "allow-once", label: "Allow this call once", consequence: "once" }, KIND_OPTION, { id: "deny", label: "Deny", consequence: "stopped" }] };
+
+  test("a new Bash card does not offer it", () => {
     again(PERMISSION);
+    expect(choices()).toEqual(["allow-once", "deny"]);
+  });
+
+  test("a card still open that has it shows it, and the answer grants the one call as allow-once does", async () => {
+    again(WITH_KIND);
     expect(choices()).toEqual(["allow-once", "allow-kind", "deny"]);
     const label = root.querySelector('#dv-answer label.option:has(input[value="allow-kind"])');
     expect(label?.querySelector(".label")?.textContent).toBe("allow-kind: Allow once and save this kind");
-    expect(label?.querySelector(".consequence")?.textContent).toBe("allows this call now; then I draft a rule for this kind of command for you to add");
     await send("allow-kind");
     expect(posted).toEqual([{ text: "allow-kind: Allow once and save this kind", decision: "p-1a2b3c4d", rule: REFUSAL.rule, root: ROOT }]);
   });
 
   test("a card its opener marked once never shows it, nor an Agent spawn; an old row's Allow always shows no more", () => {
-    again({ ...PERMISSION, refusal: { ...REFUSAL, once: true } });
+    again({ ...WITH_KIND, refusal: { ...REFUSAL, once: true } });
     expect(choices()).toEqual(["allow-once", "deny"]);
 
-    again({ ...PERMISSION, refusal: { ...REFUSAL, tool: "Agent", call: '{"prompt":"x"}', rule: "Agent" } });
+    again({ ...WITH_KIND, refusal: { ...REFUSAL, tool: "Agent", call: '{"prompt":"x"}', rule: "Agent" } });
     expect(choices()).toEqual(["allow-once", "deny"]);
 
     const listed = [

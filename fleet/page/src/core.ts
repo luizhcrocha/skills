@@ -9,7 +9,7 @@
  */
 import { parseCardHash } from "../../src/ledger/card-address.ts";
 import { linkKind, type LinkKind } from "../../src/ledger/link-kind.ts";
-import { ALLOW_KIND, ALLOW_KIND_LABEL, allowKindWords, offersKind } from "../../src/ledger/allow-kind.ts";
+import { ALLOW_KIND, offersKind } from "../../src/ledger/allow-kind.ts";
 import { plainCause } from "../../src/ledger/permission-words.ts";
 
 export type { LinkKind };
@@ -156,22 +156,18 @@ function boundFiles(r: Pick<RefusedCall, "runs">, n: number): readonly BoundFile
 const OLD_ALWAYS = "allow-always";
 
 /**
- * The options the page offers for `d`: a decision's as it has them. A permission's "Allow once and save this kind"
- * shows on a Bash card its opener did not hold to once (the fleet's `offersKind`, which the CLI checks too): dropped
- * from a row that has it when it does not, and added after Allow once to a row recorded before it existed.
+ * The options the page offers for `d`: a decision's as it has them. A permission's "Allow once and save this kind" is on
+ * no new card; a row that still has it shows it on a Bash card its opener did not hold to once (the fleet's `offersKind`,
+ * which the CLI checks too).
  */
 function shownOptions(d: Pick<Decision, "kind" | "refusal" | "options">): readonly DecisionOption[] {
   const options = d.options || [];
 
   if (d.kind !== "permission") return options;
-  const others = options.filter((o) => o.id !== ALLOW_KIND && o.id !== OLD_ALWAYS);
   const r = d.refusal;
+  const offered = r ? offersKind({ tool: r.tool, once: r.once === true }) : false;
 
-  if (!r || !offersKind({ tool: r.tool, once: r.once === true })) return others;
-  const kind: DecisionOption = { id: ALLOW_KIND, label: ALLOW_KIND_LABEL, consequence: allowKindWords(callsOf(r).length) };
-  const at = others.findIndex((o) => o.id === "allow-once");
-
-  return [...others.slice(0, at + 1), kind, ...others.slice(at + 1)];
+  return options.filter((o) => o.id !== OLD_ALWAYS && (o.id !== ALLOW_KIND || offered));
 }
 
 /** Everything a yes would grant, as one text: a permission's calls, folder and files, a rule card's rule. The page
