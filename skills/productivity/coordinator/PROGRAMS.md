@@ -103,7 +103,7 @@ A worker's report, its step done and the next one started:
 ```ts
 worker("w1", { status: "done", report: "Login form done; tests green", tokens: 41200, duration_ms: 912000 });
 step("m1", "s2", "Login form", "done", "w1");
-step("m1", "s3", "Session store", "current", "w2");
+step("m1", "s3", "Session store", "current", "w2", { why: "Logins must survive a Worker restart (D12)" });
 return records.apply(ops);
 ```
 
