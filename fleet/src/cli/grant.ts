@@ -101,6 +101,7 @@ function use(machine: Machine, argv: readonly string[], cwd: string): Effect.Eff
 
     if ("why" in origin) return yield* fail(origin.why);
     const projectDir = machine.env("CLAUDE_PROJECT_DIR") ?? cwd;
+
     const body: UseAsk = {
       dir: resolve(cwd, parsed.args.str("dir") ?? ""),
       call: asked,
@@ -109,6 +110,7 @@ function use(machine: Machine, argv: readonly string[], cwd: string): Effect.Eff
       agent_id: parsed.args.str("agent_id") ?? null,
       env: { HOME: machine.env("HOME") ?? "", CLAUDE_PROJECT_DIR: projectDir },
     };
+
     const reply = yield* Effect.promise(() => call(origin.origin, "POST", USE_PATH, { ...body }));
 
     if ("why" in reply) return yield* fail(`${reply.why}: nothing is granted, so run nothing of it`);
@@ -171,6 +173,7 @@ function grants(machine: Machine, argv: readonly string[]): Effect.Effect<number
 
       return 0;
     }
+
     const kinds = asArray(Option.getOrUndefined(parseObject(text))?.["kinds"]);
 
     if (kinds === undefined) return yield* fail(`${file} does not read: it is the host's to write, so tell the owner`);

@@ -1408,7 +1408,9 @@ describe("permission", () => {
       expect(item("new")["status"]).toBe("open");
       ok(...ask("again"));
       const row = state();
-      const held = (row["decisions"] as Record<string, unknown>[]).map((d) => (d["id"] === "again" ? { ...d, options: [...(d["options"] as unknown[]), { id: "allow-kind", label: "Allow once and save this kind", consequence: "c" }] } : d));
+      // SAFETY: the CLI wrote these rows just above, and each has an id and its options.
+      const rows = row["decisions"] as { id: string; options: unknown[] }[];
+      const held = rows.map((d) => (d.id === "again" ? { ...d, options: [...d.options, { id: "allow-kind", label: "Allow once and save this kind", consequence: "c" }] } : d));
       writeFileSync(join(root, "state.json"), JSON.stringify({ ...row, decisions: held }));
       userAnswers("again", "allow-kind: Allow once and save this kind");
       const kind = ok("decision", "again", "--decide", "allow-kind: Allow once and save this kind", "--resolution", "answered on the page (#9)");

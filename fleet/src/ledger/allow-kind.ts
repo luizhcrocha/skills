@@ -40,7 +40,11 @@ export function callKindOf(value: Json | undefined): CallKind | undefined {
 
   if ((action !== "deploy" && action !== "push") || main === undefined || task === undefined || sha256 === undefined) return undefined;
 
-  return TASK.exec(task)?.[1] === action && SHA256.test(sha256) ? { action, repo: { main, origin }, task, sha256, ...(text === undefined ? {} : { text }) } : undefined;
+  if (TASK.exec(task)?.[1] !== action || !SHA256.test(sha256)) return undefined;
+
+  const hashed: CallKind = { action, repo: { main, origin }, task, sha256 };
+
+  return text === undefined ? hashed : { ...hashed, text };
 }
 
 /** allow-24h's label, the same on every page. */

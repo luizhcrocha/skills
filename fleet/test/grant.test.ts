@@ -17,8 +17,11 @@ import { fakeHost, stopHosts, type FakeHost, type Reply } from "./project-host-f
 import { baseEnv, tmp, type Environment, type Ran } from "./support.ts";
 
 const CALL = "wrangler deploy";
+
 const NOW = new Date("2026-11-03T12:00:00Z");
+
 const SHA = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+
 const KIND = { id: "k1", action: "deploy", repo: { main: "/r/fleet/.jj/repo", origin: "git@github.com:luizhcrocha/fleet.git" }, task: "tasks/grant/deploy-page.sh", sha256: SHA };
 
 afterEach(stopHosts);
@@ -40,6 +43,7 @@ function place(host?: FakeHost, more: Environment = {}): Place {
 
 async function ran(at: Place, go: (o: { readonly cwd: string }) => ReturnType<typeof grantWith>): Promise<Ran> {
   const { layer, recorded } = recordingOut();
+
   const world = Layer.succeed(
     World,
     machineOf(
@@ -47,15 +51,18 @@ async function ran(at: Place, go: (o: { readonly cwd: string }) => ReturnType<ty
       (name) => at.env[name],
     ),
   );
+
   const code = await Effect.runPromise(go({ cwd: "/r/ws/app" }).pipe(Effect.provide(Layer.mergeAll(world, layer))));
 
   return { code, stdout: recorded.stdout.join(""), stderr: recorded.stderr.join("") };
 }
 
 const use = (at: Place, ...more: string[]): Promise<Ran> => ran(at, ({ cwd }) => grantWith(["use", at.dir, "--call", CALL, ...more], cwd));
+
 const list = (at: Place): Promise<Ran> => ran(at, () => grantsWith([at.dir]));
 
 const answering = (reply: Reply): FakeHost => fakeHost({ "POST /grants/use": reply });
+
 const ISSUED = { status: 200, body: { kind: KIND, rule: `Bash(${CALL})`, file: "/r/ws/.claude/settings.local.json", until: "2026-11-04T09:00:00Z" } };
 
 describe("fleet grant use", () => {
@@ -76,7 +83,7 @@ describe("fleet grant use", () => {
   test("a subagent is named, and a main session sends null", async () => {
     const host = answering(ISSUED);
     await use(place(host));
-    expect((host.sent[0]?.body as Record<string, unknown>)["agent_id"]).toBeNull();
+    expect(host.sent[0]?.body).toMatchObject({ agent_id: null });
   });
 
   test("an answer whose rule is not this call fails closed", async () => {
@@ -148,11 +155,13 @@ describe("fleet grants", () => {
 
   test("lists each kind with what holds it now and every use, by the clock and not the file's word alone", async () => {
     const at = place();
+
     const file = kinds(at, [
       { ...KIND, granted: GRANTED, until: "2026-11-04T09:00:00Z", uses: [USE] },
       { id: "k2", action: "push", task: "tasks/grant/push-master.sh", sha256: SHA, repo: KIND.repo, granted: GRANTED, until: "2026-11-03T11:00:00Z", uses: [] },
       { id: "k3", action: "deploy", task: "tasks/grant/deploy-host.sh", sha256: SHA, repo: { main: "/r/other/.jj/repo", origin: null }, granted: GRANTED, until: "2026-11-04T09:00:00Z", ended: { why: "revoked", at: "2026-11-03T09:30:00Z" }, uses: [] },
     ]);
+
     const before = readFileSync(file, "utf8");
 
     expect(await list(at)).toEqual({

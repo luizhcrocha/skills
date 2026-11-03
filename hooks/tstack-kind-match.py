@@ -17,7 +17,7 @@ and a kind's fields do not depend on the workspace, so one kind holds from every
 
 Cards go to the cloud and the owner reads them, so a script has no kind when its text is over 8 KiB, is not UTF-8, holds a
 character the page would not show as itself (rule-card.ts's INVISIBLE), or reads as a credential (tstack-hook.py's
-SECRET_IN_CALL and OP_REFERENCE, kept equal by test_kind_match). Such a call gets a plain card.
+SECRET_IN_CALL and OP_REFERENCE, kept equal by test_kind_match, read after NAME=$UPPER_CASE loses its NAME=). Such a call gets a plain card.
 
 A use of a live kind needs the same action, repo, task and sha256, so a changed script is a new card, and the owner approves
 one script's text at a time. Force, deletion and the like need no list here: what the script does is what the owner read.
