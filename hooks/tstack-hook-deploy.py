@@ -7,7 +7,28 @@ it. In a fleet every Bash call loads it: a script's text names the deploy, so an
 commands in the local transcripts (2026-11-01) held a `/`, so a test of the command's words would spare almost none and could
 drift from DEPLOYS. Python's bytecode in hooks/__pycache__ keeps that load near 1 ms of CPU (`_part_code`). The names this
 file uses and does not define (`SHELLS`, `_simple_commands`, `_normal`, `Deny`, `re`, `os`, ...) are the hook's.
+
+It is also a program, the matcher of a 24-hour kind grant: `python3 -I hooks/tstack-hook-deploy.py match`. Stdin is
+`{command, cwd, env}`, stdout one JSON line, exit 0: `{kind: {action, repo: {main, origin|null}, bookmark?, service?}, workspace,
+scripts: [{path, sha256}]}`, or `{refused: reason}`. Any other mode exits 2. `action` is deploy, push or restart; `main` is the
+realpath of the workspace's `.jj/repo`, which in a secondary workspace is a file holding the path to it; `workspace` is the folder
+that holds `.jj`, past each `cd` the text names; `scripts` is each shell file read, hashed. The kind is derived from the command,
+never given. A command reaches exactly one action or has no kind. What cannot be read refuses, and so does a push whose bookmark
+is not a fast-forward: `B@origin & ::B` is empty, read with --ignore-working-copy. The reader is text, so what still gets the kind
+of the deploy beside it is a named program (`node x.js`, `python3 x.py`, `make`, a path to a binary), a recipe, task or package
+script taken by name, another program's own exec (`find -exec`, awk's `system`), and a variable exported earlier (`export
+CLOUDFLARE_ENV=x`). A `cd` behind `&&` or `||` is taken as run, so `false && cd other; wrangler deploy` gets other's kind.
 """
+
+if "_simple_commands" not in globals():
+    import importlib.util
+    import os
+    import sys
+    _spec = importlib.util.spec_from_file_location(
+        "tstack_hook", os.path.join(os.path.dirname(os.path.realpath(__file__)), "tstack-hook.py"))
+    _hook = importlib.util.module_from_spec(_spec)
+    _spec.loader.exec_module(_hook)
+    sys.exit(_hook._deploys()["match_main"](sys.argv[1:], sys.stdin, sys.stdout))
 
 # A production deploy in a fleet waits for its yes (fleet/SPEC.md, "A deploy that never asked"). Auto mode is no such step:
 # on 10-31 it let `bash deploy-kit1.sh` through unrefused, and the deploy went out with no approval. fleet_moved_card stops a
@@ -74,14 +95,20 @@ ASK_CANNOT_HOLD = re.compile(r"[^ -~]|[$`*|<\\]")  # whyNoRule's and whyNoAsk's 
 WRITTEN_RE = re.compile(r"""(?:^|[\s\d&])>{1,2}\|?\s*["']?([^\s"';|&<>]+)""")  # a redirection's target
 ASSIGNMENT_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*\+?=")
 SHELL_NAME_RE = re.compile(r"\$(?:([A-Za-z_][A-Za-z0-9_]*)|\{([A-Za-z_][A-Za-z0-9_]*)\})")
+DIR_MOVES = frozenset(("cd", "pushd", "popd", "chdir"))
+SUBSHELL_CD = r"(?<![$\w])\([^()]*\bcd\b"
 
 # One deploy a Bash command reaches: `piece`, the simple command of the call that reaches it, which is what an owner's rule
 # is held against; `what`, the DEPLOYS entry, or "" when `unread`; `script`, the absolute path of the file of the call that
 # holds it, or None when it stands in the call; `unread`, why a script named for a deploy cannot be read yet.
 Deploying = namedtuple("Deploying", "piece what script unread")
 # One read of a call: `env`, the variables the session holds; `files`, each script read, by its path; `written`, the name of
-# each file the text read so far writes.
-Reading = namedtuple("Reading", "env files written")
+# each file the text read so far writes; `texts`, the bytes of each script read as shell text, by its path; `runs`, each ReadRun;
+# `unseen`, why each thing the text runs was not read. The gate reads only the first three; the matcher (`match_main`), all.
+Reading = namedtuple("Reading", "env files written texts runs unseen")
+# One command of a text as read: `run`, its words from its program; `cwd`, where it runs; `leaders`, the words of its simple command
+# ahead of its program.
+ReadRun = namedtuple("ReadRun", "run cwd leaders")
 
 
 def _past_flags(args, i=0, takes=None):
@@ -290,7 +317,12 @@ def _script_deploys(word, run, places, hops, names, reading):
     where = _expanded(word, names)
     path, data = _read_script(where, places)
     name = os.path.basename(where)
-    shell = data is not None and _is_shell_text(data, name, os.path.basename(run[0]) in SHELL_READS)
+    by_shell = os.path.basename(run[0]) in SHELL_READS
+    shell = data is not None and _is_shell_text(data, name, by_shell)
+    if name in reading.written:
+        reading.unseen.append(f"{word} is written in this same call")
+    if data is None or (by_shell and not shell):
+        reading.unseen.append(f"{word} cannot be read as a script")
     if _names_deploy(name) and (shell or (data is None and not name.endswith(SOURCE_EXTENSIONS))):
         if name in reading.written:
             return [("", None, f"runs {word}, named for a deploy, and writes it in this same call")]
@@ -298,13 +330,19 @@ def _script_deploys(word, run, places, hops, names, reading):
             return [("", None, f"runs {word}, named for a deploy, at a path known only when it runs")]
     # No flag of a script's makes it a read: `bash deploy-kit1.sh --help` deployed, as that script ignores its flags. The one
     # exception is deploy-worker's modes in DEPLOY_SCRIPT_READS, which _script_word has already read as no script.
-    if not shell or len(data) > DEPLOY_TEXT_MAX:
+    if not shell:
+        return []
+    if len(data) > DEPLOY_TEXT_MAX:
+        reading.unseen.append(f"{word} is past {DEPLOY_TEXT_MAX} bytes")
         return []
     if path in reading.files:
+        reading.unseen.append(f"{word} runs twice")
         return reading.files[path]
     if len(reading.files) >= DEPLOY_FILES_MAX:
+        reading.unseen.append(f"{word} is past {DEPLOY_FILES_MAX} scripts")
         return []
     reading.files[path] = []
+    reading.texts[path] = data
     inner = (*places, os.path.dirname(path)) if os.path.isabs(path) else places
     found = _text_deploys(data.decode("utf-8", "replace"), inner, hops + 1, {**reading.env, "PWD": places[0]}, reading)
     reading.files[path] = [(what, path, unread) for what, _, unread in found]
@@ -346,23 +384,37 @@ def _pieces_deploys(text, places, hops, names, reading, nest):
     line by line, following no file: _simple_commands refuses some real scripts, and a mention must stay a mention. A text
     past DEPLOY_TEXT_MAX, or a command past DEPLOY_PIECE_MAX, is not read."""
     if len(text) > DEPLOY_TEXT_MAX:
+        reading.unseen.append(f"a text past {DEPLOY_TEXT_MAX} bytes")
         return []
+    if "(" in text and re.search(SUBSHELL_CD, text):
+        reading.unseen.append("a cd in a subshell")
     try:
         pieces = _simple_commands(text)
     except (ValueError, IndexError):
         pieces, hops = [p for line in text.split("\n") for p in _line_pieces(line)], DEPLOY_HOPS
+        reading.unseen.append("a text that does not parse")
     out = []
     for piece in pieces:
         words = _piece_words(piece)
         if words is None:
+            reading.unseen.append(f"a command past {DEPLOY_PIECE_MAX} bytes")
             continue
         if words and all(ASSIGNMENT_RE.match(w) for w in words):
             names.update((k, _expanded(v, names)) for k, v in (w.split("=", 1) for w in words))
-        if words[:1] == ["cd"] and len(words) > 1 and "$" not in _expanded(words[1], names):
+        moved = words[:1] == ["cd"] and len(words) > 1 and "$" not in _expanded(words[1], names)
+        if moved:
             places = (os.path.join(places[0], _expanded(words[1], names)), *places)
             names["PWD"] = places[0]
+            if not os.path.isdir(places[0]):
+                reading.unseen.append(f"a cd to {words[1]}, which is not there")
         reached = []
-        for run, sure in _runs_of(words):
+        runs = _runs_of(words)
+        if len(runs) >= DEPLOY_RUNS_MAX:
+            reading.unseen.append(f"a command past {DEPLOY_RUNS_MAX} leaders")
+        for run, sure in runs:
+            if os.path.basename(run[0]) in DIR_MOVES and not moved:
+                reading.unseen.append(f"a move it cannot follow: {' '.join(run)}")
+            reading.runs.append(ReadRun(run, places[0], tuple(words[:len(words) - len(run)])))
             what = _deploy_at(run)
             shell = _shell_text(run) if os.path.basename(run[0]) in SHELLS else None
             script = None if what or shell is not None else _script_word(run, sure)
@@ -370,8 +422,12 @@ def _pieces_deploys(text, places, hops, names, reading, nest):
                 reached.append((what, None, None))
             elif shell is not None and nest < DEPLOY_NEST_MAX:
                 reached.extend(_text_deploys(shell, places, hops, names, reading, nest + 1))
+            elif shell is not None:
+                reading.unseen.append(f"a `sh -c` past {DEPLOY_NEST_MAX} levels")
             elif script and hops < DEPLOY_HOPS:
                 reached.extend(_script_deploys(script, run, places, hops, names, reading))
+            elif script:
+                reading.unseen.append(f"{script} is past {DEPLOY_HOPS} scripts deep")
         reading.written.update(_written_by(piece, words, names))
         if reached:
             out.append((piece, reached))
@@ -383,7 +439,7 @@ def deploys_of(command, cwd, env):
     variables of the session, whose values let `bash $CLAUDE_PROJECT_DIR/x.sh` be read."""
     seed = {**(env or {}), "PWD": cwd}
     return [Deploying(piece, what, script, unread)
-            for piece, reached in _pieces_deploys(command, (cwd,), 0, dict(seed), Reading(seed, {}, set()), 0)
+            for piece, reached in _pieces_deploys(command, (cwd,), 0, dict(seed), Reading(seed, {}, set(), {}, [], []), 0)
             for what, script, unread in reached]
 
 
@@ -508,3 +564,340 @@ def _deploy_gate(hook, command, dirs):
             return None
         return Deny(f"tstack: this command names a deploy, and the check of it failed, so no approval can be told; the trace is in "
                     f"{hook.data_dir / 'hook.log'}.")
+
+
+# What the matcher refuses wherever it stands, in the command or in a script it reads. A word is whole, so `--rm` and `no-op` are
+# not `--force` and `op`.
+NEVER_WORDS = frozenset(("--force", "--force-with-lease", "--force-if-includes", "--deleted", "--delete", "--allow-new",
+                         "--allow-empty", "--once", "secret"))
+NEVER_PROGRAMS = frozenset(("rm", "trash", "op", "eval", "ssh", "scp", "sftp", "printenv"))
+NEVER_IN_ORDER = (("jj", "bookmark", "forget"), ("jj", "abandon"), ("wrangler", "delete"), ("wrangler", "secret"), ("d1", "execute"))
+PRINTERS = frozenset(("echo", "printf", "print", "cat", "head", "tail", "less", "more", "bat", "strings", "xxd", "od", "base64"))
+SECRET_NAME = r"(?i)\$\{?\w*(?:TOKEN|SECRET|PASSWORD|PASSWD|KEY|CREDENTIAL)"
+SECRET_FILE = r"(?:.*/)?(?:\.env|\.dev\.vars)(?:\..*)?|/proc/.*/environ"
+ENV_DUMPS = frozenset(("set", "export", "declare", "typeset"))
+_INLINE_NODE = r"-e|-p|-pe|--eval(?:=.*)?|--print(?:=.*)?"
+_INLINE_SCRIPT = r"-[A-Za-z]*[eE]"
+INLINE_FLAGS = {"node": _INLINE_NODE, "nodejs": _INLINE_NODE, "bun": _INLINE_NODE, "deno": "eval", "python": r"-[A-Za-z]*c",
+                "perl": _INLINE_SCRIPT, "ruby": _INLINE_SCRIPT, "lua": "-e", "php": "-r"}
+BARRED_LEADERS = frozenset(("xargs", "nix", "dotenvx", "devenv", "fleet", "direnv", "shell"))
+# The flags a leader may keep; any other of its flags can move what it runs. A leader not here keeps all of its flags.
+LEADER_KEEPS = {
+    **dict.fromkeys(PACKAGE_RUNNERS, frozenset()), "sudo": frozenset(), "env": frozenset(("-u", "--unset")),
+    **dict.fromkeys(("npx", "pnpx", "bunx"), frozenset(("-y", "--yes", "--no-install"))),
+}
+DEPLOY_ENV = r"(?:CLOUDFLARE|WRANGLER)_\w*="
+WRANGLER_KEEPS = frozenset(("--keep-vars", "--minify", "--no-bundle", "--no-build", "--upload-source-maps", "--latest", "--strict",
+                            "--yes", "-y"))
+WRANGLER_KEEPS_VALUE = frozenset(("--tag", "--message", "--compatibility-date", "--old-asset-ttl", "--version-id", "--percentage"))
+DEPLOY_KEEPS = {"pulumi": frozenset(("--yes", "-y", "--skip-preview")), "fly": frozenset(("--remote-only", "--local-only")),
+                "flyctl": frozenset(("--remote-only", "--local-only"))}
+JJ_NAME = r"[A-Za-z0-9][A-Za-z0-9._/-]*"
+SERVICE = r"[A-Za-z0-9][A-Za-z0-9_.@-]*"
+JJ_TIMEOUT = 15
+
+
+def _in_order(words, wanted):
+    """Whether `words` holds `wanted` in that order, the first by its base name, other words between them."""
+    at = next((k for k, w in enumerate(words) if os.path.basename(w) == wanted[0]), None)
+    if at is None:
+        return False
+    rest = iter(words[at + 1:])
+    return all(w in rest for w in wanted[1:])
+
+
+def _prints_secret(run, program):
+    """Whether `run` prints what `secretspec run --` put in its environment, or a file that holds one."""
+    args = run[1:]
+    if program == "env" and all(w.startswith("-") or "=" in w for w in args):
+        return True
+    if program in ENV_DUMPS and (not args or args == ["-p"]):
+        return True
+    return program in PRINTERS and any(re.search(SECRET_NAME, w) or re.fullmatch(SECRET_FILE, w) for w in args)
+
+
+def _never_of(seen):
+    """Why one command is on the never-list, or None."""
+    run, whole = seen.run, (*seen.leaders, *seen.run)
+    program = os.path.basename(run[0])
+    if program in NEVER_PROGRAMS or _prints_secret(run, program):
+        return f"`{program}`"
+    if program == "secretspec" and run[1:3] != ["run", "--"]:
+        return "`secretspec` other than `secretspec run --`"
+    for word in whole:
+        if word.split("=", 1)[0] in NEVER_WORDS:
+            return f"`{word}`"
+        if " " not in word and "rollback" in os.path.basename(word):
+            return f"`{word}`"
+    for wanted in NEVER_IN_ORDER:
+        if _in_order(whole, wanted):
+            return f"`{' '.join(wanted)}`"
+    if program in ("git", "jj") and "push" in run[1:] and any(re.fullmatch(r"-[A-Za-z]*f|\+.+", w) for w in run[1:]):
+        return "a forced push"
+    for k, word in enumerate(whole):
+        flags = INLINE_FLAGS.get(re.sub(r"[\d.]+$", "", os.path.basename(word)))
+        if flags is not None and any(re.fullmatch(flags, w) for w in whole[k + 1:]):
+            return f"inline code for `{os.path.basename(word)}`"
+    if program in SHELLS and not {"--version", "--help"}.intersection(run):
+        flags, rest = _shell_words(run)
+        reads = any("n" in f or "c" in f for f in flags)
+        if not reads and (not rest or any("s" in f for f in flags)):
+            return "a shell fed from stdin or a pipe"
+    return None
+
+
+def _hidden_of(seen):
+    """Why one command hides what it runs from this reader, or None."""
+    run, program = seen.run, os.path.basename(seen.run[0])
+    if any(w.endswith("()") for w in seen.leaders) or program in ("function", "alias") or run[1:2] == ["()"]:
+        return "a function or an alias"
+    if "$" in run[0] and "/" not in run[0]:
+        return f"a program known only when it runs: {run[0]}"
+    if program in SHELLS:
+        flags, rest = _shell_words(run)
+        if rest and _shell_text(run) is None and _script_word(run, True) is None and not any("n" in f for f in flags):
+            return f"a shell given {rest[0]}"
+    return None
+
+
+def _leader_redirect(leaders):
+    """The word of a command's `leaders` that can move what it runs, or None."""
+    program = None
+    for word in leaders:
+        name = os.path.basename(word)
+        if name in BARRED_LEADERS or re.match(DEPLOY_ENV, word):
+            return word
+        if name in LEADER_KEEPS:
+            program = name
+        elif word.startswith("-") and program and word.split("=", 1)[0] not in LEADER_KEEPS[program]:
+            return word
+    return None
+
+
+def _inside(path, folder):
+    return path == folder or path.startswith(folder + os.sep)
+
+
+def _wrangler_redirect(seen, what, workspace):
+    """The word of a wrangler deploy that moves it off the Worker its folder's config names, or None. A config inside the same
+    workspace stays in the kind, which covers the repo's Workers whole. A flag not known to keep the target refuses."""
+    tail, plain = what.split()[1:], []
+    args, i = seen.run[1:], 0
+    while i < len(args):
+        word = args[i]
+        i += 1
+        if not word.startswith("-"):
+            plain.append(word)
+            continue
+        head, eq, value = word.partition("=")
+        if head in ("-c", "--config") or (word.startswith("-c") and not word.startswith("--")):
+            if not eq and head not in ("-c", "--config"):
+                value = word[2:]
+            elif not eq:
+                value = args[i] if i < len(args) else ""
+                i += 1
+            where = os.path.realpath(os.path.join(seen.cwd, value))
+            if not value or value[0] == "~" or "$" in value or "`" in value or not _inside(where, workspace):
+                return f"{word} {value}".strip()
+        elif head in WRANGLER_KEEPS_VALUE:
+            i += not eq
+        elif head not in WRANGLER_KEEPS:
+            return word
+    if tail == ["versions", "deploy"]:
+        plain = [w for w in plain if "@" not in w]
+    return None if plain == tail else " ".join(plain)
+
+
+def _deploy_redirect(seen, what, workspace):
+    """The word that moves a deploy off the one its workspace names, or None: past the leaders, its words are the deploy's own."""
+    name, tail = what.split()[0], what.split()[1:]
+    if name == "wrangler":
+        return _wrangler_redirect(seen, what, workspace)
+    words = [w for w in seen.run[1:] if w not in DEPLOY_KEEPS.get(name, ())]
+    if name == "pnpm" and words[:1] in (["run"], ["run-script"]):
+        words = words[1:]
+    return None if words == tail else " ".join(words)
+
+
+def _push_of(seen):
+    """(bookmark, the folder its `-R` names or None, why not): a push is `jj git push --bookmark B`, with at most `-R` ahead of
+    `git` and `--remote origin` after it."""
+    args, i, where = seen.run[1:], 0, None
+    while i < len(args) and args[i] != "git":
+        word = args[i]
+        if word in ("-R", "--repository") and i + 1 < len(args):
+            where = args[i + 1]
+            i += 2
+        elif word.startswith("--repository="):
+            where = word.split("=", 1)[1]
+            i += 1
+        else:
+            return None, None, f"a push with {word}"
+    rest, bookmarks = args[i + 2:], []
+    if args[i:i + 2] != ["git", "push"]:
+        return None, None, "not `jj git push`"
+    k = 0
+    while k < len(rest):
+        head, eq, value = rest[k].partition("=")
+        k += 1
+        if head not in ("--bookmark", "-b", "--remote"):
+            return None, None, f"a push with {rest[k - 1]}"
+        if not eq:
+            value = rest[k] if k < len(rest) else ""
+            k += 1
+        if head == "--remote":
+            if value != "origin":
+                return None, None, f"a push to {value}"
+        else:
+            bookmarks.append(value)
+    if len(bookmarks) != 1 or not re.fullmatch(JJ_NAME, bookmarks[0]):
+        return None, None, f"a push of {' '.join(bookmarks) or 'no named bookmark'}"
+    return bookmarks[0], where, None
+
+
+def _action_of(seen):
+    """(action, what) of one command: `deploy` and its DEPLOYS entry, `push` or `restart`; None when it is none of them."""
+    name = os.path.basename(seen.run[0])
+    args = seen.run[1:]
+    if name == "systemctl":
+        return ("restart", None) if "restart" in args else None
+    if name == "jj":
+        return ("push", None) if _in_order(seen.run, ("jj", "git", "push")) else None
+    what = _deploy_at([name.split("@", 1)[0], *args])
+    return ("deploy", what) if what else None
+
+
+def _service_of(seen):
+    """The one service of `systemctl [--user] restart SERVICE`, or None."""
+    words = [w for w in seen.run[1:] if w != "--user"]
+    if len(words) != 2 or words[0] != "restart" or not re.fullmatch(SERVICE, words[1]):
+        return None
+    return words[1].removesuffix(".service")
+
+
+def _workspace_of(start):
+    """The folder at or above `start` that holds `.jj`, or None."""
+    here = os.path.realpath(start)
+    while True:
+        if os.path.isdir(os.path.join(here, ".jj")):
+            return here
+        up = os.path.dirname(here)
+        if up == here:
+            return None
+        here = up
+
+
+def _repo_main(workspace):
+    """The realpath of a workspace's `.jj/repo`, past the pointer file a secondary workspace holds there, or None."""
+    dot = os.path.join(workspace, ".jj")
+    repo = os.path.join(dot, "repo")
+    if os.path.isfile(repo):
+        data = _regular_bytes(repo, head=4096)
+        if data is None:
+            return None
+        repo = os.path.join(dot, data.decode("utf-8", "replace").strip())
+    return os.path.realpath(repo) if os.path.isdir(repo) else None
+
+
+def _jj(workspace, *args):
+    """What a read-only jj prints for `workspace`, or None when it fails: it snapshots nothing."""
+    import subprocess
+    try:
+        done = subprocess.run(["jj", "-R", workspace, "--ignore-working-copy", "--color", "never", *args], capture_output=True,
+                              text=True, timeout=JJ_TIMEOUT, check=False)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return done.stdout if done.returncode == 0 else None
+
+
+def _origin_of(workspace):
+    """(the origin remote's URL or None, whether jj could tell)."""
+    listed = _jj(workspace, "git", "remote", "list")
+    if listed is None:
+        return None, False
+    for line in listed.splitlines():
+        name, _, url = line.partition(" ")
+        if name == "origin":
+            return url.strip(), True
+    return None, True
+
+
+def _fast_forward(workspace, bookmark):
+    held = _jj(workspace, "log", "--no-graph", "-T", 'commit_id ++ "\\n"', "-r", f'"{bookmark}"@origin & ::"{bookmark}"')
+    return bool(held and held.strip())
+
+
+def _match(command, cwd, env):
+    """The output of `match` for a call: see the head of this file."""
+    import hashlib
+    seed = {**env, "PWD": cwd}
+    reading = Reading(seed, {}, set(), {}, [], [])
+    _pieces_deploys(command, (cwd,), 0, dict(seed), reading, 0)
+    for seen in reading.runs:
+        why = _never_of(seen)
+        if why:
+            return {"refused": f"never: {why}"}
+    hidden = [why for why in map(_hidden_of, reading.runs) if why]
+    if reading.unseen or hidden:
+        return {"refused": f"not read: {(reading.unseen + hidden)[0]}"}
+    for seen in reading.runs:
+        if os.path.basename(seen.run[0]) in SHELLS or (seen.leaders and _script_word(seen.run, True)):
+            word = _leader_redirect(seen.leaders)
+            if word:
+                return {"refused": f"redirect: {word}"}
+    acting = [(seen, *action) for seen, action in ((s, _action_of(s)) for s in reading.runs) if action]
+    if not acting:
+        return {"refused": "no deploy, push or restart in this call"}
+    if len(acting) > 1:
+        return {"refused": f"{len(acting)} actions in one call"}
+    (seen, action, what), = acting
+    word = _leader_redirect(seen.leaders)
+    if word:
+        return {"refused": f"redirect: {word}"}
+    extra, start = {}, seen.cwd
+    if action == "push":
+        bookmark, where, why = _push_of(seen)
+        if why:
+            return {"refused": why}
+        extra, start = {"bookmark": bookmark}, os.path.join(seen.cwd, where) if where else seen.cwd
+    elif action == "restart":
+        service = _service_of(seen)
+        if service is None:
+            return {"refused": f"a restart is one service exactly: {' '.join(seen.run)}"}
+        extra = {"service": service}
+    workspace = _workspace_of(start)
+    main = workspace and _repo_main(workspace)
+    if not main:
+        return {"refused": f"no jj workspace at {start}"}
+    if action == "deploy":
+        word = _deploy_redirect(seen, what, workspace)
+        if word:
+            return {"refused": f"redirect: {word}"}
+    origin, told = _origin_of(workspace)
+    if not told:
+        return {"refused": f"jj cannot read the repo at {workspace}"}
+    if action == "push" and not _fast_forward(workspace, extra["bookmark"]):
+        return {"refused": f"{extra['bookmark']} is not a fast-forward of {extra['bookmark']}@origin"}
+    return {"kind": {"action": action, "repo": {"main": main, "origin": origin}, **extra}, "workspace": workspace,
+            "scripts": [{"path": path, "sha256": hashlib.sha256(data).hexdigest()} for path, data in reading.texts.items()]}
+
+
+def match_main(argv, stdin, stdout):
+    """The program: see the head of this file."""
+    if argv != ["match"]:
+        print("usage: tstack-hook-deploy.py match < {command, cwd, env}", file=sys.stderr)
+        return 2
+    try:
+        given = json.loads(stdin.read())
+        command, cwd, env = given["command"], given["cwd"], given.get("env", {})
+        if not (isinstance(command, str) and isinstance(cwd, str) and os.path.isabs(cwd) and isinstance(env, dict)):
+            raise ValueError("command and an absolute cwd are strings, env an object")
+    except (ValueError, KeyError, TypeError, AttributeError) as e:
+        out = {"refused": f"bad input: {e}"}
+    else:
+        try:
+            out = _match(command, cwd, env)
+        except Exception as e:  # noqa: BLE001 - a matcher that fails grants nothing
+            out = {"refused": f"the matcher failed: {type(e).__name__}: {e}"}
+    stdout.write(json.dumps(out) + "\n")
+    return 0
