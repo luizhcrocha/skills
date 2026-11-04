@@ -27,7 +27,7 @@ Run `tstack:arena` with the design-sketch task and the grounding from step 1:
 - **Screen**: check every candidate against codebase-design's [RED-FLAGS.md](../codebase-design/RED-FLAGS.md) before synthesis; revise or reject shallow modules, information leakage, temporal decomposition and pass-through methods.
 - **Prefer depth**: among viable candidates, prefer the one that hides more behind a smaller interface. A rich interface that concentrates capability keeps call chains short; scattering it across layers does not.
 
-Arena returns one synthesized design package; its synthesis note fills the template's "Synthesis decision" section. The sketch may land as its own jj change before any implementation (scaffold first, Foundational Thinking); planned and scoped breakage while filling it in is fine (Outcome-Oriented Execution). For adversarial pressure on the sketch before implementing, run `tstack:interrogate` on it. Done when the sketch and its rationale are written and screened.
+Arena returns one synthesized design package; its synthesis note fills the template's "Synthesis decision" section. The sketch may land as its own jj change before any implementation (scaffold first, Foundational Thinking); planned and scoped breakage while filling it in is fine (Outcome-Oriented Execution). For adversarial pressure on the sketch before implementing, run `tstack:review`'s Deep review (step 7) on it, proving each finding with a probe of the current tree. Done when the sketch and its rationale are written and screened.
 
 ## 3. Agree (only when asked)
 

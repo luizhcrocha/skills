@@ -91,7 +91,7 @@ these:
 records the owner's answer, `resolved` for a withdraw, and `blocked` or `resolved` for a roadblock. A card's close also
 resolves the roadblocks that wait on it and sets their workers running again. So a program writes no event after an
 open, an answer or any of these: a second one shows twice in the card's history. `event` is for what has no card
-(`integrated`, `reviewed`, a `note`).
+(`integrated`, `reviewed`, a `note`). A `reviewed` event's `findings` has no `proven` beside it in a program yet, so its text ends `proven P`: the Important findings that carry a proof.
 
 ## Worked calls
 

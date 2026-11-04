@@ -11,7 +11,7 @@ Every agent tstack spawns plays one of the roles below. The role fixes its model
 | Implementer | Writes code in its own workspace. | Opus high | Sonnet xhigh | Opus xhigh, by [effort escalation](#effort-escalation-and-the-trial) |
 | Reviewer | One lens on a diff or a session, two or three in parallel; a second opinion. | Opus high | Sonnet xhigh | |
 | Verifier | Runs the real product and reports, one agent per item: a PR, a mechanical history task. | Opus medium | Sonnet high | |
-| Decider | One agent whose call decides what follows: the hardest single task, arena's judge, interrogate's verdict, why's and reflect's synthesizers, the trail review after a long absence. | Fable high | Opus high | |
+| Decider | One agent whose call decides what follows: the hardest single task, arena's judge, why's and reflect's synthesizers, the trail review after a long absence. | Fable high | Opus high | |
 | Escalation | The hardest call after an attempt failed, once per diagnosis, behind the evidence gate in [diagnosing-bugs](../../engineering/diagnosing-bugs/SKILL.md) (Phase 3). | Fable high | Opus high | |
 | Advisor | A fleet's long-lived judge, asked many times (`agents/advisor.md`). | Fable high | Opus high, restarted | |
 | Coordinator | The session running a fleet (the `coordinator` skill): routes, briefs, records, integrates. | Opus low | Sonnet medium | |

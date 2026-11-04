@@ -23,7 +23,7 @@ One [[rule]] per custom rule or enabled native lint:
     summary   what it catches, one line
     where     the pack file that holds it, relative to the checkout
     created   YYYY-MM-DD
-    evidence  refs, each "<source>:<ref>": memo, review, interrogate, reflect,
+    evidence  refs, each "<source>:<ref>": memo, review, reflect,
               comment-sicko, automate-me, session, repo, skill, upstream
     history   [{date, status, note}], oldest first; the last is the status
     runs      trial runs, one per repo (the latest replaces the earlier):
@@ -68,7 +68,7 @@ KINDS = ("custom", "config")
 STATUSES = ("proposed", "trial", "warn", "error", "retired")
 ACTIVE = ("trial", "warn", "error")
 SOURCES = (
-    "memo", "review", "interrogate", "reflect", "comment-sicko", "automate-me",
+    "memo", "review", "reflect", "comment-sicko", "automate-me",
     "session", "repo", "skill", "upstream",
 )
 FORWARD = {"proposed": "trial", "trial": "warn", "warn": "error"}

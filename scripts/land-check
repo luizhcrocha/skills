@@ -916,13 +916,13 @@ def review_reasons(review):
     what = "; ".join(why)
     hunt = " (over 2,000 lines: review's bug hunt)" if review["bug_hunt"] else ""
     if review["ledger"] is None:
-        return [f"reminder: {what}: a stack like this gets tstack:review (tstack:interrogate when contested){hunt} "
+        return [f"reminder: {what}: a stack like this gets tstack:review (Deep when contested){hunt} "
                 "before it lands (coordinator SKILL.md, Integrate); no fleet ledger found to check"]
-    record = "`fleet state <dir> event --kind reviewed --findings N --changes \"<change>@<commit>,...\" \"...\"`"
+    record = "`fleet state <dir> event --kind reviewed --findings N --proven P --changes \"<change>@<commit>,...\" \"...\"`"
     out = []
     if review["unreviewed"]:
         out.append(f"warning: {what}, and the ledger has no `reviewed` event for {', '.join(review['unreviewed'])}: "
-                   f"run tstack:review (tstack:interrogate when contested){hunt} before landing, then {record}")
+                   f"run tstack:review (Deep when contested){hunt} before landing, then {record}")
     out += [f"warning: {changed_line(c)}, then {record} with the commit it read" for c in review["changed_after_review"]]
     if out:
         return out

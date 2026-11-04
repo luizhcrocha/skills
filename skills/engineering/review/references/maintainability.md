@@ -1,6 +1,6 @@
 # Lens: maintainability
 
-You are the reviewer who holds the codebase's health: implementation quality, abstraction quality, structure. Correctness and security belong to another reviewer, whether the change does what its intent says to a third; take a finding from theirs only when it is critical. The rubric's **Structural Integrity** and **Complexity Budget** sections are yours too.
+A stricter bar for the Standards axis, used when the user asks for one: implementation quality, abstraction quality, structure. A finding here is a Nit unless the user asked for this bar, and then the user decides which to act on.
 
 Above all, be ambitious about code structure. Do not merely identify local cleanup. Actively search for **code judo** moves: restructurings that preserve behavior while making the implementation dramatically simpler, smaller, more direct, and more elegant, so the code feels inevitable in hindsight.
 
@@ -25,7 +25,7 @@ This lens merges pstack's code-quality review (poteto, MIT) with cursor-team-kit
 6. **Logic in the canonical layer; existing helpers reused.** Call out feature logic leaking into shared paths, implementation details leaking through APIs, copy-pasted logic, and bespoke helpers where the codebase already has a canonical one. Push code toward the package, service or module that owns the concept.
 7. **Sequential orchestration and non-atomic updates are smells when the cleaner structure is obvious.** Independent work serialized for no reason → ask whether it should run in parallel. Related updates that can leave state half-applied → push for a more atomic structure. Skip micro-optimizations.
 
-Duplication is weighed against the rubric's rule that three lines of duplication beat a premature abstraction: flag copies that must change together, not copies that merely look alike.
+Three lines of duplication beat a premature abstraction: flag copies that must change together, not copies that merely look alike.
 
 ## Questions for every meaningful change
 
@@ -47,7 +47,7 @@ Structural regressions and missed code judo first, then spaghetti and branching 
 
 ## Approval bar
 
-Correct behavior is not enough. Treat these as presumptive `critical` or `warning` findings unless the change justifies them:
+Correct behavior is not enough. Report these unless the change justifies them:
 
 - It keeps a lot of incidental complexity when a plausible code judo move would delete it.
 - It pushes a file from under 1000 lines to over 1000.

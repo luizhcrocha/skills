@@ -110,11 +110,11 @@ ignore = [
   # below sync.
   "skills/arena",
   "skills/architect",
-  # decided: adapted by hand, 2026-09-30. interrogate's SKILL.md was rewritten
-  # for three Opus reviewers on three lenses (Claude Code has one model
-  # family), and code-quality-review.md was merged with cursor-team-kit's
-  # thermo-nuclear review into our lenses/maintainability.md. Only the files
-  # mapped below sync.
+  # decided: folded into review's Deep review (Luiz, 2026-11-04), taking
+  # upstream's rule that a finding survives only when a run proves it (ab1f702).
+  # It ran in 1 of 2,607 transcripts here. The maintainability lens, merged from
+  # code-quality-review.md and cursor-team-kit's thermo-nuclear review, moved to
+  # review/references/maintainability.md.
   "skills/interrogate",
   # decided: adapted by hand, 2026-09-30. Both SKILL.md files were rewritten
   # for Claude Code: .claude/skills/verify-<app>, claude-in-chrome for web
@@ -161,9 +161,8 @@ map = [
   { from = "skills/show-me-your-work/scripts/log.sh", to = "skills/productivity/show-me-your-work/scripts/log.sh" },
   { from = "skills/show-me-your-work/references/decision-log-template.tsv", to = "skills/productivity/show-me-your-work/references/decision-log-template.tsv" },
   # watch-pr, unchanged: the babysit and shipping playbooks poll GitHub with it (bun).
-  # interrogate: upstream removed its references (2026-10-30, 4dd1d05); ours stay as local files and no longer sync.
   # blast-radius, adapted in place (model-invocable, why's jj anchor,
-  # interrogate for arena, tstack: pointers), 2026-09-30.
+  # Deep review for arena, tstack: pointers), 2026-09-30.
   { from = "skills/blast-radius/SKILL.md", to = "skills/engineering/blast-radius/SKILL.md" },
   # architect's references: the red flags verbatim, moved into codebase-design
   # (both are Ousterhout); the runner prompt and rationale template adapted in

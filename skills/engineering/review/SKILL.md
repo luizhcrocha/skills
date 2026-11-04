@@ -1,6 +1,6 @@
 ---
 name: review
-description: "Review changes since a fixed point (default: the landing bookmark's remote) on two axes, Standards and Spec, in parallel. Use to review a branch, stack, PR or WIP, or \"review since X\"."
+description: "Review changes since a fixed point (default: the landing bookmark's remote) on two axes, Standards and Spec, in parallel, or as a Deep review that keeps only findings a run proves. Use to review a branch, stack, PR or WIP, \"review since X\", \"tear this apart\", \"stress test this\", a contested design."
 ---
 
 Two-axis review of the diff between `@` and a fixed point:
@@ -44,7 +44,7 @@ Anything in the repo that documents how code should be written, such as `CODING_
 
 If the diff touches TypeScript, also call the Skill tool with "lang-ts" and pass its relevant rules to the Standards sub-agent as a standards source, ranked below any repo-documented standard.
 
-When the user asks for a stricter bar ("thermo-nuclear", "harsh maintainability review"), add interrogate's maintainability lens ([../interrogate/references/lenses/maintainability.md](../interrogate/references/lenses/maintainability.md)) as a standards source, ranked below the repo's standards and above the smell baseline.
+When the user asks for a stricter bar ("thermo-nuclear", "harsh maintainability review"), add the maintainability lens ([references/maintainability.md](references/maintainability.md)) as a standards source, ranked below the repo's standards and above the smell baseline.
 
 On top of whatever the repo documents, the Standards axis always carries the **smell baseline** below: a fixed set of Fowler code smells (_Refactoring_, ch.3) that applies even when a repo documents nothing. Two rules bind it:
 
@@ -113,6 +113,17 @@ Two readers over a diff that size skim it. When the diff has more than about 2,0
 
 Its cost, as an estimate: for 2,000 lines, about 7 slices, 14 readers and 7 second looks at about 60k tokens each, plus one prover per kept claim at about 80k, so about 1.5 million tokens, five to ten times the two axes. Say that cost when you offer it, and run it only on a yes, or when the coordinator's Integrate rule calls for it. Report the proven findings, then the unproven claims, and record it as a `reviewed` event with the proven count.
 
+### 7. Deep review: the pass that tries to break the change
+
+For a contested design, a risky diff, or the areas the coordinator's [Review levels](../../productivity/coordinator/SKILL.md#review-levels) name. It replaces the two axes. Adapted from pstack's interrogate (poteto, MIT): a finding survives only when a run proves it.
+
+1. **State the intent.** One paragraph from the user's message, the change descriptions and the spec (step 2). Unsure: ask before spawning.
+2. **Three finders in parallel.** `general-purpose` Reviewers, one per angle: security; concurrency and state; spec and tests. Each gets the intent, the diff command, the repo's REVIEW.md and its own jj workspace at the stack's head, and this brief: "Break this change. Prove each finding with a run against the real code: a failing test in the repo's own test tools, or the output of the repo's own command. Report the title, the exact command, the output it printed, the output the intent requires, and `Caught by:` the cheapest check that would have caught it with no reader (`type`, `lint`, `test`, `property`, `model` or `none`). Leave out style, naming, structure and risks that need a future change to matter. A claim you could not run goes under Unproven with why. No findings is a valid result."
+3. **One verifier.** A fresh Verifier ([MODELS.md](../../productivity/coordinator/MODELS.md)) reruns each command in the finder's workspace. A finding stays when the output shows the failure and the failure breaks the intent. Merge findings that share a root cause.
+4. **Report.** The intent; the verified findings, which are Important, each with its command, output, how it breaks the intent and the finders that found it; Unproven, each with its trace (file and line) when it has one, so a real risk no one could run is not lost; for each finder, the count dropped and why; the `Read:` line. Apply nothing. Outside a fleet the user decides; in a fleet the coordinator sends the Important findings to a FIX round and rules on each Unproven claim, as a FIX, a follow-up or a decision for Luiz. A verdict line ends the report: LAND, or FIX when an Important finding stands.
+
+No standalone attack or forging scripts: a safety classifier refused them on 2026-10-16, and a refused act is never routed around. A proof is a test in the repo's own tools. Delete the finders' workspaces after the report, keeping any test the fix adopts. Record it as in step 5, with the verified findings and the Unproven claims in `--findings`, and only the verified ones in `--proven`.
+
 ## Why two axes
 
 A change can pass one axis and fail the other:
@@ -121,7 +132,5 @@ A change can pass one axis and fail the other:
 - Code that does exactly what the issue asked but breaks the project's conventions → **Spec pass, Standards fail.**
 
 Reporting them separately stops one axis from masking the other.
-
-For an adversarial pass that tries to break the change (a contested design, a risky diff), use `tstack:interrogate`.
 
 For a UI diff that adds or changes motion (transitions, keyframes, Motion, springs, gestures), also run `tstack:review-animations` on it and add its findings table and verdict after the summary.
