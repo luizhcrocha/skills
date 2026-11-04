@@ -40,7 +40,7 @@ Look for the originating spec, in this order:
 
 ### 3. Identify the standards sources
 
-Anything in the repo that documents how code should be written, such as `CODING_STANDARDS.md` or `CONTRIBUTING.md`.
+Anything in the repo that documents how code should be written, such as `CODING_STANDARDS.md` or `CONTRIBUTING.md`. A `REVIEW.md` at the repo's root goes to both sub-agents: it lists what failure looks like in this repo.
 
 If the diff touches TypeScript, also call the Skill tool with "lang-ts" and pass its relevant rules to the Standards sub-agent as a standards source, ranked below any repo-documented standard.
 
@@ -49,7 +49,7 @@ When the user asks for a stricter bar ("thermo-nuclear", "harsh maintainability 
 On top of whatever the repo documents, the Standards axis always carries the **smell baseline** below: a fixed set of Fowler code smells (_Refactoring_, ch.3) that applies even when a repo documents nothing. Two rules bind it:
 
 - **The repo overrides.** A documented repo standard always wins; where it endorses something the baseline would flag, suppress the smell.
-- **Always a judgement call.** Each smell is a labelled heuristic ("possible Feature Envy"), never a hard violation. Like any standard here, skip anything tooling already enforces.
+- **Always a judgement call.** Each smell is a labelled heuristic ("possible Feature Envy"), never a hard violation, and always a Nit. Like any standard here, skip anything tooling already enforces.
 
 Each smell reads *what it is* → *how to fix*; match it against the diff:
 
@@ -76,11 +76,17 @@ Both in one message: `general-purpose` agents playing the Reviewer role ([MODELS
 - The list of standards-source files you found in step 3, **plus the smell baseline from step 3** pasted in full (the sub-agent has no other access to it).
 - The brief: "Report, per file/hunk where relevant, (a) every place the diff violates a documented standard: cite the standard (file + the rule); and (b) any baseline smell you spot: name it and quote the hunk. Distinguish hard violations from judgement calls: documented-standard breaches can be hard, but baseline smells are always judgement calls, and a documented repo standard overrides the baseline. Skip anything tooling enforces. Under 400 words."
 
+Both sub-agents tag each finding Important, Nit or Pre-existing:
+
+- **Important** breaks behaviour, data, money, permissions or the spec. It carries its proof (a breaking input, a failing test, or a trace with file and line) and `Caught by:` the cheapest check that would have caught it with no reader (`type`, `lint`, `test`, `property`, `model` or `none`), with the rule it breaks in one line. No proof: it is a question, not a finding.
+- **Nit** is everything else, style, naming, smells and risks that need a future change to matter. Report the count and a list of one line each, and no fix round starts for them.
+- **Pre-existing** was there before this diff. It goes to follow-ups.
+
 **Spec sub-agent prompt** should include:
 
 - The diff command and commit list.
 - The path or fetched contents of the spec.
-- The brief: "Report: (a) requirements the spec asked for that are missing or partial; (b) behaviour in the diff that wasn't asked for (scope creep); (c) requirements that look implemented but where the implementation looks wrong. Quote the spec line for each finding. Under 400 words."
+- The brief: "Report: (a) requirements the spec asked for that are missing or partial; (b) behaviour in the diff that wasn't asked for (scope creep); (c) requirements that look implemented but where the implementation looks wrong. Quote the spec line for each finding. For each line of the repo's REVIEW.md the diff touches, say whether its check exists and covers this change. Under 400 words."
 
 If the spec is missing, skip the Spec sub-agent and note this in the final report.
 
@@ -88,9 +94,9 @@ If the spec is missing, skip the Spec sub-agent and note this in the final repor
 
 Present the two reports under `## Standards` and `## Spec` headings, verbatim or lightly cleaned. Do **not** merge or rerank findings, because the two axes are deliberately separate (see _Why two axes_).
 
-A finding that matches a memo gotcha, or that an earlier review of this repo already raised, is a lint candidate: name it after the reports as one for `tstack:lint-evolve`.
+After the reports, list the Important findings by `Caught by:`. The fix adds that check, red first. A finding that matches a memo gotcha, or that an earlier review of this repo already raised, is a candidate for its check: `tstack:lint-evolve` for `lint`, the repo's formal specs for `model`. A rule worth keeping becomes a line in the repo's REVIEW.md.
 
-End with a one-line summary: total findings per axis, and the worst issue _within each axis_ (if any). Don't pick a single winner across axes: that's the reranking the separation exists to prevent.
+End with a one-line summary: Important and Nit counts per axis, and the worst issue _within each axis_ (if any). Don't pick a single winner across axes: that's the reranking the separation exists to prevent.
 
 The report's last line is `Read: <change>@<commit>, ...`, the list step 1 noted, unchanged.
 
