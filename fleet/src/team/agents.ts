@@ -272,12 +272,16 @@ export function readTeam(repo: string, home: string): Team | Why {
   return { repo, session: name, agents };
 }
 
-/** The agent's first prompt: its opening, and the ledger it picks up when it has one, a sentence of its own after
- * a mission (a bare slash command takes it as its text). */
-export function openingOf(agent: Agent, ledger: string | undefined): string {
-  if (ledger === undefined) return agent.fleet.opening;
-  const opening = agent.fleet.opening;
-  const ended = !/\s/.test(opening) || /[.!?]$/.test(opening);
+/** The slash command every agent's first prompt runs, its task the agent's opening. */
+const TUCA_MODE = "/tstack:tuca-mode";
 
-  return `${ended ? opening : `${opening}.`} Your ledger is ${ledger}.`;
+/** The agent's first prompt: tuca-mode, its task the agent's opening (its role's skill, or its mission), and the
+ * ledger it picks up when it has one, a sentence of its own after a mission (after a bare slash command, its text). */
+export function openingOf(agent: Agent, ledger: string | undefined): string {
+  const own = agent.fleet.opening.trim();
+  const opening = own === TUCA_MODE ? "" : own.startsWith(`${TUCA_MODE} `) ? own.slice(TUCA_MODE.length + 1) : own;
+  const ended = !/\s/.test(opening) || /[.!?]$/.test(opening);
+  const task = ledger === undefined ? opening : `${ended ? opening : `${opening}.`} Your ledger is ${ledger}.`;
+
+  return [TUCA_MODE, task.trim()].filter((part) => part !== "").join(" ");
 }

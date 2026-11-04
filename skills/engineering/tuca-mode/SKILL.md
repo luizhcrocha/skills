@@ -3,7 +3,7 @@ name: tuca-mode
 description: Luiz's working mode for the session. A playbook for every task, the principles, autonomy and reply rules. Off with "stop tuca-mode".
 disable-model-invocation: true
 argument-hint: "[the task]"
-allowed-tools: Bash(${CLAUDE_PLUGIN_ROOT}/bin/tuca-mode:*) Read(/${CLAUDE_PLUGIN_ROOT}/**)
+allowed-tools: Bash(${CLAUDE_PLUGIN_ROOT}/bin/tuca-mode:*) Read(/${CLAUDE_PLUGIN_ROOT}/**) Glob(/${CLAUDE_PLUGIN_ROOT}/**)
 ---
 
 # tuca-mode
@@ -34,6 +34,8 @@ Ask it of every message from Luiz, the task given with this invocation included:
 - **Work Luiz steps away from** (any absence he announces: "I'm out for half an hour", "back after lunch", "stepping away", "for the night", "going to bed"; long or autonomous work) → keep a decision trail with `tstack:show-me-your-work`: a TSV in the scratchpad, one row per decision with its reason and evidence, audited against the transcript and reviewed before hand-back by a fresh agent (a Decider after a long absence, else a Reviewer), whose Attention section leads the hand-back. Durable lessons become memo notes.
 
 ## Coordinator, lazily
+
+**A task that starts with `/tstack:<skill>`** (`fleet team` opens a manager with `/tstack:tuca-mode /tstack:manager <mission>. Your ledger is <dir>.`): that command does not run here. Find its file with Glob, `${CLAUDE_PLUGIN_ROOT}/skills/*/<skill>/SKILL.md` (when the variable shows unexpanded, the plugin's root is three directories above this skill's), read it, and follow it as your role, then do the rest of the task under it. This comes before the coordinator rule below: a manager opened this way stays the manager, and its ledger is the manager's.
 
 Every tuca-mode session is a coordinator. The mindset always: your context is the scarce resource, so hand a subagent what a fresh window does as well (reading, research, sweeps, independent lanes) and keep the judgement, the integration and the reply. Quick wins, entangled work and shared scaffolding stay yours.
 

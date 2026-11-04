@@ -17,7 +17,7 @@ import * as Option from "effect/Option";
 import { strerror, writeOrWhy } from "../files.ts";
 import { asArray, asNumber, asObject, asString, parseObject, type JsonObject } from "../json.ts";
 import type { Agent, Why } from "./agents.ts";
-import type { Handle, Launcher, Look, Seen, Status, Tab } from "./launcher.ts";
+import { cmdLabel, type Handle, type Launcher, type Look, type Seen, type Status, type Tab } from "./launcher.ts";
 
 /** How long a start waits for Claude Code to say it is ready for its first prompt. */
 const START_MS = 120_000;
@@ -429,6 +429,23 @@ export function rexLauncher(options: RexOptions): Launcher {
       return failed;
     },
 
+    shell(session, shell) {
+      const found = idOf(session);
+
+      if ("why" in found) return found;
+      const { sid } = found;
+      const layout = { block: { flavor: TERMINAL, label: shell.label, options: { cwd: shell.cwd } } };
+      const made = rex(["api", "call", "-s", sid, "session.new_window", "-"], JSON.stringify({ window_label: shell.label, focus: false, layout }));
+
+      if ("why" in made) return { why: made.why };
+      const window = asString(made.result["window_id"]);
+
+      if (window === undefined) return { why: "rex made a window but did not say its ID" };
+      const moved = rex(["window", "move", "-s", sid, window, "--after", shell.beside]);
+
+      return "why" in moved ? { handle: window, label: shell.label, apart: moved.why } : { handle: window, label: shell.label };
+    },
+
     prompt(session, agent, text) {
       if (/[\r\n]/.test(text)) return { why: "a prompt holding a line break would be sent in parts" };
       const found = blockFor(session, agent);
@@ -480,7 +497,7 @@ export function rexLauncher(options: RexOptions): Launcher {
         return handle === undefined || label === undefined ? [] : [{ handle, label }];
       });
 
-      const agents = blocks.map((b) => seenOf(sid, b));
+      const agents = blocks.filter((b) => !b.label.endsWith(cmdLabel(""))).map((b) => seenOf(sid, b));
 
       return { tabs, agents } satisfies Look;
     },

@@ -81,6 +81,47 @@ function statusIs(state: string | undefined): (words: string) => Ran | undefined
 const FAST = { startMs: 300, settleMs: 300, pollMs: 50 } as const;
 
 describe("rex's calls", () => {
+  test("an agent's cmd tab is a window labelled after it, running a plain shell in its folder, moved right after the agent's tab", () => {
+    const rex = fakeRex((words) => (words.includes("session.new_window") ? { code: 0, stdout: JSON.stringify({ window_id: "window:2", block_ids: ["block:2"], revision: 2 }), stderr: "" } : undefined));
+    const shell = rexLauncher({ state: tmp("fleet-team-state-"), run: rex.run, ...FAST }).shell("skills", { cwd: "/r", label: "ui cmd", beside: "window:1" });
+
+    expect(shell).toEqual({ handle: "window:2", label: "ui cmd" });
+    const at = rex.calls.findIndex((c) => c.includes("session.new_window"));
+
+    expect(JSON.parse(rex.inputs[at] ?? "")).toEqual({
+      window_label: "ui cmd",
+      focus: false,
+      layout: { block: { flavor: "com.superlogical.terminal.shell", label: "ui cmd", options: { cwd: "/r" } } },
+    });
+    expect(rex.calls.slice(at + 1)).toEqual([`window move -s ${SID} window:2 --after window:1`]);
+  });
+
+  test("a cmd tab that rex could not move is kept, saying why it is not beside the agent's tab", () => {
+    const rex = fakeRex((words) =>
+      words.includes("session.new_window")
+        ? { code: 0, stdout: JSON.stringify({ window_id: "window:2", block_ids: ["block:2"], revision: 2 }), stderr: "" }
+        : words.includes("window move")
+          ? { code: 1, stdout: "", stderr: "no such window" }
+          : undefined,
+    );
+
+    const shell = rexLauncher({ state: tmp("fleet-team-state-"), run: rex.run, ...FAST }).shell("skills", { cwd: "/r", label: "ui cmd", beside: "window:1" });
+
+    expect("why" in shell ? undefined : { handle: shell.handle, apart: shell.apart?.includes("no such window") }).toEqual({ handle: "window:2", apart: true });
+  });
+
+  test("a look counts no cmd tab's shell as an agent", () => {
+    const rex = fakeRex((words) =>
+      words.includes("block ls")
+        ? { code: 0, stdout: JSON.stringify({ blocks: [{ block_id: "block:1", label: "ui", window_id: "window:1" }, { block_id: "block:2", label: "ui cmd", window_id: "window:2" }] }), stderr: "" }
+        : statusIs("idle")(words),
+    );
+
+    const look = rexLauncher({ state: tmp("fleet-team-state-"), run: rex.run, ...FAST }).look("skills");
+
+    expect("why" in look ? look.why : look.agents.map((a) => a.name)).toEqual(["ui"]);
+  });
+
   test("an agent's tab is a window of its own, labelled with it, running a new claude named after it, its system prompt in a file, kept open by a failure within the start's wait", () => {
     const rex = fakeRex(statusIs("idle"));
     const state = tmp("fleet-team-state-");
@@ -298,7 +339,7 @@ function reporting(state: string, word: string): readonly string[] {
   return ["/bin/sh", "-c", `${report(state)}; printf 'arg=[%s]\\n' "$0"; read line; ${report("working")}; echo "got=$line"; sleep 1; ${report("idle")}; sleep 600`, word];
 }
 
-const OPENING = "/tstack:coordinator Your ledger is /l.";
+const OPENING = "/tstack:tuca-mode /tstack:coordinator Your ledger is /l.";
 
 /** How a {@link fakeClaude} behaves. */
 interface Claude {

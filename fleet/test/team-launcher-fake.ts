@@ -8,7 +8,7 @@
  * {@link FakeLauncher.seed}. An ending read is a call too. A call named in {@link FakeLauncher.failing} answers as rex does when it cannot say.
  */
 import type { Why } from "../src/team/agents.ts";
-import type { Blocked, Handle, Launch, Launcher, Look, Opened, Seen, Settled, Status, Tab } from "../src/team/launcher.ts";
+import type { Blocked, Handle, Launch, Launcher, Look, Opened, Seen, Settled, Shell, ShellTab, Status, Tab } from "../src/team/launcher.ts";
 import { statusOf } from "../src/team/rex.ts";
 
 /** What a read says when the launcher cannot say. */
@@ -35,6 +35,14 @@ export class FakeLauncher implements Launcher {
   readonly prompts: string[] = [];
   /** The tabs' launches, by tab handle. */
   readonly launches = new Map<string, Launch>();
+  /** The cmd tabs opened, as `<session> <label> in <cwd> after <tab>`. */
+  readonly shells: string[] = [];
+  /** Why a new agent tab cannot be opened, when it cannot. */
+  tabFails: string | undefined;
+  /** The tabs that cannot be closed, by handle. */
+  readonly closeFails = new Set<Handle>();
+  /** Why a cmd tab cannot be moved beside its agent's tab, when it cannot: it is left last. */
+  moveFails: string | undefined;
   /** The agents whose start blocks on a prompt in their tab (a new folder's trust question) until {@link answer}. */
   readonly blockAtStart = new Set<string>();
   /** The agents whose program ends while a settle waits on them. */
@@ -84,6 +92,8 @@ export class FakeLauncher implements Launcher {
     const held = this.held.get(session);
 
     if (held === undefined) return { why: `no session ${session}` };
+
+    if (this.tabFails !== undefined) return { why: this.tabFails };
     const n = this.next++;
     const tab = { handle: `w1:t${String(n)}`, label: launch.label };
     this.calls.push(`tab ${session} ${launch.label}`);
@@ -93,6 +103,18 @@ export class FakeLauncher implements Launcher {
     held.agents.push({ name: launch.agent.name, tab: tab.handle, status: blocked ? "silent" : "working" });
 
     return blocked ? { blocked: tab } : tab;
+  }
+
+  shell(session: string, shell: Shell): ShellTab | Why {
+    const held = this.held.get(session);
+
+    if (held === undefined) return { why: `no session ${session}` };
+    const tab = { handle: `w1:c${String(this.shells.length + 1)}`, label: shell.label };
+    this.shells.push(`${session} ${shell.label} in ${shell.cwd} after ${shell.beside}`);
+    const at = this.moveFails === undefined ? held.tabs.findIndex((t) => t.handle === shell.beside) : -1;
+    held.tabs.splice(at === -1 ? held.tabs.length : at + 1, 0, tab);
+
+    return this.moveFails === undefined ? tab : { ...tab, apart: this.moveFails };
   }
 
   /** The user answers the prompt agent `agent` blocked on in `session`: it is ready. */
@@ -159,6 +181,8 @@ export class FakeLauncher implements Launcher {
     const held = this.held.get(session);
 
     if (held === undefined) return { why: `no session ${session}` };
+
+    if (this.closeFails.has(tab)) return { why: `rex window close ${tab}: busy` };
     held.tabs = held.tabs.filter((t) => t.handle !== tab);
     held.agents = held.agents.filter((a) => a.tab !== tab);
 

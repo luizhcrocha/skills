@@ -36,20 +36,21 @@ const HELP = `${USAGE}
 A repo's standing agents (.fleet/agents/<name>.json) as tabs of one rex session, named after the repo's
 folder or .fleet/team.json's "session". Run it in the repo or below it.
     start [NAME ...] [--trust]
-                           a tab per agent running a new claude, then its opening naming its ledger; one
+                           a tab per agent running a new claude --name NAME, a shell tab "NAME cmd" beside
+                           it in the repo, then /tstack:tuca-mode <its opening> naming its ledger; one
                            already running here is left, one running elsewhere is refused, saying where.
                            A repo Claude Code does not trust yet is asked about first, then trusted in its
                            .claude.json (--trust: without asking; no terminal and no --trust: refused)
     stop NAME ...|all [--force]
-                           close the agent's tab once it is ready, waiting at most 10 min (--force: at
-                           once); only tabs fleet team started that still run their agent
+                           close the agent's tab and its cmd tab once it is ready, waiting at most 10 min
+                           (--force: at once); only tabs fleet team started that still run their agent
     list [NAME ...]        each agent: running here, elsewhere (where), or not running
     attach                 show the team's session in the Rex app (rex do session.select)
     add NAME --project ID --mission TEXT [--role {coordinator,manager}] [--no-start] [--trust]
                            write .fleet/agents/NAME.json (at the repo's root when it has none yet;
                            never in / or the home folder): a coordinator unless --role, of project ID,
-                           its opening carrying TEXT (one line of plain text, at most 2000 characters);
-                           then start NAME alone, as start does (--no-start: only the file). A repo
+                           opening with /tstack:tuca-mode TEXT (a manager: /tstack:tuca-mode /tstack:manager
+                           TEXT; TEXT one line of plain text, at most 2000 characters); then start NAME alone, as start does (--no-start: only the file). A repo
                            with no owner/name, or a NAME whose ledger is another project's or repo's
                            team (a name is one per machine), is refused before anything is trusted or
                            written. A start that gives it no tab removes the file and the folders add

@@ -85,7 +85,98 @@ describe("start", () => {
       { cwd: at.repo, label: "boss", agent: "boss", system: "Keep the fleets moving." },
       { cwd: at.repo, label: "ui", agent: "ui", system: undefined },
     ]);
-    expect(launcher.prompts).toEqual([`boss: /tstack:manager Your ledger is ${LEDGER(at, "boss")}.`, `ui: /tstack:coordinator Your ledger is ${LEDGER(at, "ui")}.`]);
+    expect(launcher.prompts).toEqual([`boss: /tstack:tuca-mode /tstack:manager Your ledger is ${LEDGER(at, "boss")}.`, `ui: /tstack:tuca-mode /tstack:coordinator Your ledger is ${LEDGER(at, "ui")}.`]);
+    expect(launcher.shells).toEqual([`${at.session} boss cmd in ${at.repo} after w1:t1`, `${at.session} ui cmd in ${at.repo} after w1:t2`]);
+  });
+
+  test("a cmd tab that could not be moved beside its agent's tab is said so in the start line; the agent starts", () => {
+    const at = place();
+    const launcher = new FakeLauncher();
+    launcher.moveFails = "rex window move: no such window";
+    const ran = team(at, launcher, "start", "ui");
+
+    expect(ran).toEqual({
+      code: 0,
+      stdout:
+        `started session ${at.session}\n` +
+        `ui: started in session ${at.session}, tab w1:t1; its ledger is ${LEDGER(at, "ui")}; its cmd tab w1:c1 is not beside it but last in the session (rex window move: no such window)\n`,
+      stderr: "",
+    });
+    expect(team(at, launcher, "start", "ui").stdout).toBe(`ui: already running in session ${at.session}, tab w1:t1; left as it is\n`);
+  });
+
+  test("a restart that fails after the agent's program ended keeps its cmd tab marked: the next start reuses it", () => {
+    const at = place();
+    const launcher = new FakeLauncher();
+    team(at, launcher, "start", "ui");
+    launcher.exit(at.session, "ui");
+    launcher.tabFails = "rex: no room";
+
+    expect(team(at, launcher, "start", "ui").code).toBe(1);
+    launcher.tabFails = undefined;
+    team(at, launcher, "start", "ui");
+
+    expect(launcher.shells).toEqual([`${at.session} ui cmd in ${at.repo} after w1:t1`]);
+    expect(team(at, launcher, "stop", "ui").stdout).toStartWith("ui: stopped: tab w1:t2 closed once it was ready; its cmd tab w1:c1 too\n");
+  });
+
+  test("a restart that fails after the agent's program ended leaves its cmd tab for stop to close", () => {
+    const at = place();
+    const launcher = new FakeLauncher();
+    team(at, launcher, "start", "ui");
+    launcher.exit(at.session, "ui");
+    launcher.tabFails = "rex: no room";
+    team(at, launcher, "start", "ui");
+
+    expect(team(at, launcher, "stop", "ui")).toEqual({ code: 0, stdout: `ui: not running; its cmd tab w1:c1 is closed\nsession ${at.session} stopped: fleet team started it and nothing is left in it\n`, stderr: "" });
+    expect(launcher.calls.filter((c) => c.startsWith("close "))).toEqual([`close ${at.session} w1:t1`, `close ${at.session} w1:c1`]);
+  });
+
+  test("a cmd tab stop could not close keeps its mark, and the next stop closes it", () => {
+    const at = place();
+    const launcher = new FakeLauncher();
+    team(at, launcher, "start", "ui");
+    launcher.closeFails.add("w1:c1");
+
+    expect(team(at, launcher, "stop", "ui")).toEqual({ code: 1, stdout: "ui: stopped: tab w1:t1 closed once it was ready\n", stderr: "team: ui: its cmd tab w1:c1 could not be closed: rex window close w1:c1: busy\n" });
+    launcher.closeFails.clear();
+
+    expect(team(at, launcher, "stop", "ui").stdout).toStartWith("ui: not running; its cmd tab w1:c1 is closed\n");
+  });
+
+  test("a cmd tab the user closed is opened again by the next start, of a running agent or of one whose opening is resent", () => {
+    const at = place({ ui: '{"fleet": {"role": "coordinator"}}', web: '{"fleet": {"role": "coordinator"}}' });
+    const launcher = new FakeLauncher();
+    launcher.blockAtStart.add("web");
+    team(at, launcher, "start");
+    launcher.close(at.session, "w1:c1");
+    launcher.close(at.session, "w1:c2");
+    launcher.answer(at.session, "web");
+    team(at, launcher, "start");
+
+    expect(launcher.shells.slice(2)).toEqual([`${at.session} ui cmd in ${at.repo} after w1:t1`, `${at.session} web cmd in ${at.repo} after w1:t2`]);
+  });
+
+  test("a second start of an agent still running reuses its cmd tab; stop closes it with the agent", () => {
+    const at = place();
+    const launcher = new FakeLauncher();
+    team(at, launcher, "start", "ui");
+    team(at, launcher, "start", "ui");
+
+    expect(launcher.shells).toEqual([`${at.session} ui cmd in ${at.repo} after w1:t1`]);
+    expect(team(at, launcher, "stop", "ui").stdout).toBe(`ui: stopped: tab w1:t1 closed once it was ready; its cmd tab w1:c1 too\nsession ${at.session} stopped: fleet team started it and nothing is left in it\n`);
+    expect(launcher.calls.filter((c) => c.startsWith("close "))).toEqual([`close ${at.session} w1:t1`, `close ${at.session} w1:c1`]);
+  });
+
+  test("a restart after the agent's program ended keeps its cmd tab", () => {
+    const at = place();
+    const launcher = new FakeLauncher();
+    team(at, launcher, "start", "ui");
+    launcher.exit(at.session, "ui");
+    team(at, launcher, "start", "ui");
+
+    expect(launcher.shells).toHaveLength(1);
+    expect(launcher.calls.filter((c) => c.startsWith("close "))).toEqual([`close ${at.session} w1:t1`]);
   });
 
   test("is idempotent: an agent it already runs in this session is reported and left", () => {
@@ -122,7 +213,7 @@ describe("start", () => {
     const again = team(at, launcher, "start", "ui");
 
     expect(again).toEqual({ code: 0, stdout: `ui: started in session ${at.session}, tab w1:t1; its ledger is ${LEDGER(at, "ui")}\n`, stderr: "" });
-    expect(launcher.prompts).toEqual([`ui: /tstack:coordinator Your ledger is ${LEDGER(at, "ui")}.`]);
+    expect(launcher.prompts).toEqual([`ui: /tstack:tuca-mode /tstack:coordinator Your ledger is ${LEDGER(at, "ui")}.`]);
     expect(launcher.calls.filter((c) => c.startsWith("tab "))).toHaveLength(1);
     expect(team(at, launcher, "start", "ui").stdout).toBe(`ui: already running in session ${at.session}, tab w1:t1; left as it is\n`);
   });
@@ -174,7 +265,7 @@ describe("start", () => {
     launcher.endWhileSettling.add("ui");
 
     expect(team(at, launcher, "start", "ui").stdout).toBe(`ui: its program in tab w1:t1 had ended; the tab is closed\nui: started in session ${at.session}, tab w1:t2; its ledger is ${LEDGER(at, "ui")}\n`);
-    expect(launcher.prompts).toEqual([`ui: /tstack:coordinator Your ledger is ${LEDGER(at, "ui")}.`]);
+    expect(launcher.prompts).toEqual([`ui: /tstack:tuca-mode /tstack:coordinator Your ledger is ${LEDGER(at, "ui")}.`]);
   });
 
   test("team.json names the session", () => {
@@ -237,7 +328,7 @@ describe("start", () => {
     const ran = team(at, launcher, "start", "ui");
 
     expect(ran.code).toBe(0);
-    expect(launcher.prompts).toEqual([`ui: /tstack:coordinator Your ledger is ${old}.`]);
+    expect(launcher.prompts).toEqual([`ui: /tstack:tuca-mode /tstack:coordinator Your ledger is ${old}.`]);
     expect(lstatSync(old).isDirectory()).toBe(true);
     expect(existsSync(LEDGER(at, "ui"))).toBe(false);
   });
@@ -256,8 +347,8 @@ describe("stop", () => {
     team(at, launcher, "start", "ui");
     const ran = team(at, launcher, "stop", "ui");
 
-    expect(ran).toEqual({ code: 0, stdout: `ui: stopped: tab w1:t1 closed once it was ready\nsession ${at.session} stopped: fleet team started it and nothing is left in it\n`, stderr: "" });
-    expect(launcher.calls.slice(-3)).toEqual([`settle ${at.session} ui`, `close ${at.session} w1:t1`, `end ${at.session}`]);
+    expect(ran).toEqual({ code: 0, stdout: `ui: stopped: tab w1:t1 closed once it was ready; its cmd tab w1:c1 too\nsession ${at.session} stopped: fleet team started it and nothing is left in it\n`, stderr: "" });
+    expect(launcher.calls.slice(-4)).toEqual([`settle ${at.session} ui`, `close ${at.session} w1:t1`, `close ${at.session} w1:c1`, `end ${at.session}`]);
   });
 
   test("an agent whose start blocked on a prompt (opening unsent, still asking) is closed at once; one started normally that asks mid-task is waited for", () => {
@@ -282,7 +373,7 @@ describe("stop", () => {
     launcher.blockAtStart.add("ui");
     team(at, launcher, "start", "ui");
 
-    expect(team(at, launcher, "stop", "ui").stdout).toStartWith("ui: stopped: tab w1:t1 closed at once: it waited on a prompt\n");
+    expect(team(at, launcher, "stop", "ui").stdout).toStartWith("ui: stopped: tab w1:t1 closed at once: it waited on a prompt; its cmd tab w1:c1 too\n");
     expect(launcher.calls.filter((c) => c.startsWith("settle "))).toEqual([]);
   });
 
@@ -324,12 +415,12 @@ describe("stop", () => {
     launcher.endings.set("ui", "exit status 1");
 
     expect(team(at, launcher, "list").stdout).toStartWith(`ui  not running: its program ended (exit status 1) in session ${at.session}, tab w1:t1;`);
-    expect(team(at, launcher, "stop", "ui").stdout).toStartWith("ui: stopped: tab w1:t1 closed at once: its program had ended (exit status 1)\n");
+    expect(team(at, launcher, "stop", "ui").stdout).toStartWith("ui: stopped: tab w1:t1 closed at once: its program had ended (exit status 1); its cmd tab w1:c1 too\n");
     team(at, launcher, "start", "ui");
     launcher.endWhileSettling.add("ui");
     launcher.endings.set("ui", "exit status 2");
 
-    expect(team(at, launcher, "stop", "ui").stdout).toStartWith("ui: stopped: tab w1:t2 closed once its program ended (exit status 2)\n");
+    expect(team(at, launcher, "stop", "ui").stdout).toStartWith("ui: stopped: tab w1:t2 closed once its program ended (exit status 2); its cmd tab w1:c2 too\n");
   });
 
   test("--force on a program that ended still says how", () => {
@@ -339,7 +430,7 @@ describe("stop", () => {
     launcher.exit(at.session, "ui");
     launcher.endings.set("ui", "exit status 1");
 
-    expect(team(at, launcher, "stop", "--force", "ui").stdout).toStartWith("ui: stopped: tab w1:t1 closed at once: its program had ended (exit status 1)\n");
+    expect(team(at, launcher, "stop", "--force", "ui").stdout).toStartWith("ui: stopped: tab w1:t1 closed at once: its program had ended (exit status 1); its cmd tab w1:c1 too\n");
   });
 
   test("how a program ended, and whether it did, is the agent's own, not another block's in its tab", () => {
@@ -378,13 +469,13 @@ describe("stop", () => {
     launcher.exit(at.session, "ui");
 
     expect(team(at, launcher, "list").stdout).toBe(`ui  not running: its program ended in session ${at.session}, tab w1:t1; \`fleet team start ui\` closes that tab and starts it again\n`);
-    expect(team(at, launcher, "stop", "ui").stdout).toBe(`ui: stopped: tab w1:t1 closed at once: its program had ended\nsession ${at.session} stopped: fleet team started it and nothing is left in it\n`);
+    expect(team(at, launcher, "stop", "ui").stdout).toBe(`ui: stopped: tab w1:t1 closed at once: its program had ended; its cmd tab w1:c1 too\nsession ${at.session} stopped: fleet team started it and nothing is left in it\n`);
     expect(launcher.calls.filter((c) => c.startsWith("settle "))).toEqual([]);
 
     team(at, launcher, "start", "ui");
     launcher.endWhileSettling.add("ui");
 
-    expect(team(at, launcher, "stop", "ui").stdout).toStartWith("ui: stopped: tab w1:t2 closed once its program ended\n");
+    expect(team(at, launcher, "stop", "ui").stdout).toStartWith("ui: stopped: tab w1:t2 closed once its program ended; its cmd tab w1:c2 too\n");
   });
 
   test("--force closes at once, and a session it did not start is left running", () => {
@@ -393,7 +484,7 @@ describe("stop", () => {
     team(at, launcher, "start", "ui");
     const ran = team(at, launcher, "stop", "--force", "all");
 
-    expect(ran).toEqual({ code: 0, stdout: "ui: stopped: tab w1:t1 closed\n", stderr: "" });
+    expect(ran).toEqual({ code: 0, stdout: "ui: stopped: tab w1:t1 closed; its cmd tab w1:c1 too\n", stderr: "" });
     expect(launcher.calls.some((c) => c.startsWith("settle ") || c.startsWith("end "))).toBe(false);
   });
 
@@ -608,7 +699,7 @@ describe("safety", () => {
     team(at, launcher, "start", "ui");
     launcher.failing.add("owns");
 
-    expect(team(at, launcher, "stop", "ui")).toEqual({ code: 1, stdout: "ui: stopped: tab w1:t1 closed once it was ready\n", stderr: "team: rex ls: connection reset\n" });
+    expect(team(at, launcher, "stop", "ui")).toEqual({ code: 1, stdout: "ui: stopped: tab w1:t1 closed once it was ready; its cmd tab w1:c1 too\n", stderr: "team: rex ls: connection reset\n" });
     expect(launcher.sessions()).toEqual([at.session]);
     expect(JSON.parse(readFileSync(join(at.registry, "team", at.session, "marks.json"), "utf8")).session).toBeString();
     launcher.failing.delete("owns");
@@ -669,7 +760,7 @@ describe("safety", () => {
     })();
 
     expect(team(at, blind, "stop", "--force", "ui")).toEqual({ code: 1, stdout: "", stderr: `team: ui: session ${at.session} could not be read (rex could not run); its tab w1:t1 is left, and so is its mark\n` });
-    expect(team(at, launcher, "stop", "--force", "ui").stdout).toStartWith("ui: stopped: tab w1:t1 closed\n");
+    expect(team(at, launcher, "stop", "--force", "ui").stdout).toStartWith("ui: stopped: tab w1:t1 closed; its cmd tab w1:c1 too\n");
   });
 
   test("a session name that is a path or an option is refused", () => {
@@ -872,7 +963,7 @@ describe("an agent of a project", () => {
       stderr: "",
     });
     expect(host.sent.map((s) => s.body)).toEqual([{ repo: "coelhorocha/custom-mcp-servers", path: at.repo, role: "manager", team: "boss" }]);
-    expect(launcher.prompts).toEqual([`boss: /tstack:manager Your ledger is ${LEDGER(at, "boss")}.`]);
+    expect(launcher.prompts).toEqual([`boss: /tstack:tuca-mode /tstack:manager Your ledger is ${LEDGER(at, "boss")}.`]);
   });
 
   test("an agent whose ledger the host cut over already starts with no join", async () => {
@@ -884,7 +975,7 @@ describe("an agent of a project", () => {
 
     expect(ran.code).toBe(0);
     expect(host.sent).toEqual([]);
-    expect(launcher.prompts).toEqual([`ui: /tstack:coordinator Your ledger is ${LEDGER(at, "ui")}.`]);
+    expect(launcher.prompts).toEqual([`ui: /tstack:tuca-mode /tstack:coordinator Your ledger is ${LEDGER(at, "ui")}.`]);
   });
 
   test("an agent whose join is refused, or whose ledger is not cut over in time, does not start; the others do", async () => {
@@ -900,7 +991,7 @@ describe("an agent of a project", () => {
         "team: ui: project court is archived: it is read-only, and no team joins it\n" +
         `team: ux: the host has not cut ${LEDGER(at, "ux")} over to the cloud yet (no cloud.json after 0.2 s): \`fleet team start ux\` again waits for it\n`,
     });
-    expect(launcher.prompts).toEqual([`web: /tstack:coordinator Your ledger is ${LEDGER(at, "web")}.`]);
+    expect(launcher.prompts).toEqual([`web: /tstack:tuca-mode /tstack:coordinator Your ledger is ${LEDGER(at, "web")}.`]);
   });
 
   test("an agent with both fleet.ledger and fleet.project, its ledger not cut over, is refused before any join", async () => {
@@ -990,7 +1081,7 @@ describe("an agent of a project", () => {
     const ran = await start(at, launcher);
 
     expect(ran.stderr).toBe("");
-    expect(launcher.prompts).toEqual([`ui: /tstack:coordinator Your ledger is ${join(at.home, "own")}.`]);
+    expect(launcher.prompts).toEqual([`ui: /tstack:tuca-mode /tstack:coordinator Your ledger is ${join(at.home, "own")}.`]);
   });
 
   test("an agent of a project whose ledger moved to the cloud under no project is refused: it would never join", async () => {
@@ -1017,7 +1108,7 @@ describe("an agent of a project", () => {
 
     expect((await start(at, launcher)).code).toBe(0);
     expect(host.sent).toEqual([]);
-    expect(launcher.prompts).toEqual([`ui: /tstack:coordinator Your ledger is ${LEDGER(at, "ui")}.`]);
+    expect(launcher.prompts).toEqual([`ui: /tstack:tuca-mode /tstack:coordinator Your ledger is ${LEDGER(at, "ui")}.`]);
   });
 
   test("a repo with no owner/name identity is refused before the trust is written", async () => {
@@ -1113,7 +1204,7 @@ describe("add", () => {
     expect(ran.code).toBe(0);
     expect(JSON.parse(readFileSync(fileOf(at, "boss"), "utf8"))).toEqual({ fleet: { role: "manager", project: "court", mission: "Land the court work" } });
     expect(host.sent.map((s) => s.body)).toEqual([{ repo: "coelhorocha/custom-mcp-servers", path: at.repo, role: "manager", team: "boss" }]);
-    expect(launcher.prompts).toEqual([`boss: /tstack:manager Land the court work. Your ledger is ${LEDGER(at, "boss")}.`]);
+    expect(launcher.prompts).toEqual([`boss: /tstack:tuca-mode /tstack:manager Land the court work. Your ledger is ${LEDGER(at, "boss")}.`]);
   });
 
   test("--no-start writes the file and starts nothing", async () => {

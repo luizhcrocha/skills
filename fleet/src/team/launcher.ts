@@ -49,6 +49,24 @@ export interface Launch {
   readonly agent: Agent;
 }
 
+/** What a cmd tab runs: a plain shell in `cwd`, the tab labelled `label`, placed right after tab `beside`. */
+export interface Shell {
+  readonly cwd: string;
+  readonly label: string;
+  readonly beside: Handle;
+}
+
+/** A cmd tab opened: its tab, and why it is not beside its agent's tab when it could not be moved there (it is left
+ * last in the session). */
+export interface ShellTab extends Tab {
+  readonly apart?: string;
+}
+
+/** The label of agent `agent`'s cmd tab, the shell beside its tab for its owner's commands. */
+export function cmdLabel(agent: string): string {
+  return `${agent} cmd`;
+}
+
 /** A tab whose agent blocked at its start on a prompt in it (in a folder Claude Code has not trusted yet, its trust
  * question): the tab is kept, for the user to answer the prompt; no one answers it for them. */
 export interface Blocked {
@@ -72,6 +90,8 @@ export interface Launcher {
   /** A new tab in `session` running `launch.agent`, named after it; returns once it is ready for its first prompt,
    * or, its tab kept, once its start blocks on a prompt in it. Any other failure closes the tab. */
   tab(session: string, launch: Launch): Tab | Blocked | Why;
+  /** A new tab in `session` running a plain shell ({@link Shell}); no agent runs in it. */
+  shell(session: string, shell: Shell): ShellTab | Why;
   /** Submit `text` to agent `agent` without waiting for its turn to end. */
   prompt(session: string, agent: string, text: string): Why | undefined;
   /** The tabs and agents of `session`. */

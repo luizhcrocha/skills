@@ -4602,10 +4602,20 @@ says `all`; `attach` takes none. `add` takes its own arguments (below).
   `command`, each argument reaching claude as it is (no shell quoting in between). The system prompt goes in
   `REGISTRY/team/<session>/<name>.system.md`. The start waits, at most 2 minutes, for Claude Code to say it is
   ready: it reports its state to the terminal (the program status protocol, OSC 7501), read back with `rex
-  block call <block> program_status` (the root record: `idle` or `done` is ready). Then the opening and
+  block call <block> program_status` (the root record: `idle` or `done` is ready). Then `/tstack:tuca-mode
+  <opening>` (an opening that already starts with `/tstack:tuca-mode` is not given it twice) and
   `Your ledger is <path>.` are typed into its block (an opening that carries text and ends in no `.`, `!` or `?`
   gets a `.` first, so the ledger is a sentence of its own after a mission) (`rex send`, the text on stdin) and submitted (`rex
   send-key enter`); a prompt holding a line break is refused, since each line would be sent alone.
+  Each agent also gets a cmd tab: a window labelled `<name> cmd` (`session.new_window`, not focused, its block
+  a `com.superlogical.terminal.shell` given only the repo as `cwd`), moved right after the agent's tab (`rex
+  window move -s <sid> <window> --after <agent's window>`) and marked as the agent's `cmd` in marks.json. A
+  move that fails leaves the cmd tab last in the session and says so in the start line (`...; its cmd tab
+  w1:c1 is not beside it but last in the session (<why>)`); the agent is started all the same. A cmd tab that
+  is not opened is a refusal of its own. A second `start` of a running agent, or one that sends an unsent
+  opening, keeps its cmd tab when it is still open, else opens one. The cmd mark outlives the agent's tab when
+  a restart fails, so the next `start` reuses the cmd tab and `stop` closes it (`ui: not running; its cmd tab
+  w1:c1 is closed`). A look counts no `... cmd` block as an agent.
   An agent whose start blocks on a prompt in its tab (it reports `blocked`, or reports nothing for the 2
   minutes while its program runs, as Claude Code does before its prompt is up; in a folder Claude Code has
   not trusted yet, its trust question) keeps its tab, marked `"opening": "unsent"` in marks.json, and
@@ -4695,7 +4705,8 @@ says `all`; `attach` takes none. `add` takes its own arguments (below).
   another repo, and the repo that wrote it adds `"repo"` to marks.json, as the refusal says, which leaves its agents
   running where closing the session in the Rex app kills them. One that no longer holds, as herdr's handles never do, leaves the session free.
 - **stop.** Waits, at most 10 minutes, until the agent is ready (its block's `process`, then its
-  `program_status`, asked twice a second), then closes its tab (`rex window close`); `--force` closes at once,
+  `program_status`, asked twice a second), then closes its tab (`rex window close`) and its cmd tab (`ui: stopped: tab w1:t1 closed once it was ready;
+  its cmd tab w1:c1 too`), `--force` closing at once,
   and a wait that gives up says so. An agent whose program has ended is closed at once (`ui: stopped: tab
   w1:t1 closed at once: its program had ended (<how>)`), `--force` saying so too, and one whose program ends during
   the wait is closed then (`closed once its program ended (<how>)`). An agent
@@ -4720,7 +4731,8 @@ says `all`; `attach` takes none. `add` takes its own arguments (below).
 - **add.** `fleet team add NAME --project ID --mission TEXT [--role {coordinator,manager}] [--no-start]
   [--trust]` writes `.fleet/agents/NAME.json`, `{"fleet": {"role": <role>, "project": ID, "mission": TEXT}}`
   (role `coordinator` unless `--role`), then starts NAME alone, as `start NAME` does: the trust question, the
-  join of project ID under NAME, a tab of its own in the repo's session, the opening carrying the mission. It
+  join of project ID under NAME, a tab of its own in the repo's session with its cmd tab beside it, the opening
+  (`/tstack:tuca-mode <mission>`) carrying the mission. It
   runs in the repo the agent works in: the nearest folder up holding `.fleet/agents`, else the nearest holding
   `.jj` or `.git`, where it makes `.fleet/agents`; in no repo it is refused (`<cwd> is in no repo (...): run it
   in the repo the agent works in`), and a repo that is `/`, the home folder or a folder above it, by their

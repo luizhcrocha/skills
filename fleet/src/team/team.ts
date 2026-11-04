@@ -20,7 +20,7 @@ import { asObject, asString, parseObject } from "../json.ts";
 import { withLockAt } from "../lock.ts";
 import type { Entry } from "../registry.ts";
 import { openingOf, type Agent, type Team, type Why } from "./agents.ts";
-import type { Handle, Launcher, Look, Settled, Tab } from "./launcher.ts";
+import { cmdLabel, type Handle, type Launcher, type Look, type Settled, type Tab } from "./launcher.ts";
 import { fixedHomes, isAgentsEntry, ledgerOf } from "./ledger.ts";
 
 /** What the commands work on. */
@@ -44,12 +44,13 @@ export interface Said {
 }
 
 /** What `fleet team` started: the repo whose team it is, the session's handle when it started it, each agent's
- * tab, and the agents whose opening is not sent yet: their start blocked on a prompt in their tab, their opening is
+ * tab and its cmd tab, and the agents whose opening is not sent yet: their start blocked on a prompt in their tab, their opening is
  * being sent, or sending it failed. */
 interface Marks {
   readonly repo: string | undefined;
   readonly session: Handle | undefined;
   readonly agents: Readonly<Record<string, Handle>>;
+  readonly cmds: Readonly<Record<string, Handle>>;
   readonly unsent: readonly string[];
 }
 
@@ -60,6 +61,7 @@ function marksPath(ground: Ground): string {
 function readMarks(ground: Ground): Marks {
   const raw = Option.getOrUndefined(parseObject(readText(marksPath(ground)) ?? ""));
   const agents: Record<string, Handle> = {};
+  const cmds: Record<string, Handle> = {};
   const unsent: string[] = [];
 
   for (const [name, value] of Object.entries(asObject(raw?.["agents"]) ?? {})) {
@@ -68,13 +70,40 @@ function readMarks(ground: Ground): Marks {
     if (tab !== undefined && asObject(value)?.["opening"] === "unsent") unsent.push(name);
 
     if (tab !== undefined) agents[name] = tab;
+    const cmd = asString(asObject(value)?.["cmd"]);
+
+    if (cmd !== undefined) cmds[name] = cmd;
   }
 
-  return { repo: asString(raw?.["repo"]), session: asString(raw?.["session"]), agents, unsent };
+  return { repo: asString(raw?.["repo"]), session: asString(raw?.["session"]), agents, cmds, unsent };
+}
+
+/** One agent's entry in marks.json: its tab, its cmd tab, and whether its opening is unsent. A cmd tab outlives
+ * its agent's tab when a restart fails, so `start` reuses it and `stop` closes it. */
+interface AgentMark {
+  tab?: Handle;
+  cmd?: Handle;
+  opening?: "unsent";
 }
 
 function writeMarks(ground: Ground, marks: Marks): Why | undefined {
-  const agents = Object.fromEntries(Object.entries(marks.agents).map(([name, tab]) => [name, marks.unsent.includes(name) ? { tab, opening: "unsent" } : { tab }]));
+  const names = [...new Set([...Object.keys(marks.agents), ...Object.keys(marks.cmds)])];
+
+  const agents = Object.fromEntries(
+    names.map((name) => {
+      const mark: AgentMark = {};
+      const tab = marks.agents[name];
+      const cmd = marks.cmds[name];
+
+      if (tab !== undefined) mark.tab = tab;
+
+      if (cmd !== undefined) mark.cmd = cmd;
+
+      if (tab !== undefined && marks.unsent.includes(name)) mark.opening = "unsent";
+
+      return [name, mark];
+    }),
+  );
 
   return writeOrWhy(marksPath(ground), `${JSON.stringify({ repo: ground.team.repo, session: marks.session, agents }, null, 2)}\n`);
 }
@@ -90,7 +119,7 @@ function ownMarks(ground: Ground): Marks | Why {
   if (nothing || (marks.repo !== undefined && realOf(marks.repo) === realOf(ground.team.repo))) return marks;
   const held = holds(ground, marks);
 
-  if (held === false) return { repo: ground.team.repo, session: undefined, agents: {}, unsent: [] };
+  if (held === false) return { repo: ground.team.repo, session: undefined, agents: {}, cmds: {}, unsent: [] };
   const holder = marks.repo ?? "a repo its marks do not name";
 
   if (held !== true) return { why: `session ${ground.team.session} may be the team of ${holder}, and whether it still is could not be read (${held.why}); nothing is done` };
@@ -128,8 +157,16 @@ function holds(ground: Ground, marks: Marks): boolean | Why {
 
 function withoutAgent(marks: Marks, name: string): Marks {
   const { [name]: _gone, ...agents } = marks.agents;
+  const { [name]: _cmd, ...cmds } = marks.cmds;
 
-  return { ...marks, agents, unsent: marks.unsent.filter((n) => n !== name) };
+  return { ...marks, agents, cmds, unsent: marks.unsent.filter((n) => n !== name) };
+}
+
+/** Agent `name`'s cmd tab in `look` when `fleet team` opened it and it is still labelled so. */
+function ourCmd(marks: Marks, look: Look | undefined, name: string): Tab | undefined {
+  const mark = marks.cmds[name];
+
+  return mark === undefined ? undefined : look?.tabs.find((t) => t.handle === mark && t.label === cmdLabel(name));
 }
 
 /** The agent's tab in `look` when `fleet team` started it and it still runs it: the marked tab, still labelled
@@ -234,6 +271,23 @@ function startLocked(ground: Ground, agents: readonly Agent[], before: BeforeSta
     if (failed !== undefined) refused.push(`its marks were not saved: ${failed.why}`);
   };
 
+  /** Open agent's cmd tab beside tab `beside` unless it is open: the words for its start line when the tab is not
+   * beside it, empty otherwise. */
+  const withCmd = (agent: Agent, beside: Handle): string => {
+    if (ourCmd(marks, lookOf(ground, session), agent.name) !== undefined) return "";
+    const made = ground.launcher.shell(session, { cwd: ground.team.repo, label: cmdLabel(agent.name), beside });
+
+    if ("why" in made) {
+      refused.push(`${agent.name}: its cmd tab was not opened: ${made.why}`);
+
+      return "";
+    }
+
+    save({ ...marks, cmds: { ...marks.cmds, [agent.name]: made.handle } });
+
+    return made.apart === undefined ? "" : `; its cmd tab ${made.handle} is not beside it but last in the session (${made.apart})`;
+  };
+
   for (const agent of agents) {
     if (agent.fleet.machine !== "local") {
       refused.push(`${agent.name}: runs on machine '${agent.fleet.machine}'; an agent away from this machine needs a launcher on that machine, which is not built; only local agents start`);
@@ -260,11 +314,12 @@ function startLocked(ground: Ground, agents: readonly Agent[], before: BeforeSta
           continue;
         }
 
+        const apart = withCmd(agent, mine.handle);
         const said = sendOpening(ground, agent, mine.handle, ledger.ledger);
 
-        if ("refused" in said) refused.push(said.refused);
+        if ("refused" in said) refused.push(`${said.refused}${apart}`);
         else {
-          lines.push(said.line);
+          lines.push(`${said.line}${apart}`);
           save({ ...marks, unsent: marks.unsent.filter((n) => n !== agent.name) });
         }
 
@@ -288,7 +343,7 @@ function startLocked(ground: Ground, agents: readonly Agent[], before: BeforeSta
         continue;
       }
 
-      save(withoutAgent(marks, agent.name));
+      save({ ...withoutAgent(marks, agent.name), cmds: marks.cmds });
       lines.push(`${agent.name}: its program in tab ${mine.handle} had ended${how}; the tab is closed`);
       here = lookOf(ground, session);
     }
@@ -296,7 +351,9 @@ function startLocked(ground: Ground, agents: readonly Agent[], before: BeforeSta
     const already = runningHere(ground, marks, here, agent);
 
     if (already !== undefined) {
-      lines.push(already);
+      const tab = ourTab(marks, here, agent.name);
+
+      lines.push(`${already}${tab === undefined ? "" : withCmd(agent, tab.handle)}`);
       continue;
     }
 
@@ -327,7 +384,7 @@ function startLocked(ground: Ground, agents: readonly Agent[], before: BeforeSta
 
       if (open.started !== undefined) {
         lines.push(`started session ${session}`);
-        save({ repo: ground.team.repo, session: open.started, agents: {}, unsent: [] });
+        save({ repo: ground.team.repo, session: open.started, agents: {}, cmds: {}, unsent: [] });
       } else if (marks.session !== undefined && ground.launcher.owns(session, marks.session) === false) save({ ...marks, session: undefined });
     }
 
@@ -340,19 +397,21 @@ function startLocked(ground: Ground, agents: readonly Agent[], before: BeforeSta
 
     if ("blocked" in made) {
       save({ ...marks, agents: { ...marks.agents, [agent.name]: made.blocked.handle }, unsent: [...marks.unsent.filter((n) => n !== agent.name), agent.name] });
+      const apart = withCmd(agent, made.blocked.handle);
       refused.push(
         `${agent.name}: waits on a prompt in its tab ${made.blocked.handle} before it is ready, the tab kept open (a startup prompt: trust, an MCP server's approval, ...): ` +
-          `run \`fleet team attach\`, answer it, then \`fleet team start ${agent.name}\` again, which sends its opening and leaves the running agent as it is`,
+          `run \`fleet team attach\`, answer it, then \`fleet team start ${agent.name}\` again, which sends its opening and leaves the running agent as it is${apart}`,
       );
       continue;
     }
 
     save({ ...marks, agents: { ...marks.agents, [agent.name]: made.handle }, unsent: [...marks.unsent.filter((n) => n !== agent.name), agent.name] });
+    const apart = withCmd(agent, made.handle);
     const said = sendOpening(ground, agent, made.handle, found.ledger);
 
-    if ("refused" in said) refused.push(said.refused);
+    if ("refused" in said) refused.push(`${said.refused}${apart}`);
     else {
-      lines.push(said.line);
+      lines.push(`${said.line}${apart}`);
       save({ ...marks, unsent: marks.unsent.filter((n) => n !== agent.name) });
     }
   }
@@ -391,8 +450,47 @@ function stopLocked(ground: Ground, agents: readonly Agent[], force: boolean): S
     if (failed !== undefined) refused.push(`its marks were not saved: ${failed.why}`);
   };
 
+  /** Close agent `name`'s cmd tab when it is still ours and drop the agent's marks: the words saying so, empty
+   * when there is none. A cmd tab that could not be closed keeps its mark, for the next stop to close. */
+  const closeCmd = (name: string, look: Look): string => {
+    const cmd = ourCmd(marks, look, name);
+    const closed = cmd === undefined ? undefined : ground.launcher.close(session, cmd.handle);
+
+    if (cmd === undefined || closed === undefined) {
+      save(withoutAgent(marks, name));
+
+      return cmd === undefined ? "" : `; its cmd tab ${cmd.handle} too`;
+    }
+
+    refused.push(`${name}: its cmd tab ${cmd.handle} could not be closed: ${closed.why}`);
+    save({ ...withoutAgent(marks, name), cmds: marks.cmds });
+
+    return "";
+  };
+
   for (const agent of agents) {
     const mark = marks.agents[agent.name];
+
+    if (mark === undefined && marks.cmds[agent.name] !== undefined) {
+      const look = ground.launcher.look(session);
+
+      if ("why" in look) {
+        refused.push(`${agent.name}: not running; whether its cmd tab is open could not be read: ${look.why}`);
+        continue;
+      }
+
+      const cmd = ourCmd(marks, look, agent.name);
+      const closed = cmd === undefined ? undefined : ground.launcher.close(session, cmd.handle);
+
+      if (cmd !== undefined && closed !== undefined) {
+        refused.push(`${agent.name}: its cmd tab ${cmd.handle} could not be closed: ${closed.why}`);
+        continue;
+      }
+
+      lines.push(cmd === undefined ? `${agent.name}: not running; its cmd tab is gone, its mark dropped` : `${agent.name}: not running; its cmd tab ${cmd.handle} is closed`);
+      save(withoutAgent(marks, agent.name));
+      continue;
+    }
 
     if (mark === undefined) {
       refused.push(`${agent.name}: fleet team did not start it in session ${session}; left as it is`);
@@ -409,8 +507,7 @@ function stopLocked(ground: Ground, agents: readonly Agent[], force: boolean): S
     const tab = ourTab(marks, look, agent.name);
 
     if (tab === undefined) {
-      lines.push(`${agent.name}: not running: its tab ${mark} no longer runs it; its mark is dropped`);
-      save(withoutAgent(marks, agent.name));
+      lines.push(`${agent.name}: not running: its tab ${mark} no longer runs it; its mark is dropped${closeCmd(agent.name, look)}`);
       continue;
     }
 
@@ -433,8 +530,8 @@ function stopLocked(ground: Ground, agents: readonly Agent[], force: boolean): S
       continue;
     }
 
-    save(withoutAgent(marks, agent.name));
-    lines.push(`${agent.name}: stopped: tab ${tab.handle} closed${how}`);
+    const cmd = closeCmd(agent.name, look);
+    lines.push(`${agent.name}: stopped: tab ${tab.handle} closed${how}${cmd}`);
   }
 
   if (marks.session !== undefined && Object.keys(marks.agents).length === 0 && lookOf(ground, session)?.tabs.length === 0) {
@@ -444,7 +541,7 @@ function stopLocked(ground: Ground, agents: readonly Agent[], force: boolean): S
 
       if (ended === undefined) {
         lines.push(`session ${session} stopped: fleet team started it and nothing is left in it`);
-        save({ repo: ground.team.repo, session: undefined, agents: {}, unsent: [] });
+        save({ repo: ground.team.repo, session: undefined, agents: {}, cmds: {}, unsent: [] });
       } else refused.push(ended.why);
     }
   }

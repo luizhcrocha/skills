@@ -3,8 +3,8 @@
  * `fleet` block, the defaults a role gives, the session `.fleet/team.json` names, and the sentence that names
  * the field a bad file gets wrong.
  */
-import { mkdirSync, writeFileSync } from "node:fs";
-import { basename, join } from "node:path";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { basename, dirname, join } from "node:path";
 
 import { describe, expect, test } from "bun:test";
 
@@ -174,8 +174,8 @@ describe("what a tab runs", () => {
     const agent = parseAgent("ui", '{"fleet": {"role": "coordinator"}}');
 
     if ("why" in agent) throw new Error(agent.why);
-    expect(openingOf(agent, "/s/fleet/ui")).toBe("/tstack:coordinator Your ledger is /s/fleet/ui.");
-    expect(openingOf(agent, undefined)).toBe("/tstack:coordinator");
+    expect(openingOf(agent, "/s/fleet/ui")).toBe("/tstack:tuca-mode /tstack:coordinator Your ledger is /s/fleet/ui.");
+    expect(openingOf(agent, undefined)).toBe("/tstack:tuca-mode /tstack:coordinator");
   });
 
   test("the ledger is a sentence of its own after a mission", () => {
@@ -191,5 +191,27 @@ describe("what a tab runs", () => {
     expect(opened("Sync the court data.", "/s/fleet/api")).toBe("/tstack:tuca-mode Sync the court data. Your ledger is /s/fleet/api.");
     expect(opened("Is the sync done?", "/s/fleet/api")).toBe("/tstack:tuca-mode Is the sync done? Your ledger is /s/fleet/api.");
     expect(opened("Sync the court data", undefined)).toBe("/tstack:tuca-mode Sync the court data");
+  });
+
+  test("an opening that is tuca-mode alone is not wrapped in it twice", () => {
+    const agent = parseAgent("ui", JSON.stringify({ fleet: { role: "coordinator", opening: "/tstack:tuca-mode" } }));
+
+    expect("why" in agent ? agent.why : [openingOf(agent, "/s/fleet/ui"), openingOf(agent, undefined)]).toEqual(["/tstack:tuca-mode Your ledger is /s/fleet/ui.", "/tstack:tuca-mode"]);
+  });
+
+  test("a manager's opening names its role skill first, and tuca-mode's text runs a task that starts with a skill as that role", () => {
+    const plugin = dirname(dirname(import.meta.dir));
+    const agent = parseAgent("boss", JSON.stringify({ fleet: { role: "manager", mission: "Keep the fleets moving" } }));
+    const opening = "why" in agent ? agent.why : openingOf(agent, "/s/fleet/boss");
+
+    expect(opening).toBe("/tstack:tuca-mode /tstack:manager Keep the fleets moving. Your ledger is /s/fleet/boss.");
+    expect(existsSync(join(plugin, "skills", "productivity", "manager", "SKILL.md"))).toBe(true);
+    const tuca = readFileSync(join(plugin, "skills", "engineering", "tuca-mode", "SKILL.md"), "utf8");
+    const rule = tuca.indexOf("**A task that starts with `/tstack:<skill>`**");
+
+    expect(rule).toBeGreaterThan(-1);
+    expect(tuca.slice(rule, tuca.indexOf("\n", rule))).toContain("Find its file with Glob, `${CLAUDE_PLUGIN_ROOT}/skills/*/<skill>/SKILL.md`");
+    expect(tuca).toMatch(/^allowed-tools: .*Glob\(\/\$\{CLAUDE_PLUGIN_ROOT\}\/\*\*\)/m);
+    expect(rule).toBeLessThan(tuca.indexOf("Every tuca-mode session is a coordinator"));
   });
 });

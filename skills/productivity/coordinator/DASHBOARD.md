@@ -174,8 +174,8 @@ A ledger made with `init --role manager` is a manager's. Its page is sent every 
 
 | Command | What it does |
 | :-- | :-- |
-| `start [NAME ...]` | a tab per agent running a new `claude` named after it, then its opening naming its ledger (its file's `fleet.ledger`, else the registry's for its name where it is, else `~/.local/state/fleet/<name>`); an agent already running here is left, one running elsewhere is refused, saying where |
-| `stop NAME ...\|all [--force]` | closes the agent's tab once it is ready, waiting at most 10 minutes (`--force`: at once); only tabs `fleet team` started that still run their agent |
+| `start [NAME ...]` | a tab per agent running a new `claude --name <agent>`, a shell tab `<agent> cmd` beside it in the repo, then `/tstack:tuca-mode <opening>` naming its ledger (its file's `fleet.ledger`, else the registry's for its name where it is, else `~/.local/state/fleet/<name>`); an agent already running here is left, one running elsewhere is refused, saying where |
+| `stop NAME ...\|all [--force]` | closes the agent's tab and its cmd tab once it is ready, waiting at most 10 minutes (`--force`: at once); only tabs `fleet team` started that still run their agent |
 | `list [NAME ...]` | each agent: running here, elsewhere (where), or not running |
 | `attach` | shows the team's session in the Rex app (`rex do session.select`) |
 
