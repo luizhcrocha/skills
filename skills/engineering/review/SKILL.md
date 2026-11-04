@@ -94,7 +94,7 @@ If the spec is missing, skip the Spec sub-agent and note this in the final repor
 
 Present the two reports under `## Standards` and `## Spec` headings, verbatim or lightly cleaned. Do **not** merge or rerank findings, because the two axes are deliberately separate (see _Why two axes_).
 
-After the reports, list the Important findings by `Caught by:`. The fix adds that check, red first. A finding that matches a memo gotcha, or that an earlier review of this repo already raised, is a candidate for its check: `tstack:lint-evolve` for `lint`, the repo's formal specs for `model`. A rule worth keeping becomes a line in the repo's REVIEW.md.
+After the reports, list the Important findings by `Caught by:`. The fix adds that check, red first. A finding that matches a memo gotcha, or that an earlier review of this repo already raised, is a candidate for its check: `tstack:lint-evolve` for `lint`; for `model`, the repo's formal specs, and suggest `/create-formal-verification-skill` to Luiz when none covers it, since he invokes it himself. A rule worth keeping becomes a line in the repo's REVIEW.md.
 
 End with a one-line summary: Important and Nit counts per axis, and the worst issue _within each axis_ (if any). Don't pick a single winner across axes: that's the reranking the separation exists to prevent.
 
