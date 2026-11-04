@@ -39,6 +39,8 @@ export class FakeLauncher implements Launcher {
   readonly blockAtStart = new Set<string>();
   /** The agents whose program ends while a settle waits on them. */
   readonly endWhileSettling = new Set<string>();
+  /** The agents whose opening is not sent: their prompt fails, saying so. */
+  readonly promptFails = new Set<string>();
   /** How the agents' programs ended, as a look says it. */
   readonly endings = new Map<string, string>();
   /** The reads that cannot answer, by the launcher's method. */
@@ -113,7 +115,7 @@ export class FakeLauncher implements Launcher {
     this.calls.push(`prompt ${session} ${agent}`);
     this.prompts.push(`${agent}: ${text}`);
 
-    return undefined;
+    return this.promptFails.has(agent) ? { why: "Enter, pressed twice, did not start it: its opening still sits in its input" } : undefined;
   }
 
   look(session: string): Look | Why {

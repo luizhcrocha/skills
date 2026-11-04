@@ -286,6 +286,24 @@ describe("stop", () => {
     expect(launcher.calls.filter((c) => c.startsWith("settle "))).toEqual([]);
   });
 
+  test("an agent whose opening failed fails its start, and the next start sends its opening again", () => {
+    const at = place();
+    const launcher = new FakeLauncher();
+    launcher.promptFails.add("ui");
+    const failed = team(at, launcher, "start", "ui");
+
+    expect(failed.code).toBe(1);
+    expect(failed.stderr).toContain("ui: started in tab w1:t1, but its opening was not sent: Enter, pressed twice, did not start it");
+    launcher.promptFails.delete("ui");
+    const again = team(at, launcher, "start", "ui");
+
+    expect(again.code).toBe(0);
+    expect(again.stdout).toContain("ui: started in session");
+    expect(launcher.prompts).toHaveLength(2);
+    expect(team(at, launcher, "start", "ui").stdout).not.toContain("ui: started in session");
+    expect(launcher.prompts).toHaveLength(2);
+  });
+
   test("an agent whose opening is unsent but no longer asks is waited for", () => {
     const at = place();
     const launcher = new FakeLauncher();

@@ -172,14 +172,11 @@ describe("rex's calls", () => {
     }
   });
 
-  test("a prompt is typed into the agent's block, then Enter; one holding a line break is refused", () => {
+  test("a prompt holding a line break is refused", () => {
     const rex = fakeRex(() => undefined);
-    const launcher = rexLauncher({ state: tmp("fleet-team-state-"), run: rex.run, ...FAST });
 
-    expect(launcher.prompt("skills", "ui", "/tstack:coordinator Your ledger is /l.")).toBeUndefined();
-    expect(rex.calls.slice(-2)).toEqual([`send -s ${SID} -b block:1`, `send-key -s ${SID} -b block:1 enter`]);
-    expect(rex.inputs.at(-2)).toBe("/tstack:coordinator Your ledger is /l.");
-    expect(launcher.prompt("skills", "ui", "two\nlines")).toEqual({ why: "a prompt holding a line break would be sent in parts" });
+    expect(rexLauncher({ state: tmp("fleet-team-state-"), run: rex.run, ...FAST }).prompt("skills", "ui", "two\nlines")).toEqual({ why: "a prompt holding a line break would be sent in parts" });
+    expect(rex.calls).toEqual([]);
   });
 
   test("a look gives the windows as tabs and each block as an agent, with what its program says, a value rex's schema does not name as idle", () => {
@@ -294,10 +291,212 @@ describe("rex's calls", () => {
 });
 
 /** A command that reports `state` to the terminal as Claude Code does (OSC 7501), then prints its argument and
- * the line it reads. */
+ * the line it reads, working on it for a second. */
 function reporting(state: string, word: string): readonly string[] {
-  return ["/bin/sh", "-c", `printf '\\033]7501;state=${state}\\033\\\\'; printf 'arg=[%s]\\n' "$0"; read line; echo "got=$line"; sleep 600`, word];
+  const report = (to: string): string => `printf '\\033]7501;state=${to}\\033\\\\'`;
+
+  return ["/bin/sh", "-c", `${report(state)}; printf 'arg=[%s]\\n' "$0"; read line; ${report("working")}; echo "got=$line"; sleep 1; ${report("idle")}; sleep 600`, word];
 }
+
+const OPENING = "/tstack:coordinator Your ledger is /l.";
+
+/** How a {@link fakeClaude} behaves. */
+interface Claude {
+  /** How long typed text is taken as a paste: an Enter in that time lands inside it as a line break. */
+  readonly pasteMs?: number;
+  /** How many Enters on a settled input are lost before one starts the turn. */
+  readonly deaf?: number;
+  /** The input shows a paste taken whole as Claude Code's stand-in. */
+  readonly marker?: boolean;
+  /** The input's width, past which Ink wraps its rows. */
+  readonly width?: number;
+  /** The turn starts on a permission dialog, which an Enter approves. */
+  readonly dialog?: boolean;
+  /** The input already holds this text, from an earlier prompt. */
+  readonly held?: string;
+  /** Typed text never reaches the input. */
+  readonly lost?: boolean;
+  /** The program exits on Enter, its block gone with it. */
+  readonly exits?: boolean;
+  /** The program reports its dialog late: done while the dialog shows. */
+  readonly lagging?: boolean;
+}
+
+/** Claude Code's input in a block, framed by rules as Claude Code draws it, on a clock the test owns. */
+function fakeClaude(o: Claude = {}): FakeRex & { readonly launcher: ReturnType<typeof rexLauncher>; readonly started: () => boolean; readonly approved: () => boolean } {
+  let clock = 0;
+  let input: "empty" | "pasting" | "typed" | "broken" | "working" | "dialog" = o.held === undefined ? "empty" : "typed";
+  let settles = 0;
+  let deaf = o.deaf ?? 0;
+  let text = o.held ?? "";
+  let approved = false;
+  let gone = false;
+  const width = o.width ?? 80;
+
+  const wrapped = (line: string): string[] => {
+    const rows: string[] = [];
+
+    for (let at = 0; at < line.length; at += width) rows.push(`${at === 0 ? ">" : " "} ${line.slice(at, at + width)}`);
+
+    return rows;
+  };
+
+  const screen = (): string => {
+    const rule = "─".repeat(width + 2);
+    const boxed = (above: readonly string[], rows: readonly string[]): string => [...above, rule, ...rows, rule, "  ? for shortcuts"].join("\n");
+
+    switch (input) {
+      case "empty":
+      case "pasting":
+        return boxed([], ["> "]);
+      case "typed":
+        return boxed([], o.marker === true ? ["> [Pasted text #1 +0 lines]"] : wrapped(text));
+      case "broken":
+        return boxed([], ["> [Pasted text #1 +1 lines]"]);
+      case "working":
+        return boxed([...wrapped(text), "* Working"], ["> "]);
+      case "dialog":
+        return [...wrapped(text), "Do you want to proceed?", "❯ 1. Yes", "  2. No"].join("\n");
+    }
+  };
+
+  const enter = (): void => {
+    if (input === "pasting") input = "broken";
+    else if (input === "dialog") approved = true;
+    else if (deaf > 0) deaf -= 1;
+    else if (input === "typed" || input === "broken") input = o.dialog === true ? "dialog" : "working";
+  };
+
+  const rex = fakeRex((words) => {
+    if (input === "pasting" && clock >= settles) input = "typed";
+
+    if (gone) return words.includes("block ls") ? { code: 0, stdout: '{"blocks":[]}', stderr: "" } : { code: 1, stdout: "", stderr: "Error: block block:1 not found\n" };
+
+    if (words.startsWith("send -s") && o.lost !== true) {
+      input = "pasting";
+      settles = clock + (o.pasteMs ?? 0);
+    }
+
+    if (words.startsWith("send-key")) {
+      if (o.exits === true) {
+        gone = true;
+
+        return { code: 1, stdout: "", stderr: "Error: block block:1 not found\n" };
+      }
+
+      enter();
+    }
+
+    if (words.startsWith("capture")) return { code: 0, stdout: `${screen()}\n`, stderr: "" };
+
+    return statusIs(input === "working" ? "working" : input === "dialog" && o.lagging !== true ? "blocked" : "done")(words);
+  });
+
+  const run: RexRunner = (args, given) => {
+    if (args[0] === "send" && o.lost !== true) text = given ?? "";
+
+    return rex.run(args, given);
+  };
+
+  const launcher = rexLauncher({ state: tmp("fleet-team-state-"), run, pollMs: 500, now: () => clock, sleep: (ms) => (clock += ms) });
+
+  return { ...rex, run, launcher, started: () => input === "working", approved: () => approved };
+}
+
+const enters = (calls: readonly string[]): number => calls.filter((c) => c.startsWith("send-key")).length;
+
+describe("a prompt", () => {
+  test("Enter waits while Claude Code still takes the typed text as a paste, so it does not land inside it", () => {
+    const claude = fakeClaude({ pasteMs: 1_500 });
+
+    expect(claude.launcher.prompt("skills", "ui", OPENING)).toBeUndefined();
+    expect(claude.started()).toBe(true);
+    expect(enters(claude.calls)).toBe(1);
+  });
+
+  test("Enter waits for Claude Code's stand-in for a paste it took whole", () => {
+    const claude = fakeClaude({ pasteMs: 1_000, marker: true });
+
+    expect(claude.launcher.prompt("skills", "ui", OPENING)).toBeUndefined();
+    expect(claude.started()).toBe(true);
+  });
+
+  test("is typed into the agent's block, read back from its input, then Enter once, when the first Enter starts it", () => {
+    const claude = fakeClaude();
+
+    expect(claude.launcher.prompt("skills", "ui", OPENING)).toBeUndefined();
+    const at = claude.calls.indexOf(`send -s ${SID} -b block:1`);
+
+    expect(claude.inputs[at]).toBe(OPENING);
+    expect(claude.calls.slice(at + 1, at + 3)).toEqual([`capture -s ${SID} -b block:1 --trim --unwrap`, `send-key -s ${SID} -b block:1 enter`]);
+    expect(claude.calls.filter((c) => c.startsWith("send"))).toHaveLength(2);
+  });
+
+  test("an Enter that did not start the agent is pressed once more", () => {
+    const claude = fakeClaude({ deaf: 1 });
+
+    expect(claude.launcher.prompt("skills", "ui", OPENING)).toBeUndefined();
+    expect(claude.started()).toBe(true);
+    expect(enters(claude.calls)).toBe(2);
+  });
+
+  test("an agent two Enters did not start fails the prompt, saying so, after a bounded wait", () => {
+    const claude = fakeClaude({ deaf: 2 });
+
+    expect(claude.launcher.prompt("skills", "ui", OPENING)).toEqual({ why: "Enter, pressed twice, did not start it: its opening still sits in its input" });
+    expect(enters(claude.calls)).toBe(2);
+  });
+
+  test("an input Ink wraps across rows is read as one, so a text still sitting in it is not taken as sent", () => {
+    const claude = fakeClaude({ width: 12, deaf: 2 });
+
+    expect(claude.launcher.prompt("skills", "ui", OPENING)).toEqual({ why: "Enter, pressed twice, did not start it: its opening still sits in its input" });
+  });
+
+  test("an input Ink wraps across rows, once it holds the text, takes Enter", () => {
+    const claude = fakeClaude({ width: 12, pasteMs: 1_000 });
+
+    expect(claude.launcher.prompt("skills", "ui", OPENING)).toBeUndefined();
+    expect(claude.started()).toBe(true);
+  });
+
+  test("a text that never shows in the input fails the prompt, Enter never pressed", () => {
+    const claude = fakeClaude({ lost: true });
+
+    expect(claude.launcher.prompt("skills", "ui", OPENING)).toEqual({ why: "its opening did not show in its input within 5 s, so Enter was not pressed" });
+    expect(enters(claude.calls)).toBe(0);
+  });
+
+  test("an Enter that opened a permission dialog started the turn: no second Enter approves it", () => {
+    const claude = fakeClaude({ dialog: true });
+
+    expect(claude.launcher.prompt("skills", "ui", OPENING)).toBeUndefined();
+    expect(enters(claude.calls)).toBe(1);
+    expect(claude.approved()).toBe(false);
+  });
+
+  test("a dialog whose state lags, its screen drawing no input, gets no second Enter: the prompt fails, saying so", () => {
+    const claude = fakeClaude({ dialog: true, lagging: true });
+
+    expect(claude.launcher.prompt("skills", "ui", OPENING)).toEqual({ why: "Enter did not start it, and its screen shows no input to read, so no second Enter was pressed (it could answer a dialog)" });
+    expect(enters(claude.calls)).toBe(1);
+    expect(claude.approved()).toBe(false);
+  });
+
+  test("an input still holding the text from an earlier prompt takes Enter only, the text not typed again", () => {
+    const claude = fakeClaude({ held: OPENING });
+
+    expect(claude.launcher.prompt("skills", "ui", OPENING)).toBeUndefined();
+    expect(claude.calls.filter((c) => c.startsWith("send -s"))).toEqual([]);
+    expect(claude.started()).toBe(true);
+  });
+
+  test("a program that exits on Enter, its block gone, fails the prompt saying it ended, not rex's error", () => {
+    const claude = fakeClaude({ exits: true });
+
+    expect(claude.launcher.prompt("skills", "ui", OPENING)).toEqual({ why: "its program ended before it took its opening, its tab gone with it" });
+  });
+});
 
 describe.skipIf(Bun.which("rex") === null || process.env["FLEET_TEST_REX"] !== "1")("rex", () => {
   test(

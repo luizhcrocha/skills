@@ -28,6 +28,27 @@ const SETTLE_MS = 600_000;
 /** How often a wait asks rex again. */
 const POLL_MS = 500;
 
+/** How long a prompt waits for its text to show in the agent's input before it presses Enter. */
+const TYPED_MS = 5_000;
+
+/** How long a prompt waits for an Enter to start the agent's turn. */
+const STARTED_MS = 5_000;
+
+/** How many of a block's last lines are read as Claude Code's input when no rules frame it. */
+const SCREEN_LINES = 30;
+
+/** How much of a prompt's start, its spaces dropped, must show for it to be in the input. */
+const SHOWN_CHARS = 40;
+
+/** A rule framing Claude Code's input, plain or boxed. */
+const RULE = /^[\s─╭╮╰╯]*─{3,}[\s─╭╮╰╯]*$/u;
+
+/** What the input's rows hold besides the text: Ink's wrap, the prompt glyph, the box's sides. */
+const FRAMING = /[\s│>❯]/gu;
+
+/** Claude Code's stand-in for a paste it took whole. */
+const PASTED = /\[Pasted text #\d+/;
+
 /** The terminal block's flavor. */
 const TERMINAL = "com.superlogical.terminal.shell";
 
@@ -65,6 +86,9 @@ export interface RexOptions {
   readonly startMs?: number;
   readonly settleMs?: number;
   readonly pollMs?: number;
+  /** For tests: the clock in ms, and how a wait sleeps. */
+  readonly now?: () => number;
+  readonly sleep?: (ms: number) => void;
 }
 
 /** The command line of an agent's tab: a new Claude Code conversation (never a resume) named after it, its
@@ -125,6 +149,19 @@ export function rexLauncher(options: RexOptions): Launcher {
   const startMs = options.startMs ?? START_MS;
   const settleMs = options.settleMs ?? SETTLE_MS;
   const pollMs = options.pollMs ?? POLL_MS;
+  const now = options.now ?? Date.now;
+  const sleep = options.sleep ?? sleepMs;
+
+  /** What `probe` finds before `ms` pass, asked every poll; undefined when it found nothing. */
+  const until = <T>(ms: number, probe: () => T | undefined): T | undefined => {
+    for (const deadline = now() + ms; ; sleep(pollMs)) {
+      const found = probe();
+
+      if (found !== undefined) return found;
+
+      if (now() >= deadline) return undefined;
+    }
+  };
 
   /** What rex printed for `args`, or why it failed. */
   const printed = (args: readonly string[], input?: string): { readonly stdout: string } | Why => {
@@ -250,19 +287,56 @@ export function rexLauncher(options: RexOptions): Launcher {
   /** Block `b`'s agent now, how its program ended when it did, read when asked; unknown when rex cannot say. */
   const seenOf = (sid: string, b: Block): Seen => {
     const seen = { name: b.label, tab: b.window };
-    const now = programOf(sid, b.id);
+    const program = programOf(sid, b.id);
 
-    if ("why" in now) return { ...seen, status: "unknown" };
+    if ("why" in program) return { ...seen, status: "unknown" };
 
-    if (!("ended" in now)) return { ...seen, status: statusOf(now.state) };
+    if (!("ended" in program)) return { ...seen, status: statusOf(program.state) };
 
     const ended = (): string => {
       const shown = tail(sid, b.id);
 
-      return shown === "" ? now.ended : `${now.ended}: ${shown}`;
+      return shown === "" ? program.ended : `${program.ended}: ${shown}`;
     };
 
     return { ...seen, status: "ended", ended };
+  };
+
+  /** Whether Claude Code's input in the block holds `text`, its rows joined across Ink's wrap, or a paste taken
+   * whole; undefined when rex cannot say, or, when `framed`, when no rules frame an input. */
+  const holding = (sid: string, block: string, text: string, framed = false): boolean | undefined => {
+    const out = printed(["capture", "-s", sid, "-b", block, "--trim", "--unwrap"]);
+
+    if ("why" in out) return undefined;
+    const lines = out.stdout.split("\n");
+    const rules = lines.flatMap((line, at) => (RULE.test(line) ? [at] : []));
+    const [top, bottom] = rules.slice(-2);
+
+    if (framed && bottom === undefined) return undefined;
+    const input = (top === undefined || bottom === undefined ? lines.slice(-SCREEN_LINES) : lines.slice(top + 1, bottom)).join("\n");
+
+    return input.replace(FRAMING, "").includes(text.replace(FRAMING, "").slice(0, SHOWN_CHARS)) || PASTED.test(input);
+  };
+
+  /** Why the block's program cannot take a prompt: it ended, or its block is gone with it. */
+  const endedWhy = (sid: string, block: string): Why | undefined => {
+    const end = exited(sid, block);
+
+    if (!("why" in end) && end.ended !== undefined) return { why: `its program ended before it took its opening (${end.ended})` };
+
+    return gone(sid, block) ? { why: "its program ended before it took its opening, its tab gone with it" } : undefined;
+  };
+
+  /** What an Enter on `text` did: started the agent's turn (it left ready, or its input no longer holds the text it
+   * held), its program ended, or nothing yet. */
+  const afterEnter = (sid: string, block: string, text: string): "started" | Why | undefined => {
+    const program = programOf(sid, block);
+
+    if ("why" in program) return endedWhy(sid, block);
+
+    if ("ended" in program) return { why: `its program ended before it took its opening (${program.ended})` };
+
+    return statusOf(program.state) !== "ready" || holding(sid, block, text, true) === false ? "started" : undefined;
   };
 
   const argvOf = (agent: Agent): readonly string[] | Why => {
@@ -324,25 +398,25 @@ export function rexLauncher(options: RexOptions): Launcher {
 
       let failed: Why | undefined;
 
-      for (const deadline = Date.now() + startMs; Date.now() < deadline; sleepMs(pollMs)) {
-        const now = programOf(sid, block);
+      for (const deadline = now() + startMs; now() < deadline; sleep(pollMs)) {
+        const program = programOf(sid, block);
 
-        if ("why" in now) {
+        if ("why" in program) {
           if (gone(sid, block)) return { why: "it ended before it was ready, its tab gone with it (rex closes the tab of a program that exits 0)" };
-          failed = now;
+          failed = program;
           continue;
         }
 
         failed = undefined;
 
-        if ("ended" in now) {
+        if ("ended" in program) {
           const shown = tail(sid, block);
           rex(["window", "close", "-s", sid, window]);
 
-          return { why: `it ended before it was ready (${now.ended})${shown === "" ? "" : `: ${shown}`}` };
+          return { why: `it ended before it was ready (${program.ended})${shown === "" ? "" : `: ${shown}`}` };
         }
 
-        const status = now.state === undefined ? undefined : statusOf(now.state);
+        const status = program.state === undefined ? undefined : statusOf(program.state);
 
         if (status === "ready") return tab;
 
@@ -361,12 +435,30 @@ export function rexLauncher(options: RexOptions): Launcher {
 
       if ("why" in found) return found;
       const { sid, block } = found;
-      const typed = rex(["send", "-s", sid, "-b", block.id], text);
+      const holds = (): true | undefined => holding(sid, block.id, text) || undefined;
 
-      if ("why" in typed) return { why: typed.why };
-      const sent = rex(["send-key", "-s", sid, "-b", block.id, "enter"]);
+      if (holds() === undefined) {
+        const typed = rex(["send", "-s", sid, "-b", block.id], text);
 
-      return "why" in sent ? { why: sent.why } : undefined;
+        if ("why" in typed) return { why: typed.why };
+
+        if (until(TYPED_MS, holds) === undefined) return { why: `its opening did not show in its input within ${String(TYPED_MS / 1000)} s, so Enter was not pressed` };
+      }
+
+      for (let pressed = 0; pressed < 2; pressed += 1) {
+        const sent = rex(["send-key", "-s", sid, "-b", block.id, "enter"]);
+
+        if ("why" in sent) return endedWhy(sid, block.id) ?? { why: sent.why };
+        const took = until(STARTED_MS, () => afterEnter(sid, block.id, text));
+
+        if (took === "started") return undefined;
+
+        if (took !== undefined) return took;
+
+        if (holding(sid, block.id, text, true) === undefined) return { why: "Enter did not start it, and its screen shows no input to read, so no second Enter was pressed (it could answer a dialog)" };
+      }
+
+      return { why: "Enter, pressed twice, did not start it: its opening still sits in its input" };
     },
 
     look(session) {
@@ -399,14 +491,14 @@ export function rexLauncher(options: RexOptions): Launcher {
       if ("why" in found) return found;
       const { sid, block } = found;
 
-      for (const deadline = Date.now() + settleMs; Date.now() < deadline; sleepMs(pollMs)) {
-        const now = programOf(sid, block.id);
+      for (const deadline = now() + settleMs; now() < deadline; sleep(pollMs)) {
+        const program = programOf(sid, block.id);
 
-        if ("why" in now) return now;
+        if ("why" in program) return program;
 
-        if ("ended" in now) return "ended";
+        if ("ended" in program) return "ended";
 
-        if (now.state !== undefined && statusOf(now.state) === "ready") return "ready";
+        if (program.state !== undefined && statusOf(program.state) === "ready") return "ready";
       }
 
       return { why: `it was not ready within ${String(settleMs / 60_000)} min` };

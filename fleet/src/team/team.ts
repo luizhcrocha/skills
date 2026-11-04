@@ -44,7 +44,8 @@ export interface Said {
 }
 
 /** What `fleet team` started: the repo whose team it is, the session's handle when it started it, each agent's
- * tab, and the agents whose opening is not sent yet (their start blocked on a prompt in their tab). */
+ * tab, and the agents whose opening is not sent yet: their start blocked on a prompt in their tab, their opening is
+ * being sent, or sending it failed. */
 interface Marks {
   readonly repo: string | undefined;
   readonly session: Handle | undefined;
@@ -346,11 +347,14 @@ function startLocked(ground: Ground, agents: readonly Agent[], before: BeforeSta
       continue;
     }
 
-    save({ ...marks, agents: { ...marks.agents, [agent.name]: made.handle }, unsent: marks.unsent.filter((n) => n !== agent.name) });
+    save({ ...marks, agents: { ...marks.agents, [agent.name]: made.handle }, unsent: [...marks.unsent.filter((n) => n !== agent.name), agent.name] });
     const said = sendOpening(ground, agent, made.handle, found.ledger);
 
     if ("refused" in said) refused.push(said.refused);
-    else lines.push(said.line);
+    else {
+      lines.push(said.line);
+      save({ ...marks, unsent: marks.unsent.filter((n) => n !== agent.name) });
+    }
   }
 
   return { lines, refused };
