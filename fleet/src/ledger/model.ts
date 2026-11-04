@@ -194,6 +194,8 @@ export interface LedgerEvent {
   decision?: string | null;
   /** A `reviewed` event's count of findings. */
   findings?: number;
+  /** A `reviewed` event's count of Important findings that carry a proof. */
+  proven?: number;
   /** A `reviewed` event's changes, `change@commit` each: a jj change id and the commit the reviewer read (a bare change id before 1.9.81). */
   changes?: string[];
 }
@@ -846,7 +848,7 @@ function readDecision(object: JsonObject): Fields | Decision {
   return f.done(row, DECISION_KEYS);
 }
 
-const EVENT_KEYS = ["at", "agent", "kind", "text", "important", "decision", "findings", "changes"] as const;
+const EVENT_KEYS = ["at", "agent", "kind", "text", "important", "decision", "findings", "proven", "changes"] as const;
 
 function readEvent(object: JsonObject): Fields | LedgerEvent {
   const f = new Fields(object, "event");
@@ -863,6 +865,7 @@ function readEvent(object: JsonObject): Fields | LedgerEvent {
     important: f.optBool("important"),
     decision: f.nullStr("decision"),
     findings: f.optNumber("findings"),
+    proven: f.optNumber("proven"),
     changes: object["changes"] === undefined ? undefined : f.strList("changes"),
   });
 

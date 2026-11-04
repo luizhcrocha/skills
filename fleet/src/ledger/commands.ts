@@ -3085,6 +3085,7 @@ export function event(ledger: Ledger, run: Run): Effect.Effect<Ledger, Refusal> 
   if (given(agent) && !known(ledger, agent)) return refuse(`unknown agent '${agent}'`);
   const kind = run.args.str("kind");
   const findings = run.args.int("findings");
+  const proven = run.args.int("proven");
   const changesText = run.args.str("changes");
   const changes = (changesText ?? "").split(/[\s,]+/u).filter((c) => c !== "");
 
@@ -3098,6 +3099,11 @@ export function event(ledger: Ledger, run: Run): Effect.Effect<Ledger, Refusal> 
     }
 
     if (findings < 0) return refuse("--findings counts what the review found: 0 or more");
+
+    if (proven !== undefined && (proven < 0 || proven > findings)) {
+      return refuse("--proven counts the Important findings that carry a proof: 0 up to --findings");
+    }
+
     const bare = changes.filter((c) => /^[A-Za-z0-9]+$/u.test(c));
 
     if (bare.length > 0) {
@@ -3111,7 +3117,7 @@ export function event(ledger: Ledger, run: Run): Effect.Effect<Ledger, Refusal> 
     const bad = changes.filter((c) => !REVIEWED_CHANGE.test(c));
 
     if (bad.length > 0) return refuse(`--changes names change@commit (a jj change id, then 8 or more hex digits of its commit id), not ${bad.join(", ")}`);
-  } else if (findings !== undefined || changesText !== undefined) {
+  } else if (findings !== undefined || proven !== undefined || changesText !== undefined) {
     return refuse("--findings and --changes go with --kind reviewed");
   }
 
@@ -3126,6 +3132,9 @@ export function event(ledger: Ledger, run: Run): Effect.Effect<Ledger, Refusal> 
 
   if (kind === "reviewed" && last !== undefined) {
     last.findings = findings ?? 0;
+
+    if (proven !== undefined) last.proven = proven;
+
     last.changes = changes;
   }
 

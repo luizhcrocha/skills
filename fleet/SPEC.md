@@ -571,10 +571,10 @@ Checked in this order:
   `revoked approval K1 (from <ref>:Q2): <why>; what it covered asks the user again.` A copy in another
   fleet's ledger is refused at use instead (a notice, above).
 
-**event** `[--agent A] [--kind spawned|reported|blocked|resolved|asked|decision|note|integrated|reviewed] [--important] [--findings N --changes C,...] TEXT`:
+**event** `[--agent A] [--kind spawned|reported|blocked|resolved|asked|decision|note|integrated|reviewed] [--important] [--findings N [--proven N] --changes C,...] TEXT`:
 logs one event (kind note by default). `--agent` must be a worker row (a manager's: any name). Kind
 **reviewed** (a review of a stack before it lands; `land-check` reads it) needs `--findings` (an int, 0 or
-more) and `--changes` (`change@commit` each: a jj change id, letters and digits, `@`, and 8 or more hex
+more), optionally `--proven` (the Important findings that carry a proof, 0 up to `--findings`, stored as `proven`), and `--changes` (`change@commit` each: a jj change id, letters and digits, `@`, and 8 or more hex
 digits of the commit the reviewer read; split on commas and whitespace), stored on the event as `findings`
 and `changes` after `text`; refused without them (`a reviewed event says what the review found and of
 which changes: ...`), with a negative count, a bare change id (`<id> names no commit: ...`: the change's

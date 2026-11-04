@@ -219,12 +219,21 @@ describe("the advisor's view", () => {
 });
 
 describe("reviewed events", () => {
+  test("a reviewed event counts its proven findings, up to its findings", () => {
+    ok("event", "--kind", "reviewed", "--findings", "2", "--proven", "1", "--changes", "kxyzabcd@0f3a9c2e81b4", "r");
+    const e = rows("events").at(-1) ?? {};
+    expect(e["proven"]).toBe(1);
+    const over = ["--kind", "reviewed", "--findings", "1", "--proven", "2", "--changes", "kxyzabcd@0f3a9c2e81b4", "r"];
+    expect(refused("event", ...over)).toContain("--proven counts");
+  });
+
   test("a reviewed event carries its findings and the commit of each change it read", () => {
     ok("event", "--kind", "reviewed", "--findings", "2", "--changes", "kxyzabcd@0f3a9c2e81b4, lmnopqrs@77d1e0b3", "reviewed with tstack:review");
     const e = rows("events").at(-1) ?? {};
     expect([e["kind"], e["findings"], e["changes"]]).toEqual(["reviewed", 2, ["kxyzabcd@0f3a9c2e81b4", "lmnopqrs@77d1e0b3"]]);
     expect(refused("event", "--kind", "reviewed", "r")).toContain("--findings N");
     expect(refused("event", "--findings", "1", "a note")).toContain("go with --kind reviewed");
+    expect(refused("event", "--proven", "1", "a note")).toContain("go with --kind reviewed");
   });
 
   test("a reviewed event that names a change without the commit the reviewer read is refused", () => {

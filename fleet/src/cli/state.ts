@@ -167,6 +167,7 @@ export const STATE_COMMANDS: readonly CommandSpec[] = [
       opt.value("--kind", { choices: commands.EVENT_KINDS }),
       opt.flag("--important"),
       opt.value("--findings", { int: true }),
+      opt.value("--proven", { int: true }),
       opt.value("--changes", { metavar: "CHANGE@COMMIT,..." }),
     ],
   },

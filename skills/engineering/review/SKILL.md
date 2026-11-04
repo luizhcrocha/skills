@@ -100,7 +100,7 @@ End with a one-line summary: Important and Nit counts per axis, and the worst is
 
 The report's last line is `Read: <change>@<commit>, ...`, the list step 1 noted, unchanged.
 
-In a fleet, record the review in the ledger before the stack lands, so `land-check` finds it: `fleet state <dashboard-dir> event --kind reviewed --findings <N> --changes "<change>@<commit>,..." "<what was reviewed, and with what>"`, the `--changes` being the report's `Read:` line (step 1), and N the findings of both axes (0 when there were none). A bare change id is refused. `land-check` passes a change only while `jj interdiff` from that commit to its current one is empty: a fix squashed in after the review needs a re-check of that interdiff, recorded at the commit the re-check read.
+In a fleet, record the review in the ledger before the stack lands, so `land-check` finds it: `fleet state <dashboard-dir> event --kind reviewed --findings <N> --proven <P> --changes "<change>@<commit>,..." "<what was reviewed, and with what>"`, the `--changes` being the report's `Read:` line (step 1), N the findings of both axes (0 when there were none), and P the Important ones that carry a proof. A bare change id is refused. `land-check` passes a change only while `jj interdiff` from that commit to its current one is empty: a fix squashed in after the review needs a re-check of that interdiff, recorded at the commit the re-check read.
 
 ### 6. Bug hunt: the option for a diff over about 2,000 lines
 
