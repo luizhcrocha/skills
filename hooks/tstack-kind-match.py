@@ -2,11 +2,22 @@
 """The kind of a call, for a grant that lasts 24 hours. Stdlib only, run as `python3 -I hooks/tstack-kind-match.py`.
 
 Stdin: {command, cwd, env}. Stdout, one JSON line, exit 0:
-  {kind: {action, repo: {main, origin|null}, task, sha256, text}, workspace, scripts: [{path, sha256}]} or {refused: reason}.
+  {kind: {action, repo: {main, origin|null}, task, sha256, text[, oneoff: true]}, workspace, scripts: [{path, sha256}]} or {refused: reason}.
 
-A kind is a committed task script. The only call that has one is exactly `bash <absolute workspace>/tasks/grant/<name>.sh`,
-with an optional single argument of 40 lowercase hex characters. <name> begins with deploy- or push-, which gives `action`.
-Nothing else is read: arbitrary shell cannot be held to an allow-list, so this reads no shell at all.
+A kind is a committed task script, or a one-off one. The only calls that have one are exactly `bash <absolute workspace>/tasks/grant/<name>.sh`
+(committed) or else `bash <absolute path>/<name>.sh` (one-off), each with an optional single argument of 40 lowercase hex characters.
+A committed <name> begins with deploy- or push-, which gives `action`. Nothing else is read: arbitrary shell cannot be held to an
+allow-list, so this reads no shell at all.
+
+A one-off script is read here at the ask and held after the tap by a copy, which only its call names (the host writes it to
+~/.claude/tstack-grants/copies/<team>/<action>.sh, outside these roots, so a hook reads that path with script_path).
+It is a regular file, no symlink on the way, under a root the caller trusts: the fleet's state dir
+(`$HOME/.local/state/fleet`, `repo` {main: that dir, origin: null}) or the call's root workspace (`env.CLAUDE_PROJECT_DIR`, which
+must be one its repo lists, `repo` as a committed kind's). It need not be committed. Its `action` is <name> with a trailing
+`-<digits>` run number dropped (`deploy-window-4` is `deploy-window`), and must begin with deploy- or push-; `task` is its path
+under the root, `workspace` the root, and `oneoff` is true. Its text passes the same rules as a committed script's, and uses no
+`$0`, `${0`, `${@:0`, `${*:0`, `BASH_ARGV0` or `BASH_SOURCE`: the host runs a copy in a folder an agent can write, so a sibling found that way is a
+file the owner never read. Quoting does not excuse them: `eval` runs single-quoted text, so awk's `$0` is refused too, and such a call gets a plain card.
 
 `main` is the realpath of `.jj/repo` (a secondary workspace's is a pointer file; neither it nor `.jj` may be a symlink),
 `origin` the remote without a URL's userinfo, `task` the path under the workspace, `sha256` the script's content and `text`
@@ -19,7 +30,8 @@ Cards go to the cloud and the owner reads them, so a script has no kind when its
 character the page would not show as itself (rule-card.ts's INVISIBLE), or reads as a credential (tstack-hook.py's
 SECRET_IN_CALL and OP_REFERENCE, kept equal by test_kind_match, read after NAME=$UPPER_CASE loses its NAME=). Such a call gets a plain card.
 
-A use of a live kind needs the same action, repo, task and sha256, so a changed script is a new card, and the owner approves
+A use of a live committed kind needs the same action, repo, task and sha256; a one-off's use names its copy, whose bytes must hash
+to its sha256, and a new file of its action and bytes is told that copy. So a changed script is a new card, and the owner approves
 one script's text at a time. Force, deletion and the like need no list here: what the script does is what the owner read.
 
 Threat model: a guard on the normal path, against an agent reaching past what the owner approved by mistake or haste. It does
@@ -40,6 +52,12 @@ import sys
 import unicodedata
 
 CALL = re.compile(r"bash (/[A-Za-z0-9_./-]+)/(tasks/grant/(deploy|push)-[A-Za-z0-9_.-]+\.sh)(?: [0-9a-f]{40})?")
+ONE_OFF = re.compile(r"bash (/[A-Za-z0-9_./-]+\.sh)(?: [0-9a-f]{40})?")
+ONE_OFF_ACTION = re.compile(r"(?:deploy|push)-[A-Za-z0-9_.-]*[A-Za-z_.][A-Za-z0-9_.-]*")
+RUN_NUMBER = re.compile(r"-[0-9]+$")
+MORE_THAN_ONE = re.compile(r"[|;&<>\n`]|\$\(")
+FORM = ("a kind is exactly `bash <absolute workspace>/tasks/grant/<deploy-|push-name>.sh`, or `bash <absolute path>/<deploy-|push-name>.sh` "
+        "under the fleet's state dir or the call's root workspace, with at most one 40-hex argument")
 SHEBANGS = (b"#!/bin/sh", b"#!/usr/bin/env bash", b"#!/bin/bash")
 USERINFO = re.compile(r"^([A-Za-z][A-Za-z0-9+.-]*://)[^/]*@")
 JJ_SECONDS = 10
@@ -52,6 +70,7 @@ SECRET_IN_CALL = re.compile(r"\bBearer\s|\bAuthorization:|\bAKIA[0-9A-Z]{12}|---
                             r"|\b(?:mysql|mysqldump|mysqladmin|mariadb)\b[^;&|\n]*\s-p\S"
                             r"|\b(?:sshpass|docker\s+login)\b[^;&|\n]*\s-p\b", re.I)
 OP_REFERENCE = re.compile(r"op://")
+FINDS_ITSELF = re.compile(r"\$0|\$\{0|\$\{[@*]:\s*0|BASH_ARGV0|BASH_SOURCE")
 SET_FROM_A_VARIABLE = re.compile(r"""[\w-]+=("?\$\{?[A-Z_][A-Z0-9_]*\}?"?)(?=\s|$)""", re.M)
 
 
@@ -136,10 +155,68 @@ def _check_committed(workspace, env, task, data):
         raise Refused(f"{task} on disk differs from @- of {workspace}: commit it and ask again")
 
 
+def _not_the_form(command):
+    """The form refusal, naming what broke it where one thing plainly did."""
+    if MORE_THAN_ONE.search(command):
+        return Refused(f"the call is more than one command (a pipe, `;`, `&`, a redirect, a newline or a substitution): {FORM}")
+    if not command.startswith("bash /"):
+        return Refused(f"the call is not `bash` and an absolute script path: {FORM}")
+    return Refused(FORM)
+
+
+def _root_repo(env):
+    """The main repo of the call's root workspace, when its repo lists that workspace; else None."""
+    root = env.get("CLAUDE_PROJECT_DIR")
+    if not isinstance(root, str) or not root.startswith("/") or os.path.normpath(root) != root or os.path.realpath(root) != root:
+        return None
+    try:
+        main = _main_repo(root)
+        listed = _jj(root, env, "workspace", "list", "-T", 'self.root() ++ "\n"').splitlines()
+    except Refused:
+        return None
+    return main if root in listed else None
+
+
+def _one_off(path, env):
+    name = os.path.basename(path)[:-len(".sh")]
+    action = RUN_NUMBER.sub("", name)
+    if not ONE_OFF_ACTION.fullmatch(action):
+        raise Refused(f"{name}, its run number dropped, does not begin with deploy- or push-: {FORM}")
+    if ".." in path or os.path.normpath(path) != path:
+        raise Refused(f"{path} is not a normal path: {FORM}")
+    home = env.get("HOME")
+    state = os.path.join(home, ".local", "state", "fleet") if isinstance(home, str) and home.startswith("/") else None
+    root = env.get("CLAUDE_PROJECT_DIR")
+    if state is not None and path.startswith(state + "/"):
+        workspace, repo = state, {"main": state, "origin": None}
+    elif isinstance(root, str) and path.startswith(root + "/") and (main := _root_repo(env)) is not None:
+        workspace, repo = root, {"main": main, "origin": _origin(root, env)}
+    else:
+        raise Refused(f"{path} is under no root the caller trusts (the fleet's state dir, or the call's root workspace that its repo lists): {FORM}")
+    if os.path.realpath(os.path.dirname(path)) != os.path.dirname(path):
+        raise Refused(f"{path} goes through a symlink")
+    data = _script_bytes(path)
+    text = _card_text(path, data)
+    if FINDS_ITSELF.search(text):
+        raise Refused(f"{path} finds its own path ($0, ${{0, ${{@:0, BASH_ARGV0 or BASH_SOURCE), and its kind runs a copy of it in another folder: write absolute paths instead")
+    sha = hashlib.sha256(data).hexdigest()
+    return {"kind": {"action": action, "repo": repo, "task": path[len(workspace) + 1:], "sha256": sha, "text": text, "oneoff": True},
+            "workspace": workspace, "scripts": [{"path": path, "sha256": sha}]}
+
+
+def script_path(command):
+    """The script a call of either form runs, whether or not it has a kind; else None. Every committed call has the one-off form."""
+    found = ONE_OFF.fullmatch(command)
+    return found.group(1) if found else None
+
+
 def match(command, env):
     found = CALL.fullmatch(command)
     if not found:
-        raise Refused("a kind is exactly `bash <absolute workspace>/tasks/grant/<deploy-|push-name>.sh`, with at most one 40-hex argument")
+        path = script_path(command)
+        if path is None:
+            raise _not_the_form(command)
+        return _one_off(path, env)
     workspace, task, action = found.groups()
     path = f"{workspace}/{task}"
     if ".." in path or os.path.normpath(path) != path:

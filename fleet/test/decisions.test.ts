@@ -1464,6 +1464,46 @@ describe("permission", () => {
         expect(ids("twice")).toEqual(["allow-once", "deny"]);
       });
 
+      test("a one-off script under the card's root offers allow-24h with a one-off kind of its repo", () => {
+        mkdirSync(join(repo, ".scratch"));
+        writeFileSync(join(repo, ".scratch", "deploy-window-4.sh"), SCRIPT);
+        ok(...askAt("once-off", `bash ${repo}/.scratch/deploy-window-4.sh`));
+        expect(ids("once-off")).toEqual(["allow-once", "allow-24h", "deny"]);
+        expect(asObject(item("once-off")["refusal"] ?? null)?.["kind"]).toEqual({ action: "deploy-window", repo: { main: realpathSync(join(repo, ".jj", "repo")), origin: ORIGIN }, task: ".scratch/deploy-window-4.sh", sha256: SHA, text: SCRIPT, oneoff: true });
+        expect(String(asObject(asArray(item("once-off")["options"])?.[1] ?? null)?.["consequence"])).toContain("One-off script .scratch/deploy-window-4.sh (sha256 ");
+        expect(String(asObject(asArray(item("once-off")["options"])?.[1] ?? null)?.["consequence"])).toContain("for 24 hours its copy alone may run, these bytes as they stand, with any commit id as its argument. The files it calls are not pinned. Every run is listed, and you can revoke it any time.");
+        expect(String(asObject(asArray(item("once-off")["options"])?.[1] ?? null)?.["consequence"])).not.toContain("from any workspace");
+      });
+
+      test("a Bash card that gets no kind says on stderr which rule kept the 24 hours off", () => {
+        const why = (...args: string[]): string => {
+          const done = run(...args);
+
+          expect(done.code, done.stderr).toBe(0);
+
+          return done.stderr;
+        };
+
+        expect(why(...askAt("k1", task))).not.toContain("Allow for 24 hours");
+        expect(why(...askAt("held", task, "--once"))).toMatch(/^state: \S+ offers no Allow for 24 hours: --once holds it to one call$/mu);
+        expect(why(...askAt("list", task, "--then", "echo done"))).toMatch(/^state: \S+ offers no Allow for 24 hours: it is not a single Bash call \(--then adds 1\)$/mu);
+        expect(refused(...askAt("piped", `${task} | tail`))).toContain("the call has a |");
+        expect(why(...askAt("chained", `${task} && echo done`))).toMatch(/^state: \S+ offers no Allow for 24 hours: .*more than one command/mu);
+        const far = tmp();
+
+        writeFileSync(join(far, "deploy-x.sh"), SCRIPT);
+        expect(why(...askAt("plain", "git status"))).toBe("");
+        expect(why(...askAt("plain-once", "git status", "--once"))).toBe("");
+        expect(why(...askAt("deployments", "ls /x/deployments"))).toBe("");
+        expect(why(...askAt("plain-then", "git status", "--then", "git log"))).toBe("");
+        expect(why(...askAt("pushes", "git push origin x"))).toMatch(/^state: \S+ offers no Allow for 24 hours: /u);
+        expect(why(...askAt("push-once", "git push origin x", "--once"))).toMatch(/^state: \S+ offers no Allow for 24 hours: /u);
+        expect(why(...askAt("then-deploy", "git status", "--then", "wrangler deploy"))).toMatch(/^state: \S+ offers no Allow for 24 hours: /u);
+        writeFileSync(join(far, "push-main.sh"), SCRIPT);
+        expect(why(...askAt("then-script", "git status", "--then", `bash ${far}/push-main.sh`))).toMatch(/^state: \S+ offers no Allow for 24 hours: /u);
+        expect(why(...askAt("far", `bash ${far}/deploy-x.sh`))).toMatch(/^state: \S+ offers no Allow for 24 hours: .*under no root/mu);
+      });
+
       test("a remote URL holding a password keeps the option, with the password out of the card, since a moved card goes to the cloud", () => {
         spawnSync("jj", ["git", "remote", "set-url", "origin", "https://me:hunter2@example.com/o/fleet.git"], { cwd: repo, env: { ...process.env, HOME: repo }, stdio: "ignore" });
         ok(...askAt("cred", task));

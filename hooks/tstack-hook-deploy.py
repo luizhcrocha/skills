@@ -484,7 +484,7 @@ def _deploy_refusal(hook, d, command, found):
         how = (f"A command found by name is asked for as it is, and the card says its content is not bound. {how}" if call else
                f"A card holds this form only as a script: put the command in a script at an absolute path, so the card can bind "
                f"its file, then {step}")
-    call = call or f"bash {os.path.join(root, 'tasks', 'deploy.sh')}"
+    call = call or f"bash {os.path.join(root, 'tasks', 'grant', 'deploy-<name>.sh')}"
     agent = hook.input.get("agent_id")
     ask = (f"{fleet_cli()} state {d} decision deploy-{int(fleet_now(hook.env)) % 100000:05d} --kind permission --tool Bash "
            f"--call {shlex.quote(call)}{f' --agent-id {agent}' if agent else ''} --root {root} --title \"<the plain question>\" "

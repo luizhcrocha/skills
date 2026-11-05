@@ -96,7 +96,7 @@ class DeployRefusalTest(DeployGateCase):
             with self.subTest(command=command):
                 reason = self.refused(command)
                 self.assertIn("put the command in a script at an absolute path, so the card can bind its file, then ask with this command:", reason)
-                self.assertIn(self.ask(f"'bash {self.project}/tasks/deploy.sh'"), reason)
+                self.assertIn(self.ask(f"'bash {self.project}/tasks/grant/deploy-<name>.sh'"), reason)
 
     def test_a_worker_sends_the_ask_to_its_coordinator(self):
         kit = self.script("deploy-kit1.sh", KIT)
@@ -124,15 +124,17 @@ class DeployRefusalTest(DeployGateCase):
                 reason = self.refused(command)
                 self.assertIn("A card cannot hold this call as it stands", reason)
                 self.assertIn("so it needs a script that takes no arguments: put the call in one, then ask with this command:", reason)
-                self.assertIn(self.ask(f"'bash {self.project}/tasks/deploy.sh'"), reason)
+                self.assertIn(self.ask(f"'bash {self.project}/tasks/grant/deploy-<name>.sh'"), reason)
 
     def test_each_printed_ask_is_one_the_cli_takes(self):
         kit = self.script("land.sh", KIT)
         for k, command in enumerate((f"bash {kit}", f"bash {kit} pipeline --force", "wrangler deploy", "just deploy quip", "pnpm run deploy", "devenv tasks run fleet:deploy")):
             with self.subTest(command=command):
                 ask = next(line for line in self.refused(command).split("\n") if " decision " in line)
-                if "tasks/deploy.sh" in ask:
-                    self.script("deploy.sh", "#!/bin/sh\nwrangler deploy\n")
+                if "tasks/grant/deploy-<name>.sh" in ask:
+                    (self.tasks / "grant").mkdir(exist_ok=True)
+                    self.script("deploy-page.sh", "#!/bin/sh\nwrangler deploy\n", self.tasks / "grant")
+                    ask = ask.replace("<name>", "page")
                 done = subprocess.run(ask.replace(ASK_ID, f"deploy-{k}"), shell=True, capture_output=True, text=True, timeout=60,
                                       env={**os.environ, **self.env, "FLEET_NO_FORWARD": "1"})
                 self.assertEqual(done.returncode, 0, done.stderr)
@@ -760,6 +762,12 @@ class LiveKindDraftCase(DeployGateCase):
         self.plain = self.refused(self.deploy, cwd=str(self.project))
         self.kinds = Path(self.env["HOME"]) / ".claude" / "tstack-grants" / "kinds.json"
         self.kinds.parent.mkdir(parents=True, exist_ok=True)
+        self.copy = self.kinds.parent / "copies" / "coordinator" / "deploy-window.sh"
+        self.copy.parent.mkdir(parents=True)
+        self.copy.write_text(self.SCRIPT)
+        self.copy.chmod(0o500)
+        self.scratch = self.project / ".scratch"
+        self.scratch.mkdir()
 
     def holds(self, **fields):
         kind = {"id": "k1", "action": "deploy", "repo": {"main": self.main, "origin": "git@github.com:o/fleet.git"},
@@ -776,6 +784,14 @@ class LiveKindDraftCase(DeployGateCase):
         self.assertIn("k1", said)
         self.assertIn("2026-01-05T12:00:00+00:00", said)
         self.assertNotIn("--kind permission", said)
+
+    def test_a_one_off_under_the_asks_root_a_live_kind_covers_proposes_grant_use(self):
+        script = self.scratch / "deploy-window-4.sh"
+        script.write_text(self.SCRIPT)
+        call = f"bash {script}"
+        self.assertIn("--kind permission", self.refused(call, cwd=str(self.project)))
+        self.holds(action="deploy-window", task=".scratch/deploy-window-4.sh")
+        self.assertIn(" grant use ", self.refused(call, cwd=str(self.project)))
 
     def test_the_proposed_command_passes_the_gate(self):
         self.holds()
@@ -804,6 +820,99 @@ class LiveKindDraftCase(DeployGateCase):
         said = self.refused(f"{self.deploy} --now", cwd=str(self.project))
         self.assertNotIn(" grant use ", said)
         self.assertIn("--kind permission", said)
+
+    # A one-off's kind allows its copy alone (~/.claude/tstack-grants/copies/<team>/<action>.sh, the host's): a call of the copy, or of a new file
+    # of the same action and bytes, proposes `fleet grant use` of the copy; anything else stays a card.
+    def copy_holds(self, **fields):
+        self.holds(action="deploy-window", task=".scratch/deploy-window-4.sh", oneoff=True, copy=str(self.copy), **{"granted": {"team": "coordinator"}, **fields})
+
+    def one_off(self, name, text=None):
+        script = self.scratch / name
+        script.write_text(self.SCRIPT if text is None else text)
+        return f"bash {script}"
+
+    def use_line(self, said):
+        return next(part for part in said.split(chr(10) * 2) if " grant use " in part)
+
+    def test_a_call_of_the_copy_proposes_grant_use_of_it(self):
+        self.copy_holds()
+        for call in (f"bash {self.copy}", f"bash {self.copy} {'a' * 40}"):
+            with self.subTest(call=call):
+                said = self.refused(call, cwd=str(self.project))
+                self.assertIn(f"--call {shlex.quote(call)} ", self.use_line(said))
+                self.assertNotIn("--kind permission", said)
+                self.assertIsNone(self.before(self.use_line(said), cwd=str(self.project)))
+
+    def test_another_teams_copy_that_sorts_first_is_passed_over(self):
+        theirs = self.kinds.parent / "copies" / "other" / "deploy-window.sh"
+        self.copy_holds()
+        ours = json.loads(self.kinds.read_text())["kinds"][0]
+        self.kinds.write_text(json.dumps({"kinds": [{**ours, "id": "k0", "copy": str(theirs), "granted": {"team": "other"}}, ours]}))
+        said = self.refused(self.one_off("deploy-window-5.sh"), cwd=str(self.project))
+        self.assertIn(f"--call {shlex.quote(f'bash {self.copy}')} ", self.use_line(said))
+        self.assertNotIn(str(theirs), said)
+
+    def test_a_copy_of_another_team_alone_goes_to_a_card(self):
+        self.copy_holds(granted={"team": "other"})
+        for call in (f"bash {self.copy}", self.one_off("deploy-window-5.sh"), self.one_off("deploy-window-4.sh")):
+            with self.subTest(call=call):
+                said = self.refused(call, cwd=str(self.project))
+                self.assertNotIn(" grant use ", said)
+                self.assertIn("--kind permission", said)
+
+    def test_a_committed_kind_holds_for_another_team(self):
+        self.holds(granted={"team": "other"})
+        self.assertIn(" grant use ", self.refused(self.deploy, cwd=str(self.project)))
+
+    def test_a_new_file_with_the_same_action_and_bytes_proposes_the_copy(self):
+        self.copy_holds()
+        for call, named in ((self.one_off("deploy-window-5.sh"), f"bash {self.copy}"),
+                            (self.one_off("deploy-window-6.sh") + f" {'a' * 40}", f"bash {self.copy} {'a' * 40}")):
+            with self.subTest(call=call):
+                said = self.refused(call, cwd=str(self.project))
+                self.assertIn(f"--call {shlex.quote(named)} ", self.use_line(said))
+                self.assertIn(f"run `{named}`", said)
+                self.assertNotIn(shlex.quote(call), said)
+                self.assertNotIn("--kind permission", said)
+
+    def test_a_new_file_with_other_bytes_goes_to_a_card(self):
+        self.copy_holds()
+        said = self.refused(self.one_off("deploy-window-5.sh", self.SCRIPT + "wrangler deploy --env two\n"), cwd=str(self.project))
+        self.assertNotIn(" grant use ", said)
+        self.assertIn("--kind permission", said)
+
+    def test_a_new_file_of_another_action_goes_to_a_card(self):
+        self.copy_holds()
+        said = self.refused(self.one_off("deploy-other-5.sh"), cwd=str(self.project))
+        self.assertNotIn(" grant use ", said)
+        self.assertIn("--kind permission", said)
+
+    def test_a_row_with_no_copy_is_not_matched_by_action_and_bytes(self):
+        self.holds(action="deploy-window", task=".scratch/deploy-window-4.sh", oneoff=True)
+        said = self.refused(self.one_off("deploy-window-5.sh"), cwd=str(self.project))
+        self.assertNotIn(" grant use ", said)
+        self.assertIn("--kind permission", said)
+
+    def test_an_expired_or_revoked_row_goes_to_a_card(self):
+        for fields in ({"until": "2026-01-05T09:00:00+00:00"}, {"ended": {"why": "revoked", "at": "2026-01-05T09:01:00+00:00"}}):
+            self.copy_holds(**fields)
+            for call in (f"bash {self.copy}", self.one_off("deploy-window-5.sh")):
+                with self.subTest(fields=fields, call=call):
+                    said = self.refused(call, cwd=str(self.project))
+                    self.assertNotIn(" grant use ", said)
+                    self.assertIn("--kind permission", said)
+
+    def test_a_committed_kind_beside_a_copy_is_unchanged(self):
+        self.holds()
+        committed = json.loads(self.kinds.read_text())["kinds"][0]
+        self.copy_holds()
+        with_copy = json.loads(self.kinds.read_text())["kinds"][0]
+        self.kinds.write_text(json.dumps({"kinds": [{**with_copy, "id": "k2"}, committed]}))
+        said = self.refused(self.deploy, cwd=str(self.project))
+        self.assertIn(f"--call {shlex.quote(self.deploy)} ", self.use_line(said))
+        self.assertIn("k1", said)
+        self.assertIn("run that call by itself", said)
+        self.assertNotIn(str(self.copy), said)
 
 
 if __name__ == "__main__":

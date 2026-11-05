@@ -50,21 +50,22 @@ class KindMatchCase(unittest.TestCase):
         self.jj(self.other, "new", "default@-")
         return call or self.task(self.other)
 
-    def match(self, command, cwd="/nowhere"):
-        done = subprocess.run(["python3", "-I", str(MATCHER)], input=json.dumps({"command": command, "cwd": cwd, "env": {"HOME": str(self.home)}}),
+    def match(self, command, cwd="/nowhere", root=None):
+        env = {"HOME": str(self.home)} if root is None else {"HOME": str(self.home), "CLAUDE_PROJECT_DIR": str(root)}
+        done = subprocess.run(["python3", "-I", str(MATCHER)], input=json.dumps({"command": command, "cwd": cwd, "env": env}),
                               env=self.env, capture_output=True, text=True, cwd=self.home, check=False)
         self.assertEqual(done.returncode, 0, done.stderr)
         self.assertEqual(done.stdout.count("\n"), 1)
         return json.loads(done.stdout)
 
-    def refused(self, command):
-        said = self.match(command)
+    def refused(self, command, root=None):
+        said = self.match(command, root=root)
         self.assertEqual(list(said), ["refused"], command)
         self.assertTrue(said["refused"])
         return said["refused"]
 
-    def kind(self, command):
-        said = self.match(command)
+    def kind(self, command, root=None):
+        said = self.match(command, root=root)
         self.assertNotIn("refused", said, command)
         return said["kind"]
 
@@ -351,6 +352,104 @@ class ScriptTextCase(KindMatchCase):
         for name in ("SECRET_IN_CALL", "OP_REFERENCE"):
             with self.subTest(name=name):
                 self.assertEqual(pattern(MATCHER, name), pattern(ROOT / "hooks" / "tstack-hook.py", name))
+
+
+class OneOffCase(KindMatchCase):
+    """A one-off script: `bash <path>.sh` under the fleet's state dir or the call's root workspace, committed or not."""
+
+    def setUp(self):
+        super().setUp()
+        self.state = self.home / ".local" / "state" / "fleet"
+        (self.state / "proto-mgr").mkdir(parents=True)
+
+    def script(self, where, name="deploy-window-4", data=SCRIPT):
+        path = where / f"{name}.sh"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(data)
+        return path
+
+    def test_a_script_in_the_state_dir_is_a_one_off_kind(self):
+        path = self.script(self.state / "proto-mgr")
+        sha = hashlib.sha256(SCRIPT).hexdigest()
+        self.assertEqual(self.match(f"bash {path}"), {
+            "kind": {"action": "deploy-window", "repo": {"main": str(self.state), "origin": None}, "task": "proto-mgr/deploy-window-4.sh", "sha256": sha, "text": SCRIPT.decode(), "oneoff": True},
+            "workspace": str(self.state),
+            "scripts": [{"path": str(path), "sha256": sha}],
+        })
+
+    def test_a_script_under_the_calls_root_is_a_one_off_kind_of_its_repo(self):
+        path = self.script(self.main / ".scratch", "push-master", b"jj git push --bookmark master\n")
+        kind = self.kind(f"bash {path}", root=self.main)
+        self.assertEqual(kind, {"action": "push-master", "repo": {"main": str(self.main / ".jj" / "repo"), "origin": self.origin}, "task": ".scratch/push-master.sh",
+                                "sha256": hashlib.sha256(b"jj git push --bookmark master\n").hexdigest(), "text": "jj git push --bookmark master\n", "oneoff": True})
+        self.assertEqual(self.kind(f"bash {path} {COMMIT}", root=self.main), kind)
+        self.assertEqual(self.match(f"bash {path}", root=self.main)["workspace"], str(self.main))
+
+    def test_the_action_is_the_name_without_its_run_number(self):
+        for name, action in (("deploy-window-4", "deploy-window"), ("deploy-window-12", "deploy-window"), ("deploy-beta", "deploy-beta"), ("push-master", "push-master"), ("deploy-kit1", "deploy-kit1")):
+            with self.subTest(name=name):
+                self.assertEqual(self.kind(f"bash {self.script(self.state, name)}")["action"], action)
+        for name in ("deploy-4", "push-1", "restart-4", "window-deploy", "Deploy-beta", "deploy", "deployment"):
+            with self.subTest(name=name):
+                self.assertIn("deploy- or push-", self.refused(f"bash {self.script(self.state, name)}"))
+
+    def test_a_link_refuses(self):
+        real = self.script(self.state / "proto-mgr", "deploy-real")
+        (self.state / "proto-mgr" / "deploy-link.sh").symlink_to(real)
+        self.assertIn("regular file", self.refused(f"bash {self.state}/proto-mgr/deploy-link.sh"))
+        (self.state / "linked").symlink_to(self.state / "proto-mgr")
+        self.assertIn("symlink", self.refused(f"bash {self.state}/linked/deploy-real.sh"))
+
+    def test_a_path_outside_the_trusted_roots_refuses(self):
+        self.assertIn("no root", self.refused(f"bash {self.script(self.home / 'elsewhere')}"))
+        under_main = self.script(self.main / ".scratch")
+        self.assertIn("no root", self.refused(f"bash {under_main}"))
+        self.assertIn("no root", self.refused(f"bash {under_main}", root=self.other))
+        plain = self.home / "plain"
+        self.assertIn("no root", self.refused(f"bash {self.script(plain)}", root=plain))
+        self.assertIn("no root", self.refused(f"bash {self.script(self.state.parent / 'fleet-board')}"))
+
+    def test_a_pipe_or_a_second_command_refuses(self):
+        path = self.script(self.state / "proto-mgr")
+        for form in ("{} | tail", "{} ; {}", "{} && x", "cd /; {}", "{}\n{}", "{} > log"):
+            with self.subTest(form=form):
+                said = self.refused(form.replace("{}", f"bash {path}"))
+                self.assertIn("more than one command", said)
+                self.assertIn("exactly", said)
+        for form in ("sh {}", "bash -x {}", "{} --now"):
+            with self.subTest(form=form):
+                self.assertIn("exactly", self.refused(form.replace("{}", f"bash {path}")))
+
+    def test_a_one_off_that_finds_itself_is_refused(self):
+        for line in ('. "$0.lib"', '. "$(dirname "$0")/lib.sh"', '. "${0%/*}/lib.sh"', '. "$(dirname "${0}")/lib.sh"',
+                     '. "${@:0:1}.lib"', '. "${*:0:1}.lib"', '. "${@: 0:1}.lib"', '. "$BASH_ARGV0.lib"', "awk '{print $0}' /etc/hosts",
+                     """eval '. "$0.lib"'""", '. "${BASH_SOURCE[0]}.lib"', '. "$(dirname "${BASH_SOURCE[0]}")/lib.sh"', '. "$(dirname "$BASH_SOURCE")/lib.sh"'):
+            with self.subTest(line=line):
+                self.assertIn("write absolute paths instead", self.refused(f"bash {self.script(self.state, data=f'#!/bin/sh{chr(10)}{line}{chr(10)}'.encode())}"))
+
+    def test_a_one_off_call_out_of_the_form_is_refused(self):
+        path = self.script(self.state)
+        self.assertIn("normal path", self.refused(f"bash {self.state}/proto-mgr/../deploy-window-4.sh"))
+        for call in (f"FOO=1 bash {path}", f"env FOO=1 bash {path}", f'bash "{path}"', f"bash '{path}'"):
+            with self.subTest(call=call):
+                self.assertIn("exactly", self.refused(call))
+
+    def test_a_one_off_that_does_not_find_itself_has_a_kind(self):
+        data = b'#!/bin/sh\n. /opt/deploy/lib.sh\necho "$1 $10 cost $5" "${1}"\n'
+        self.assertEqual(self.kind(f"bash {self.script(self.state, data=data)}")["oneoff"], True)
+
+    def test_a_committed_kind_that_finds_itself_still_has_one(self):
+        self.assertNotIn("oneoff", self.kind(self.tracked(self.main, b'#!/bin/sh\n. "$(dirname "$0")/lib.sh"\n. "${BASH_SOURCE[0]}.lib"\n', "deploy-sibling")))
+
+    def test_the_card_text_rules_hold_for_a_one_off(self):
+        self.assertIn("credential", self.refused(f"bash {self.script(self.state, 'deploy-cred', b'TOKEN=abc\n')}"))
+        self.assertIn("first line", self.refused(f"bash {self.script(self.state, 'deploy-py', b'#!/usr/bin/python3\nx\n')}"))
+
+    def test_the_committed_case_is_as_before(self):
+        self.assertEqual(self.match(self.call, root=self.main), self.match(self.call))
+        self.assertNotIn("oneoff", self.kind(self.call, root=self.main))
+        (self.main / "tasks" / "grant" / "deploy-new.sh").write_bytes(SCRIPT)
+        self.assertIn("not committed", self.refused(self.task(self.main, "deploy-new"), root=self.main))
 
 
 class InputCase(KindMatchCase):

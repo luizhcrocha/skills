@@ -1408,6 +1408,16 @@ def fleet_news(hook):
     return "\n".join(lines) or None
 
 
+def _team_of(d):
+    """The team at d: the name its cloud.json gives, else its folder's."""
+    import json
+    try:
+        marker = json.loads(Path(d, MOVED_MARKER).read_text())
+    except (OSError, ValueError):
+        marker = None
+    return marker["fleet"] if isinstance(marker, dict) and isinstance(marker.get("fleet"), str) else os.path.basename(d)
+
+
 ROOM_LINE = "room: {count} {lines} since #{cursor} you did not read; `{cli} room {project} since {cursor} --as {team}`"
 
 
@@ -1416,12 +1426,12 @@ def _room_unread(d):
     team), or None when its folder holds no room: ids after its cursor (DIR/room.cursor), never shown in a wake
     (DIR/room.seen, one id a line), not its own. The team is the one its cloud.json names."""
     try:
-        marker = json.loads(Path(d, MOVED_MARKER).read_text())
+        json.loads(Path(d, MOVED_MARKER).read_text())
         members = json.loads(Path(d, "room.json").read_text())
         raw = Path(d, "room.jsonl").read_bytes().decode("utf-8", "replace")
     except (OSError, ValueError):
         return None
-    team = marker.get("fleet") if isinstance(marker, dict) and isinstance(marker.get("fleet"), str) else os.path.basename(d)
+    team = _team_of(d)
     project = members.get("project") if isinstance(members, dict) else None
     if not isinstance(project, str):
         return None
@@ -4788,33 +4798,48 @@ def _fleets_of_session(hook):
 KIND_MATCH_SECONDS = 25
 
 
-def _live_kind(home, kind, now):
+def _live_kind(home, kind, script, team, now):
     """The record in <home>/.claude/tstack-grants/kinds.json (the host writes it, fleet/src/cli/grant.ts reads it) that holds
-    the matcher's `kind` at `now`: same action, repo, task and script hash, not ended, before its end time. None for any other."""
+    a call at `now`: not ended and before its end time. A row with a copy is the granted `team`'s alone (the host's useCopy and
+    refuseOneOff), and holds a call of that copy, `script`, or a one-off `kind` of its action and hash. Any other row, of any
+    team, has the action, repo, task and hash of `kind`, which is None for a call the matcher refuses. None for any other."""
     import json
     try:
         with open(os.path.join(home, ".claude", GRANT_RECORDS, "kinds.json"), encoding="utf-8") as f:
             rows = json.load(f)["kinds"]
     except (OSError, ValueError, KeyError, TypeError):
         return None
-    same = lambda row: all(row.get(key) == kind[key] for key in ("action", "repo", "task", "sha256"))
+    same = lambda row, *keys: kind and all(row.get(key) == kind[key] for key in keys)
+    teams = lambda row: isinstance(row.get("granted"), dict) and row["granted"].get("team") == team
+    copied = lambda row: teams(row) and (row["copy"] == script or (kind and kind.get("oneoff") and same(row, "action", "sha256")))
     for row in rows if isinstance(rows, list) else ():
         if not isinstance(row, dict) or row.get("ended"):
             continue
         until = _instant(row.get("until"))
-        if until and until > now and same(row):
+        if until and until > now and (copied(row) if row.get("copy") else same(row, "action", "repo", "task", "sha256")):
             return row
     return None
 
 
-def _kind_of_call(call, cwd, home):
-    """What hooks/tstack-kind-match.py reads from `call` (its head holds the contract); None for a refusal."""
+def _kind_of_call(call, cwd, home, root=None):
+    """What hooks/tstack-kind-match.py reads from `call` (its head holds the contract); None for a refusal. `root` is the ask's
+    --root, the one workspace a one-off script may sit in, sent as the host's answer sends it."""
     import json
     import subprocess
     matcher = os.path.join(os.path.dirname(os.path.abspath(__file__)), "tstack-kind-match.py")
-    done = subprocess.run(["python3", "-I", matcher], input=json.dumps({"command": call, "cwd": cwd, "env": {"HOME": home}}),
+    done = subprocess.run(["python3", "-I", matcher], input=json.dumps({"command": call, "cwd": cwd, "env": {"HOME": home, **({"CLAUDE_PROJECT_DIR": root} if root else {})}}),
                           capture_output=True, text=True, timeout=KIND_MATCH_SECONDS, check=True)
     return json.loads(done.stdout).get("kind")
+
+
+def _script_of_call(call):
+    """The script path hooks/tstack-kind-match.py reads from `call`, even where it refuses a kind: a copy may sit outside its roots."""
+    from importlib.machinery import SourceFileLoader
+    from importlib.util import module_from_spec, spec_from_loader
+    loader = SourceFileLoader("tstack_kind_match", os.path.join(os.path.dirname(os.path.abspath(__file__)), "tstack-kind-match.py"))
+    module = module_from_spec(spec_from_loader("tstack_kind_match", loader))
+    loader.exec_module(module)
+    return module.script_path(call)
 
 
 def _under_live_kind(hook, denied):
@@ -4829,16 +4854,20 @@ def _under_live_kind(hook, denied):
             return None
         said = lambda flag: words[words.index(flag) + 1] if flag in words else None
         call, home = said("--call"), hook.env.get("HOME")
-        kind = _kind_of_call(call, hook.cwd, home) if home else None
-        row = _live_kind(home, kind, fleet_now(hook.env)) if kind else None
+        kind = _kind_of_call(call, hook.cwd, home, said("--root")) if home else None
+        script = _script_of_call(call)
+        d = words[words.index("state") + 1]
+        row = _live_kind(home, kind, script, _team_of(d), fleet_now(hook.env)) if home and script else None
         if not row:
             return None
+        named = f"bash {row['copy']}{call[len(f'bash {script}'):]}" if row.get("copy") else call
         agent = said("--agent-id")
-        use = (f"{fleet_cli()} grant use {shlex.quote(words[words.index('state') + 1])} --call {shlex.quote(call)} "
+        use = (f"{fleet_cli()} grant use {shlex.quote(d)} --call {shlex.quote(named)} "
                f"--root {shlex.quote(said('--root'))}{f' --agent-id {shlex.quote(agent)}' if agent else ''}")
         step = "Send your coordinator this command to run, and stop there" if fleet_worker(hook) else "Get its one-time grant with this command"
+        run = "that call" if named == call else f"`{named}`, the copy the owner allowed, in place of this one,"
         return Deny(f"tstack: this call is of a kind the owner allowed for 24 hours ({row.get('id')}, until {row['until']}), and no "
-                    f"grant stands for it yet. Open no card. {step}:\n\n{use}\n\nWhen it says the grant stands, run that call by "
+                    f"grant stands for it yet. Open no card. {step}:\n\n{use}\n\nWhen it says the grant stands, run {run} by "
                     "itself, unchanged, once. If it refuses, ask on a card.")
     except Exception:
         log(hook.data_dir, f"{hook.event} _under_live_kind failed\n{traceback.format_exc()}")

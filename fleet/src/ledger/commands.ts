@@ -89,6 +89,9 @@ export const NEEDS = ["user", "coordinator", "worker"] as const;
 /** The kinds of event. */
 export const EVENT_KINDS = ["spawned", "reported", "blocked", "resolved", "asked", "decision", "note", "integrated", "reviewed"] as const;
 
+/** A Bash card worth a word on why it has no 24-hour option: one that names deploy or push, as a word or in a script's name. */
+const NAMES_DEPLOY_OR_PUSH = /\b(?:deploy|push)\b/u;
+
 /** A change as a `reviewed` event names it: its jj change id and the commit the reviewer read, `change@commit`. A
  * bare change id is refused: filled in at record time it would be the change's commit then, which a fold squashed in
  * after the review has already replaced (perf, 10-23), and land-check binds the review to that commit. */
@@ -1787,9 +1790,14 @@ function setRefusal(run: Run, d: Decision, draft?: RefusalDraft, worded = false)
     const refusal: RefusedCall = { ...made, root: yield* sessionRootOf(run, made.root) };
 
     if (once || before?.once === true) refusal.once = true;
-    const kind = refusal.tool === "Bash" && refusal.once !== true && more.length === 0 ? kindOfCall(run.machine, refusal.call, refusal.root) : undefined;
 
-    if (kind !== undefined) refusal.kind = kind;
+    if (refusal.tool === "Bash") {
+      const read = refusal.once === true ? { why: "--once holds it to one call" } : more.length > 0 ? { why: `it is not a single Bash call (--then adds ${String(more.length)})` } : kindOfCall(run.machine, refusal.call, refusal.root);
+
+      if ("kind" in read) refusal.kind = read.kind;
+      else if ([refusal.call, ...more].some((one) => NAMES_DEPLOY_OR_PUSH.test(one ?? ""))) run.warn(`state: ${d.ref ?? d.id} offers no Allow for 24 hours: ${read.why}`);
+    }
+
     d.refusal = refusal;
     d.options = permissionOptions(refusal);
 
