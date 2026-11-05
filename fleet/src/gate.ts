@@ -33,6 +33,14 @@
  * at most) passes the head of the queue only when the head would not be admitted even with every light hold gone, in
  * either row of the budget or by the memory floor: lights never keep a head out, since once they are what blocks it
  * they stop passing and drain.
+ *
+ * One landing per repository at a time. A landing that passed keeps its hold, its memory and CPUs given back, until
+ * its holder frees it after the push or two minutes pass: the push moves its repository's bookmark, and a landing
+ * admitted before it proves a stack on the old tip. While a landing of a repository runs or holds for its push, no
+ * other landing of that repository is admitted, one the budget has room for included, and one waiting on it keeps
+ * nobody behind it waiting but that repository's later landings, which it comes before once the slot is free. Every
+ * other run passes, whole-budget asks included past a push hold, so a forgotten free costs only that repository's
+ * landings.
  */
 import { createHash } from "node:crypto";
 import { appendFileSync, closeSync, openSync } from "node:fs";
@@ -80,6 +88,9 @@ const PEAK_MARGIN = 1.25;
 export const PEAK_MARGIN_TEXT = `${String(Math.round((PEAK_MARGIN - 1) * 100))}%`;
 
 const RUNS_MEASURED = 3;
+
+/** How long a landing that passed keeps its hold for the push ({@link Gate.awaitPush}), in seconds. */
+const PUSH_HOLD_S = 120;
 
 /** The exit of a command SIGKILL ended: what the cap's OOM killer and the machine's send. SIGTERM's and SIGINT's are
  * someone stopping it. */
@@ -362,10 +373,14 @@ export interface Hold extends GateHolder {
   readonly runnerUnit: string | undefined;
   /** The CPUs its run estimated; undefined when it declared none (by hand, or an older fleet's run). */
   readonly cpus: number | undefined;
-  /** Whether its run was marked a landing gate (`--landing`): recorded, nothing more. */
+  /** Whether its run was marked a landing gate (`--landing`): recorded, and it can come to be {@link pushing}. */
   readonly landing: boolean;
+  /** The repository a landing lands in; undefined on any other hold. */
+  readonly repo: string | undefined;
   /** Whether its run is light: a light waiter passes a head that would not fit even without the light holds. */
   readonly light: boolean;
+  /** Whether it is a landing that passed, waiting for its push: no other landing of {@link repo} is admitted beside it. */
+  readonly pushing: boolean;
   /** The hold as gate.json has it. */
   readonly raw: JsonObject;
 }
@@ -384,6 +399,8 @@ export interface Waiter extends GateHolder {
   readonly memory: boolean;
   readonly cpus: number | undefined;
   readonly landing: boolean;
+  /** The repository a landing lands in; undefined on any other waiter. */
+  readonly repo: string | undefined;
   /** Whether it is light ({@link Ask}'s `light`). */
   readonly light: boolean;
   /** The limits it asked under, by which a light run judges it: the budget's bytes, the CPU budget and the floor it
@@ -415,8 +432,10 @@ export interface Ask {
   readonly cpus?: number | undefined;
   /** The CPUs all holds together may declare; undefined counts memory alone. */
   readonly cpuBudget?: number | undefined;
-  /** Whether it is marked a landing gate: recorded on its hold, nothing more. */
+  /** Whether it is marked a landing gate: recorded on its hold, and another landing's push of `repo` keeps it out. */
   readonly landing?: boolean | undefined;
+  /** The repository it runs in; kept for a landing, read for nothing else. */
+  readonly repo?: string | undefined;
   /** Whether it is light (an estimate of {@link LIGHT_CAP} at most, each of its last runs {@link LIGHT_S} at most): it
    * passes a head that would not fit even with every light hold gone. */
   readonly light?: boolean | undefined;
@@ -470,7 +489,10 @@ export type Row = "memory" | "CPU";
 
 /** The rows in which `part` does not fit beside `holders`: the memory budget `budget` and, given one, the CPU budget
  * `cpuBudget`. None: it fits. */
-function lacksBeside(part: Part, budget: number, holders: readonly Hold[], cpuBudget?: number): Row[] {
+function lacksBeside(part: Part, budget: number, standing: readonly Hold[], cpuBudget?: number): Row[] {
+  // A push hold's memory is nominal, and no process is behind it: no row of the budget counts it.
+  const holders = standing.filter((h) => !h.pushing);
+
   if (part.cap === undefined) return holders.length === 0 ? [] : ["memory"];
   const mem = memHeld(holders) + part.cap > roomOf(budget, holders);
   const cpu = cpuBudget !== undefined && cpusHeld(holders) + (part.cpus ?? 0) > cpuBudget;
@@ -575,6 +597,8 @@ export interface RunRecord {
   readonly commit?: string | undefined;
   /** CPU seconds its scope used (cpu.stat's usage_usec); null where there was no scope. Older lines have none. */
   readonly cpu_s?: number | null | undefined;
+  /** The token of the hold it kept for its push, when it passed as a landing. */
+  readonly push_token?: string | undefined;
   /** The CPUs it estimated, and whether it was marked a landing gate. Older lines have neither. */
   readonly cpus?: number | undefined;
   readonly landing?: boolean | undefined;
@@ -727,7 +751,9 @@ function holdOf(raw: JsonObject): Hold {
     runnerUnit: unitOf(raw["runner_unit"]),
     cpus: asNumber(raw["cpus"]),
     landing: raw["landing"] === true,
+    repo: asString(raw["repo"]),
     light: raw["light"] === true,
+    pushing: raw["pushing"] === true,
     raw,
   };
 }
@@ -750,6 +776,7 @@ function waiterOf(raw: JsonObject): Waiter | undefined {
     memory: raw["memory"] === true,
     cpus: asNumber(raw["cpus"]),
     landing: raw["landing"] === true,
+    repo: asString(raw["repo"]),
     light: raw["light"] === true,
     budget: asNumber(raw["budget"]),
     cpuBudget: asNumber(raw["cpu_budget"]),
@@ -765,7 +792,7 @@ function plus(raw: JsonObject, key: string, value: Json | undefined): JsonObject
 function waiterJson(w: Waiter): JsonObject {
   const base = plus(plus(plus({ fleet: w.name, kind: w.kind, what: w.what, since: w.since, until: w.until, pid: w.pid }, "cap", w.cap), "started", w.started), "memory", w.memory || undefined);
 
-  const kind = plus(plus(plus(base, "cpus", w.cpus), "landing", w.landing || undefined), "light", w.light || undefined);
+  const kind = plus(plus(plus(plus(base, "cpus", w.cpus), "landing", w.landing || undefined), "repo", w.repo), "light", w.light || undefined);
 
   return plus(plus(plus(kind, "budget", w.budget), "cpu_budget", w.cpuBudget), "floor", w.floor);
 }
@@ -845,6 +872,11 @@ function rank(sorted: readonly number[], p: number): number {
   return sorted[Math.max(0, Math.ceil(p * sorted.length) - 1)] ?? 0;
 }
 
+/** Whether another landing keeps `asker` out: it is a landing of a repository a landing among `holders` runs in or is about to push to. */
+function landingHeld(asker: Pick<Ask, "landing" | "repo">, holders: readonly Hold[]): boolean {
+  return asker.landing === true && asker.repo !== undefined && holders.some((h) => h.landing && h.repo === asker.repo);
+}
+
 /** `hold` in words: `held by ui (no fleet) since S, until U, cap 15.5G: what`. A hold of the whole budget names no cap. */
 export function holdText(hold: Hold): string {
   const who = hold.kind === "session" ? `${plain(hold.name)} (no fleet)` : plain(hold.name);
@@ -852,7 +884,7 @@ export function holdText(hold: Hold): string {
   const cap = hold.cap === undefined ? "" : `, ${hold.unit === undefined ? "cap" : "estimate"} ${sizeText(hold.cap)}`;
   const cpus = hold.cpus === undefined ? "" : `, ${String(hold.cpus)} CPUs`;
 
-  return `held by ${who} since ${plain(hold.since)}${until}${cap}${cpus}${hold.landing ? ", a landing gate" : ""}: ${plain(hold.what)}`;
+  return `held by ${who} since ${plain(hold.since)}${until}${cap}${cpus}${hold.pushing ? ", a landing that passed, waiting for its push" : hold.landing ? ", a landing gate" : ""}: ${plain(hold.what)}`;
 }
 
 /** The gate of the machine whose registry is `registry`. */
@@ -983,8 +1015,9 @@ export class Gate {
       const { holders, queue } = this.settled(now);
       const at = queue.findIndex((w) => w.pid === ask.pid);
       const lacks = lacksBeside(ask, ask.budget, holders, ask.cpuBudget);
-      const fits = lacks.length === 0;
-      const before = at < 0 ? queue : queue.slice(0, at);
+      const fits = lacks.length === 0 && !landingHeld(ask, holders);
+      // A landing waiting on its repository's is not in line for anything else: a forgotten free costs nobody behind it.
+      const before = (at < 0 ? queue : queue.slice(0, at)).filter((w) => !landingHeld(w, holders));
       const heavy = holders.filter((h) => !h.light);
       const lights = holders.filter((h) => h.light);
 
@@ -1028,6 +1061,7 @@ export class Gate {
           memory,
           cpus: ask.cpus,
           landing: ask.landing === true,
+          repo: ask.landing === true ? ask.repo : undefined,
           light: ask.light === true,
           budget: ask.budget,
           cpuBudget: ask.cpuBudget,
@@ -1070,7 +1104,26 @@ export class Gate {
     // A run with a cap is a run in a scope (without one it asks for the whole budget): the scope's name is the hold's.
     const scoped = ask.runs && ask.cap !== undefined ? { ...run, unit: `fleet-gate-${token}-${String(ask.pid)}` } : run;
 
-    return holdOf(plus(plus(plus(plus({ ...scoped, budget: ask.budget }, "cap", ask.cap), "cpus", ask.cpus), "landing", ask.landing === true ? true : undefined), "light", ask.light === true ? true : undefined));
+    return holdOf(plus(plus(plus(plus(plus({ ...scoped, budget: ask.budget }, "cap", ask.cap), "cpus", ask.cpus), "landing", ask.landing === true ? true : undefined), "repo", ask.landing === true ? ask.repo : undefined), "light", ask.light === true ? true : undefined));
+  }
+
+  /** The landing run `runner`, whose command passed, keeps the hold `token` for its push: {@link PUSH_HOLD_S} seconds
+   * from `now`, the least of the memory and no CPUs, with no process or scope behind it, so its token frees it from
+   * anywhere. The hold as kept, or undefined when it has lapsed or is not that run's. */
+  awaitPush(token: string, runner: number, now: Date): Hold | undefined {
+    return this.locked(() => {
+      const { holders } = this.settled(now);
+      const hold = holders.find((h) => h.token === token && h.pid === runner);
+
+      if (hold === undefined) return undefined;
+      const gone = new Set(["pid", "started", "unit", "cpus", "light"]);
+      const raw = Object.fromEntries(Object.entries(hold.raw).filter(([key]) => !gone.has(key)));
+      const kept = holdOf({ ...raw, cap: MIN_CAP, until: stampOf(new Date(now.getTime() + PUSH_HOLD_S * 1000)), pushing: true });
+
+      this.keepHolds(holders.map((h) => (h === hold ? kept : h)));
+
+      return kept;
+    });
   }
 
   /** The process `pid` gives up its place in the queue. */
@@ -1085,13 +1138,16 @@ export class Gate {
   /** Free the holds `key` names, by token or (as before tokens) by holder's name. A run's hold is freed only by
    * its runner (`runner`, its pid): the run still holds its memory, so the release is refused with the holds that
    * are `running`, to stop the run instead. A hold taken by hand is always freed; one an older fleet's run still goes
-   * under is freed into that run's hold, so its memory stays counted until the run ends. Refused with the holders
-   * (`held`) when none of the holds is `key`'s. */
-  free(key: string, now: Date, runner?: number): { readonly freed: true } | { readonly held: readonly Hold[] } | { readonly running: readonly Hold[] } {
+   * under is freed into that run's hold, so its memory stays counted until the run ends. A token no hold has that a
+   * run's record gave for its push has `ended`: the hold lapsed or was freed, and there is nothing to refuse. Refused
+   * with the holders (`held`) when none of the holds is `key`'s. */
+  free(key: string, now: Date, runner?: number): { readonly freed: true } | { readonly ended: true } | { readonly held: readonly Hold[] } | { readonly running: readonly Hold[] } {
     return this.locked(() => {
       const { holders } = this.settled(now);
       const named = holders.filter((h) => h.token === key || plain(h.name) === plain(key));
       const going = named.filter((h) => h.pid !== undefined && h.pid !== runner);
+
+      if (named.length === 0 && this.pushEnded(key)) return { ended: true };
 
       if (holders.length > 0 && named.length === 0) return { held: holders };
 
@@ -1105,6 +1161,11 @@ export class Gate {
 
       return { freed: true };
     });
+  }
+
+  /** Whether a run's record gives `token` as the one its push hold was kept under. */
+  private pushEnded(token: string): boolean {
+    return (readText(this.path("runs.jsonl")) ?? "").split("\n").some((line) => Option.getOrUndefined(parseObject(line))?.["push_token"] === token);
   }
 
   /** Keep `run` in `runs.jsonl`. */

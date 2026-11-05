@@ -6588,6 +6588,21 @@ class SuiteGateTest(FleetCase):
                                   f"free it first with `{self.fleet_cli} fleets gate free {freed}`; else the run waits "
                                   f"for it like any other. ", reason)
 
+    def test_a_landing_waiting_for_its_push_is_no_hold_by_hand_and_keeps_no_suite_out(self):
+        # No pid, like a hold by hand, but its token is the lander's to free, and a run that is no landing passes it.
+        self.manager()
+        (self.registry / "gate").mkdir()
+        pushing = {"fleet": "p", "kind": "fleet", "what": "gate run: just test", "since": "2026-01-05T08:00:00+00:00",
+                   "until": "2999-01-01T00:00:00+00:00", "token": "abcd1234", "cap": 2 ** 26, "landing": True,
+                   "pushing": True, "repo": "/r/p/.jj/repo"}
+        summary = {"fleet": "p (64.0M)", "kind": "session", "what": "gate run: just test",
+                   "since": "2026-01-05T08:00:00+00:00", "until": "2999-01-01T00:00:00+00:00", "v": 2, "holds": [pushing]}
+        (self.registry / "gate" / "gate.json").write_text(json.dumps(summary))
+        reason = self.decision(self.run_bash("pnpm test"))["permissionDecisionReason"]
+        self.assertNotIn("fleets gate free", reason)
+        self.assertNotIn("by hand", reason)
+        self.assertNotIn("The slot is held now", reason)
+
     def test_a_gate_run_hold_whose_runner_is_gone_is_free(self):
         self.manager()
         (self.registry / "gate").mkdir()

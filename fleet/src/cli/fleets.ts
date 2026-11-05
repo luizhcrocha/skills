@@ -579,7 +579,7 @@ function gateJson(standing: Standing, budget: Budget | undefined, cpus: number |
     cpu: cpus === undefined ? null : { budget: cpus, held: cpusHeld(standing.holders) },
     holders: standing.holders.map((h) => ({
       name: h.name, kind: h.kind, what: h.what, since: h.since, until: h.until ?? null, cap: h.cap ?? null, budget: h.budget ?? null, pid: h.pid ?? null, runner: h.runner ?? null,
-      unit: h.unit ?? h.runnerUnit ?? null, cpus: h.cpus ?? null, landing: h.landing, light: h.light,
+      unit: h.unit ?? h.runnerUnit ?? null, cpus: h.cpus ?? null, landing: h.landing, light: h.light, pushing: h.pushing,
     })),
     queue: standing.queue.map((w, i) => ({
       place: i + 1, name: w.name, kind: w.kind, what: w.what, cap: w.cap ?? null, since: w.since, waited: secondsSince(w.since, now), pid: w.pid,
@@ -683,6 +683,12 @@ function gate(machine: Machine, argv: readonly string[]): Effect.Effect<void | n
       out.out(`token ${token}, until ${result.took.until ?? ""}: free it with \`fleet fleets gate free ${token}\`\n`);
     } else if (what === "free" && key !== undefined && argv.length === 2) {
       const result = slot.free(key, machine.now());
+
+      if ("ended" in result) {
+        out.out(`token ${key}: its push hold has already ended\n`);
+
+        return undefined;
+      }
 
       if ("held" in result) return yield* fail(`held by ${result.held.map((h) => plain(h.name)).join(", ")}, not ${key}`);
 

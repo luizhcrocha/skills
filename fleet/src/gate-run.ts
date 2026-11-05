@@ -21,7 +21,11 @@
  * The command gets $FLEET_GATE_RUN_CPUS, its quota (else the CPU budget) 8 at most, always the run's own, for a config
  * to size its pool by; the gate sets no tool's own worker variable.
  * Nothing kills a run for passing its estimate: only the ceiling and the kernel's OOM killer limit it, and its peak,
- * on its record, goes into the next run's estimate. `--landing` marks the run on its hold and its record, nothing more. On
+ * on its record, goes into the next run's estimate. `--landing` marks the run on its hold and its record, and a landing
+ * that exits 0 in a repository keeps the slot for its push, against that repository's other landings alone: the push
+ * moves its bookmark, and a landing admitted before it proves a stack on the old tip. Its memory goes back (the command
+ * is gone), it prints its token, and the hold goes at `gate free TOKEN`, from any process, or in 2 minutes; any other
+ * end frees it at once. On
  * any end (exit, failure, `--timeout` or the hold's `--for` running out, a signal) it stops the scope, so every
  * process the command started dies with it (one that asked for an app scope of its own, as Chromium does, is taken
  * back into the run's while it runs, and killed when it got out after the last look), frees its hold, keeps one line
@@ -721,7 +725,7 @@ export async function gateRun(machine: Machine, ask: RunAsk, say: Say): Promise<
 
     const result = gate.ask({
       holder, what, seconds: ask.minutes * 60 + HOLD_GRACE_S, cap: scoped ? estimate : undefined, budget: budget.bytes, pid: process.pid, runs: true, waitS: ask.waitS, memory: memoryOf(sized),
-      cpus: scoped ? cpus : undefined, cpuBudget, landing: ask.landing, light,
+      cpus: scoped ? cpus : undefined, cpuBudget, landing: ask.landing, repo: where.repo, light,
     }, now);
 
     if ("took" in result) {
@@ -735,7 +739,7 @@ export async function gateRun(machine: Machine, ask: RunAsk, say: Say): Promise<
     for (const row of waitedFor(result.waiting)) waitedOn.add(row);
     behind ??= behindOf(result.waiting);
 
-    const byHand = result.waiting.holders.some((h) => h.pid === undefined && plain(h.name) === plain(ask.name));
+    const byHand = result.waiting.holders.some((h) => h.pid === undefined && !h.pushing && plain(h.name) === plain(ask.name));
 
     const byHandText = `${plain(ask.name)} holds the gate by hand, and a gate run never runs under a hold taken by hand: free it with its token first (\`fleet fleets gate free <token>\`)`;
     const why = waitText(result.waiting) + (byHand ? `; ${byHandText}` : "");
@@ -924,9 +928,14 @@ export async function gateRun(machine: Machine, ask: RunAsk, say: Say): Promise<
     // What left for an app scope after the last sweep, or once the run's scope had emptied, dies now.
     if (scoped) sweep(true);
 
+    const passed = ask.landing && why === undefined && end.error === undefined && end.code === 0;
+    const pushing = !left && passed && where.repo !== undefined && token !== undefined && gate.awaitPush(token, process.pid, machine.now()) !== undefined;
+
     if (left) {
       freed = true;
       say(`gate run: the scope ${unit}.scope still has processes after its stop: its hold stays while it does. Stop it: \`systemctl --user stop ${unit}.scope\``);
+    } else if (pushing) {
+      freed = true;
     } else {
       free();
     }
@@ -937,7 +946,7 @@ export async function gateRun(machine: Machine, ask: RunAsk, say: Say): Promise<
     const peak = count(told(piped, "peak")) ?? atStop.peak;
     const killed = count(told(piped, "oom_kill")) ?? atStop.killed ?? 0;
     const usec = count(told(piped, "cpu")) ?? atStop.usec;
-    const slot = left ? "its hold stays while its scope does" : token === undefined ? "the hold stays its taker's" : "freed the gate";
+    const slot = left ? "its hold stays while its scope does" : pushing ? "holds the gate for its push" : token === undefined ? "the hold stays its taker's" : "freed the gate";
 
     const listed = (by: Map<string, Set<number>>, word: string): string => [...by].map(([scope, pids]) => `${String(pids.size)} ${word} ${scope}`).join(", ");
 
@@ -966,8 +975,10 @@ export async function gateRun(machine: Machine, ask: RunAsk, say: Say): Promise<
       : `exit ${code} after ${secs}s`;
 
     const cpuS = usec === undefined ? null : Math.round(usec / 1000) / 1000;
-    keep({ name: holder.name, kind: holder.kind, what: command, asked: askedAs(sized), at: stampOf(machine.now()), cap, waited: waitedS, ran: Math.round(ranS * 10) / 10, code, peak: peak ?? null, killed, cpu_s: cpuS, ...marks(sized), ...waitMarks(), psi_start: psiStart, psi_end: psiEnd, psi_max: psiMax });
+    keep({ name: holder.name, kind: holder.kind, what: command, asked: askedAs(sized), at: stampOf(machine.now()), cap, waited: waitedS, ran: Math.round(ranS * 10) / 10, code, peak: peak ?? null, killed, cpu_s: cpuS, ...marks(sized), ...waitMarks(), push_token: pushing ? token : undefined, psi_start: psiStart, psi_end: psiEnd, psi_max: psiMax });
     say(`gate run: ${how}${peak === undefined ? "" : `, memory peak ${sizeText(peak)}`}; ${slot}`);
+
+    if (pushing) say(`gate run: landing passed; push, then fleet fleets gate free ${token ?? ""} (the hold lapses in 2 min)`);
 
     return code;
   } finally {

@@ -9,7 +9,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 
 import { asArray, asObject, asString, type JsonObject } from "../src/json.ts";
-import { capBytes, cpuBudgetOf, cpusHere, endOf, floorOf, Gate, holdText, familyOf, memAvailable, pressureNow, whatKey, type Hold, type RunRecord, type Waiting } from "../src/gate.ts";
+import { capBytes, cpuBudgetOf, cpusHere, endOf, floorOf, Gate, holdText, familyOf, memAvailable, MIN_CAP, pressureNow, whatKey, type Ask, type Hold, type RunRecord, type Waiting } from "../src/gate.ts";
 import { readJson, tmp } from "./support.ts";
 
 const GB = 1024 ** 3;
@@ -1194,5 +1194,76 @@ describe("a waiter's estimate", () => {
     expect(gate.standing(at(3)).queue.map((w) => [w.name, w.cap])).toEqual([["w", 24 * GB], ["x", GB]]);
     expect(ask("w", waiter, 10 * GB, 4).took?.cap).toBe(10 * GB);
     expect(gate.standing(at(4)).queue.map((w) => w.name)).toEqual(["x"]);
+  });
+});
+
+describe("a landing that passed holds the slot for its push", () => {
+  const REPO = "/r/a";
+
+  /** `name` asks as a run of 1G, ready to wait, with `more` on top. */
+  function asked(name: string, more: Partial<Ask> = {}, seconds = 0, pid = asker()): Asked {
+    return gate.ask({ holder: { name, kind: "session" }, what: `gate run: ${name}`, seconds: 3600, cap: GB, budget: BUDGET, pid, runs: true, waitS: 600, ...more }, at(seconds));
+  }
+
+  /** A landing run of `REPO` that took the gate and whose command exited 0 at second 10. */
+  function passed(): Hold {
+    const hold = asked("lander", { cap: 22 * GB, waitS: 0, cpus: 16, cpuBudget: 24, landing: true, light: true, repo: REPO }).took;
+    const kept = gate.awaitPush(hold?.token ?? "", hold?.pid ?? 0, at(10));
+
+    if (kept === undefined) throw new Error("the landing run's hold was not kept for its push");
+    expect(kept.token).toBe(hold?.token ?? "");
+
+    return kept;
+  }
+
+  test("its memory and CPUs go back, its runner and scope are off it, it lapses 2 minutes on, and holdText says what it waits for", () => {
+    const hold = passed();
+    expect(hold).toMatchObject({ cap: MIN_CAP, cpus: undefined, pid: undefined, unit: undefined, light: false, landing: true, pushing: true, repo: REPO, until: "2026-10-05T12:02:10+00:00" });
+    expect(holdText(hold)).toContain("a landing that passed, waiting for its push");
+    expect(gate.standing(at(11)).holders.map((h) => h.token)).toEqual([hold.token]);
+  });
+
+  test("the next landing of its repository stays queued though it fits, a light one too; a free from another process admits it", () => {
+    const hold = passed();
+    const waiter = asker();
+    const waiting = asked("next", { landing: true, repo: REPO }, 11, waiter);
+    expect(waiting.took).toBeUndefined();
+    expect(waiting.waiting?.fits).toBe(false);
+    expect(waiting.waiting?.lacks).toEqual([]);
+    expect(asked("light", { landing: true, repo: REPO, light: true, waitS: 60 }, 11).took).toBeUndefined();
+    expect(gate.free(hold.token ?? "", at(12))).toEqual({ freed: true });
+    expect(asked("next", { landing: true, repo: REPO }, 13, waiter).took).toBeDefined();
+  });
+
+  test("a run that is no landing and another repository's landing pass it, past a landing of its repository that waits on it", () => {
+    passed();
+    expect(asked("next", { landing: true, repo: REPO }, 11).took).toBeUndefined();
+    expect(asked("plain", { repo: REPO }, 11).took).toBeDefined();
+    expect(asked("elsewhere", { landing: true, repo: "/r/b" }, 11).took).toMatchObject({ landing: true, repo: "/r/b" });
+    expect(asked("nowhere", { landing: true }, 11).took).toBeDefined();
+    expect(gate.standing(at(12)).queue.map((w) => w.name)).toEqual(["next"]);
+  });
+
+  test("a landing's repository survives its wait in the queue, and only a landing's is kept", () => {
+    passed();
+    const waiter = asker();
+    expect(asked("next", { landing: true, repo: REPO }, 11, waiter).took).toBeUndefined();
+    expect(gate.standing(at(12)).queue[0]).toMatchObject({ name: "next", repo: REPO });
+    expect(asked("plain", { repo: REPO }, 12).took?.repo).toBeUndefined();
+  });
+
+  test("nobody frees it: at 2 minutes it lapses and the waiter is admitted", () => {
+    passed();
+    const waiter = asker();
+    expect(asked("next", { landing: true, repo: REPO }, 129, waiter).took).toBeUndefined();
+    expect(asked("next", { landing: true, repo: REPO }, 130, waiter).took).toBeDefined();
+  });
+
+  test("a hold that has lapsed, or another's token, is not held on to", () => {
+    const hold = asked("l", { seconds: 5, waitS: 0, landing: true, repo: REPO }).took;
+    expect(gate.awaitPush(hold?.token ?? "", hold?.pid ?? 0, at(5))).toBeUndefined();
+    const other = asked("o", { seconds: 60, waitS: 0 }, 6).took;
+    expect(gate.awaitPush(other?.token ?? "", 1, at(6))).toBeUndefined();
+    expect(gate.standing(at(7)).holders[0]?.pushing).toBe(false);
   });
 });

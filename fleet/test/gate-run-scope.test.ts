@@ -4,12 +4,12 @@
  * there is no systemd user manager (the Mac). The rest of gate run is gate-run.test.ts; this file is its own so that
  * bun_files.py runs the two at once, each within its per-file limit.
  */
-import { mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
+import { mkdirSync, readdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { beforeEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 
-import { cpusHere, memEstimate, sizeText } from "../src/gate.ts";
+import { cpusHere, Gate, memEstimate, sizeText } from "../src/gate.ts";
 import { asArray, asNumber, asObject, type JsonObject } from "../src/json.ts";
 import { alive, budgetBytes, first, freshRegistry, gate, holdFile, home, pidIn, records, running, SCOPE, standing, stopAll, until } from "./gate-run-support.ts";
 import { tmp } from "./support.ts";
@@ -640,6 +640,182 @@ describe.skipIf(!SCOPE)("gate run's asks: the CPUs, light runs, --landing", () =
     expect(done.stderr).toContain(", estimate 30.0G from its last 5 runs (p90 21.2G, peak 30.0G at ");
     expect(done.stderr).toContain(", at least a killed run's 30.0G: exit 137)");
     expect(records().at(-1)).toMatchObject({ estimate: 30 * GB });
+  });
+
+  describe("a --landing run that exits 0", () => {
+    const LINE = /gate run: landing passed; push, then fleet fleets gate free ([0-9a-f]+) \(the hold lapses in 2 min\)\n$/;
+    const NOW = () => new Date();
+
+    test("holds the slot, memory released, and prints its token; the next landing of its repository stays queued; a free from another process admits it", async () => {
+      const repo = repository();
+      const landed = gate(["run", "--as", "lander", "--landing", "--mem", "20G", "--", "true"], memEnv, repo.dir);
+      expect(landed.code).toBe(0);
+      const token = LINE.exec(landed.stderr)?.[1] ?? "";
+      expect(token).not.toBe("");
+      expect(landed.stderr).toContain("; holds the gate for its push");
+      expect(standing().holders).toEqual([expect.objectContaining({ name: "lander", cap: 64 * 1024 ** 2, pid: null, unit: null, cpus: null, landing: true, pushing: true })]);
+      expect(gate([], memEnv).stdout).toContain("budget 32.0G (32G): 64.0M held, ");
+      const next = running(["--as", "next", "--landing", "--mem", "4G", "--wait", "60", "--", "true"], memEnv, repo.dir);
+
+      try {
+        expect(await until(() => standing().queue.length === 1, 10000)).toBe(true);
+        await Bun.sleep(1500);
+        expect(standing().queue.map((w) => w["name"])).toEqual(["next"]);
+        expect(gate(["free", token], memEnv).stdout).toBe("free\n");
+        expect(await next.exited).toBe(0);
+        expect(await new Response(next.stderr).text()).toContain("waiting for its turn: the gate is held by lander (no fleet)");
+      } finally {
+        await stopAll([next]);
+      }
+    });
+
+    test("a run that is no landing and another repository's landing pass it, past the landing that waits on it", async () => {
+      const repo = repository();
+      const landed = gate(["run", "--as", "lander", "--landing", "--mem", "20G", "--", "true"], memEnv, repo.dir);
+      const token = LINE.exec(landed.stderr)?.[1] ?? "";
+      const next = running(["--as", "next", "--landing", "--mem", "4G", "--wait", "60", "--", "true"], memEnv, repo.dir);
+
+      try {
+        expect(await until(() => standing().queue.length === 1, 10000)).toBe(true);
+        expect(gate(["run", "--as", "plain", "--mem", "4G", "--wait", "0", "--", "true"], memEnv, repo.dir).code).toBe(0);
+        const elsewhere = gate(["run", "--as", "elsewhere", "--landing", "--mem", "4G", "--wait", "0", "--", "true"], memEnv, repository().dir);
+        expect(elsewhere.code).toBe(0);
+        expect(LINE.test(elsewhere.stderr)).toBe(true);
+        expect(standing().queue.map((w) => w["name"])).toEqual(["next"]);
+        gate(["free", token], memEnv);
+        expect(await next.exited).toBe(0);
+      } finally {
+        await stopAll([next]);
+      }
+    });
+
+    test("two landings of one repository run one after the other though both fit; another repository's and a plain run go alongside", async () => {
+      const repo = repository();
+      const dir = tmp("fleet-gate-landings-");
+      const body = `mkdir ${dir}/in.$$; ls ${dir} | grep -c '^in' > ${dir}/seen.$$; sleep 3; rmdir ${dir}/in.$$`;
+      const one = running(["--as", "one", "--landing", "--mem", "4G", "--wait", "60", "--", "sh", "-c", body], memEnv, repo.dir);
+      expect(await until(() => standing().holders.length === 1, 10000)).toBe(true);
+      const two = running(["--as", "two", "--landing", "--mem", "4G", "--wait", "60", "--", "sh", "-c", body], memEnv, repo.dir);
+
+      try {
+        expect(await until(() => standing().queue.length === 1, 10000)).toBe(true);
+        expect(standing().queue.map((w) => w["name"])).toEqual(["two"]);
+        const plainRun = gate(["run", "--as", "plain", "--mem", "4G", "--wait", "0", "--", "true"], memEnv, repo.dir);
+        expect(plainRun.code).toBe(0);
+        const elsewhere = gate(["run", "--as", "elsewhere", "--landing", "--mem", "4G", "--wait", "0", "--", "true"], memEnv, repository().dir);
+        expect(elsewhere.code).toBe(0);
+        const later = gate(["run", "--as", "later", "--landing", "--mem", "4G", "--wait", "0", "--", "true"], memEnv, repo.dir);
+        expect(later.code).toBe(75);
+        expect(await one.exited).toBe(0);
+        const token = LINE.exec(await new Response(one.stderr).text())?.[1] ?? "";
+        expect(standing().queue.map((w) => w["name"])).toEqual(["two"]);
+        gate(["free", token], memEnv);
+        expect(await two.exited).toBe(0);
+        const seen = readdirSync(dir).filter((name) => name.startsWith("seen.")).map((name) => Number(readFileSync(join(dir, name), "utf8")));
+        expect(seen).toEqual([1, 1]);
+      } finally {
+        await stopAll([one, two]);
+      }
+    });
+
+    test.skipIf(Bun.which("jj") === null)("two jj workspaces of one repository are one repository to the hold", async () => {
+      const main = tmp("fleet-gate-jj-");
+      const other = `${tmp("fleet-gate-jj-other-")}/second`;
+
+      const jj = (args: readonly string[]): void => {
+        expect(Bun.spawnSync(["jj", ...args], { cwd: main, env: { ...process.env, JJ_USER: "t", JJ_EMAIL: "t@example.com" } }).exitCode).toBe(0);
+      };
+
+      jj(["git", "init"]);
+      jj(["workspace", "add", other]);
+
+      const landed = gate(["run", "--as", "first", "--landing", "--mem", "4G", "--", "true"], memEnv, main);
+      expect(landed.code).toBe(0);
+      const token = LINE.exec(landed.stderr)?.[1] ?? "";
+      const refused = gate(["run", "--as", "second", "--landing", "--mem", "4G", "--wait", "0", "--", "true"], memEnv, other);
+      expect(refused.code).toBe(75);
+      expect(refused.stderr).toContain("the gate is held by first (no fleet)");
+      gate(["free", token], memEnv);
+      expect(gate(["run", "--as", "second", "--landing", "--mem", "4G", "--wait", "0", "--", "true"], memEnv, other).code).toBe(0);
+      expect(new Set(records().map((r) => r["repo"])).size).toBe(1);
+      expect(new Set(records().map((r) => r["workspace"])).size).toBe(2);
+    });
+
+    test("a push hold lets a whole-budget ask pass: a take with no --mem, and a run clamped to the budget", () => {
+      const repo = repository();
+      const landed = gate(["run", "--as", "lander", "--landing", "--mem", "20G", "--", "true"], memEnv, repo.dir);
+      const token = LINE.exec(landed.stderr)?.[1] ?? "";
+      const taken = gate(["take", "--as", "whole", "busy"], memEnv);
+      expect(taken.code).toBe(0);
+      gate(["free", /token ([0-9a-f]+)/.exec(taken.stdout)?.[1] ?? ""], memEnv);
+      expect(gate(["run", "--as", "full", "--mem", "32G", "--wait", "0", "--", "true"], memEnv, repo.dir).code).toBe(0);
+      expect(standing().holders.map((h) => h["name"])).toEqual(["lander"]);
+      gate(["free", token], memEnv);
+    });
+
+    test("freeing a lapsed push hold's token says so and exits 0, whoever holds now; another token is still refused", () => {
+      const repo = repository();
+      const landed = gate(["run", "--as", "lander", "--landing", "--mem", "20G", "--", "true"], memEnv, repo.dir);
+      const token = LINE.exec(landed.stderr)?.[1] ?? "";
+      new Gate(join(home, "gate"), () => []).standing(new Date(NOW().getTime() + 121_000));
+      expect(first()).toBe("free");
+      const alone = gate(["free", token], memEnv);
+      expect(alone.code).toBe(0);
+      expect(alone.stdout).toBe(`token ${token}: its push hold has already ended\n`);
+      const taken = gate(["take", "--as", "someone", "busy"], memEnv);
+      const lapsed = gate(["free", token], memEnv);
+      expect(lapsed.code).toBe(0);
+      expect(lapsed.stdout).toBe(`token ${token}: its push hold has already ended\n`);
+      const wrong = gate(["free", "0123456789abcdef"], memEnv);
+      expect(wrong.code).toBe(1);
+      expect(wrong.stderr).toContain("held by someone, not 0123456789abcdef");
+      expect(first()).toContain("held by someone");
+      gate(["free", /token ([0-9a-f]+)/.exec(taken.stdout)?.[1] ?? ""], memEnv);
+    });
+
+    test("nobody frees it: at 2 minutes, on the test's clock, it lapses and the waiter runs", async () => {
+      const repo = repository();
+      const landed = gate(["run", "--as", "lander", "--landing", "--mem", "20G", "--", "true"], memEnv, repo.dir);
+      expect(LINE.test(landed.stderr)).toBe(true);
+      const next = running(["--as", "next", "--landing", "--mem", "4G", "--wait", "60", "--", "true"], memEnv, repo.dir);
+
+      try {
+        expect(await until(() => standing().queue.length === 1, 10000)).toBe(true);
+        const slot = new Gate(join(home, "gate"), () => []);
+        const soon = new Date(NOW().getTime() + 100_000);
+        expect(slot.standing(soon).holders.map((h) => h.name)).toEqual(["lander"]);
+        slot.standing(new Date(NOW().getTime() + 121_000));
+        expect(await next.exited).toBe(0);
+      } finally {
+        await stopAll([next]);
+      }
+    });
+
+    test("a landing outside any repository has no bookmark to race: it frees at once", () => {
+      const done = gate(["run", "--as", "lander", "--landing", "--mem", "20G", "--", "true"], memEnv, tmp("fleet-gate-no-repo-"));
+      expect(done.code).toBe(0);
+      expect(done.stderr).not.toContain("landing passed");
+      expect(first()).toBe("free");
+    });
+
+    test("a landing that fails frees at once, with no such line; so does a run that is no landing", () => {
+      const failed = gate(["run", "--as", "lander", "--landing", "--mem", "20G", "--", "sh", "-c", "exit 3"], memEnv);
+      expect(failed.code).toBe(3);
+      expect(failed.stderr).not.toContain("landing passed");
+      expect(failed.stderr).toContain("; freed the gate");
+      expect(first()).toBe("free");
+      const plainRun = gate(["run", "--as", "w", "--mem", "20G", "--", "true"], memEnv);
+      expect(plainRun.code).toBe(0);
+      expect(plainRun.stderr).not.toContain("landing passed");
+      expect(first()).toBe("free");
+    });
+
+    test("a landing stopped by its --timeout frees at once", () => {
+      const stopped = gate(["run", "--as", "lander", "--landing", "--mem", "20G", "--timeout", "1", "--", "sleep", "30"], memEnv);
+      expect(stopped.code).toBe(124);
+      expect(stopped.stderr).not.toContain("landing passed");
+      expect(first()).toBe("free");
+    });
   });
 
   // 2026-10-20 13:37: load 66.8 on 32 cores with 25G available; a gate timed out with no failed assertion.

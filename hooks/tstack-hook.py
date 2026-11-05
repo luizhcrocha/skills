@@ -6555,6 +6555,9 @@ def _gate_hold(env):
     now = datetime.now(until.tzinfo) if until.tzinfo else datetime.now()
     if now >= until:
         return None
+    holds = held.get("holds")
+    if isinstance(holds, list) and holds and all(isinstance(h, dict) and h.get("pushing") for h in holds):
+        return None  # landings waiting for their push keep out only their repositories' landings
     if held.get("pid") is not None:  # `gate run`'s hold lapses with its runner
         try:
             os.kill(int(held["pid"]), 0)
@@ -6567,8 +6570,9 @@ def _gate_hold(env):
 
 def _hand_tokens(env, name):
     """The tokens of the holds `name` took by hand (`gate take`) that have not lapsed: a `gate run` never goes under
-    one, its own name's included, so a run of that name waits on them. gate.json is one hold, or with `v: 2` a summary
-    that carries them in `holds`."""
+    one, its own name's included, so a run of that name waits on them. A landing waiting for its push has no pid either,
+    but it is no hold by hand: a run passes it, and only its lander should free it. gate.json is one hold, or with
+    `v: 2` a summary that carries them in `holds`."""
     from datetime import datetime
     try:
         held = json.loads((fleet_registry(env) / "gate" / "gate.json").read_text())
@@ -6577,8 +6581,8 @@ def _hand_tokens(env, name):
     holds = held.get("holds") if isinstance(held, dict) and isinstance(held.get("holds"), list) else [held]
     tokens = []
     for hold in holds:
-        if not isinstance(hold, dict) or hold.get("pid") is not None or hold.get("fleet") != name \
-                or not isinstance(hold.get("token"), str):
+        if not isinstance(hold, dict) or hold.get("pid") is not None or hold.get("pushing") \
+                or hold.get("fleet") != name or not isinstance(hold.get("token"), str):
             continue
         try:
             until = datetime.fromisoformat(hold["until"])
