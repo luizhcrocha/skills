@@ -384,17 +384,17 @@ describe.skipIf(!SCOPE)("gate run's record, and its estimate from the last runs"
   });
 
   // A run's peak past its estimate is not killed: only the ceiling, the whole budget, limits it, and the peak raises
-  // the next run's estimate, whatever its end.
-  test("a run past its estimate goes on under the ceiling, the same for every run, and its peak, a failure's too, raises the next estimate", () => {
+  // the next run's estimate.
+  test("a run past its estimate goes on under the ceiling, the same for every run, and its peak raises the next estimate", () => {
     const repo = gitRepo();
-    const hog = ["python3", "-c", "x = bytearray(400 * 1024 * 1024); print('survived'); raise SystemExit(3)"];
+    const hog = ["python3", "-c", "x = bytearray(400 * 1024 * 1024); print('survived')"];
     const over = gate(["run", "--as", "w1", "--mem", "64M", "--", ...hog], more, repo);
     expect(over.stdout).toBe("survived\n");
-    expect(over.code).toBe(3);
+    expect(over.code).toBe(0);
     expect(over.stderr).toContain(`, estimate 64.0M from --mem and `);
     expect(over.stderr).toContain(`; MemoryMax=${sizeText(budgetBytes())} (the budget`);
     const [ran] = records();
-    expect(ran).toMatchObject({ estimate: 64 * 1024 ** 2, cap: budgetBytes(), code: 3, killed: 0 });
+    expect(ran).toMatchObject({ estimate: 64 * 1024 ** 2, cap: budgetBytes(), code: 0, killed: 0 });
     const peak = asNumber(ran?.["peak"]) ?? 0;
     expect(peak).toBeGreaterThan(400 * 1024 ** 2);
 
@@ -426,6 +426,7 @@ describe.skipIf(!SCOPE)("gate run's record, and its estimate from the last runs"
 
 describe.skipIf(!SCOPE)("gate run's asks: the CPUs, light runs, --landing", () => {
   const GB = 1024 ** 3;
+  const MIB = 1024 ** 2;
   const AT = "2026-10-20T12:00:00.000Z";
   const half = Math.max(2, Math.floor(cpusHere() / 2));
   /** A CPU budget of half the machine's CPUs and 8, on any machine. */
@@ -478,13 +479,13 @@ describe.skipIf(!SCOPE)("gate run's asks: the CPUs, light runs, --landing", () =
     const done = gate(["run", "--as", "w1", "--landing", "--", "bash", now], memEnv, repo.dir);
     expect(done.code).toBe(0);
     expect(done.stdout).toBe("=== tier check\n=== tier test\n=== tier browser\n");
-    expect(done.stderr).toContain(`, estimate ${sizeText(memEstimate(6.8 * GB))} from its last run (6.8G peak at ${AT})`);
+    expect(done.stderr).toContain(`, estimate 7.5G from its last run (6.8G peak at ${AT})`);
 
     // While its tiers ran, the gate held one hold, this run's: no tier asked the gate again.
     const during = asObject(JSON.parse(readFileSync(seen, "utf8"))) ?? {};
     const held = (asArray(during["holds"]) ?? [during]).map((hold) => asObject(hold) ?? {});
     expect(held).toHaveLength(1);
-    expect(held[0]).toMatchObject({ landing: true, cap: memEstimate(6.8 * GB) });
+    expect(held[0]).toMatchObject({ landing: true, cap: 7660 * MIB });
     expect(records()).toHaveLength(2);
     expect(last()).toMatchObject({ what: `bash ${now}`, landing: true, code: 0 });
   });
@@ -500,14 +501,14 @@ describe.skipIf(!SCOPE)("gate run's asks: the CPUs, light runs, --landing", () =
 
   test("--landing is recorded, and changes nothing else: the same estimate as the run unmarked", () => {
     const repo = repository();
-    kept({ repo: repo.id, what: "true", ran: 100, cpu_s: 400, peak: 6 * GB });
+    kept(...Array.from({ length: 5 }, () => ({ repo: repo.id, what: "true", ran: 100, cpu_s: 400, peak: 6 * GB })));
     const marked = gate(["run", "--as", "w1", "--landing", "--", "true"], cpuEnv, repo.dir);
     expect(marked.code).toBe(0);
     expect(marked.stderr).toContain("w1 holds the gate as a landing gate (token");
-    expect(last()).toMatchObject({ landing: true, estimate: memEstimate(6 * GB), cpus: 5 });
+    expect(last()).toMatchObject({ landing: true, estimate: 6759 * MIB, cpus: 5 });
     const plain = gate(["run", "--as", "w1", "--", "true"], cpuEnv, repo.dir);
     expect(plain.code).toBe(0);
-    expect(last()).toMatchObject({ estimate: memEstimate(6 * GB), cpus: 5 });
+    expect(last()).toMatchObject({ estimate: 6759 * MIB, cpus: 5 });
     expect(last()["landing"]).toBeUndefined();
   });
 
@@ -537,9 +538,9 @@ describe.skipIf(!SCOPE)("gate run's asks: the CPUs, light runs, --landing", () =
   test("a light run: an estimate of 4G at most and each of its last 3 runs 2 minutes at most, each at its bound", () => {
     const repo = repository();
     kept(
-      { repo: repo.id, what: "true", ran: 120, peak: 3.2 * GB },
+      { repo: repo.id, what: "true", ran: 120, peak: 3.6 * GB },
       { repo: repo.id, what: "sh -c true", ran: 121, peak: GB },
-      { repo: repo.id, what: "sh -c :", ran: 60, peak: 3.3 * GB },
+      { repo: repo.id, what: "sh -c :", ran: 60, peak: 3.7 * GB },
       { repo: repo.id, what: "echo", ran: 121, peak: GB },
       { repo: repo.id, what: "echo", ran: 30, peak: GB },
       { repo: repo.id, what: "echo", ran: 30, peak: GB },
@@ -559,6 +560,86 @@ describe.skipIf(!SCOPE)("gate run's asks: the CPUs, light runs, --landing", () =
     const third = gate(["run", "--as", "w1", "--", "echo"], { FLEET_GATE_SCOPE: "1" }, repo.dir);
     expect(third.stderr).toContain("from its last 3 runs");
     expect(third.stderr).not.toContain("a light run");
+  });
+
+  // 2026-10-08: six runs of a new command waited at the default; the first failed in 3 s at 300M, all were admitted on
+  // the 2G that made, and each climbed to 20G.
+  test("with under 5 runs a waiter's claim never falls: a run that failed fast, then short passes, leave it; the fifth lowers it, and a run admitted on a kept claim says so", async () => {
+    const repo = repository();
+    const more = { FLEET_GATE_SCOPE: "1", FLEET_GATE_MEMORY_BUDGET: "32G", FLEET_GATE_MEMORY_MAX: "20G", FLEET_GATE_MEMORY_FLOOR: "0" };
+    const runs = (...rows: JsonObject[]): JsonObject[] => rows.map((row) => ({ repo: repo.id, what: "true", ran: 3, peak: 300 * MIB, ...row }));
+    const hold = (): string => /token ([0-9a-f]+)/.exec(gate(["take", "--as", "other", "busy"], more).stdout)?.[1] ?? "";
+    const token = hold();
+    const waiter = running(["--as", "w", "--wait", "60", "--", "true"], more, repo.dir);
+    const other = running(["--as", "x", "--wait", "60", "--", "sh", "-c", ":"], more, repo.dir);
+    const claim = (name: string): number | undefined => asNumber(standing().queue.find((w) => w["name"] === name)?.["cap"]);
+
+    try {
+      expect(await until(() => claim("w") === 20 * GB && claim("x") === 20 * GB, 10000)).toBe(true);
+      kept(...runs({ code: 1 }));
+      await Bun.sleep(2500);
+      expect(claim("w")).toBe(20 * GB);
+      kept(...runs({ code: 1, ran: 600 }, {}, { what: "sh -c :" }));
+      await Bun.sleep(2500);
+      expect(claim("w")).toBe(20 * GB);
+      expect(claim("x")).toBe(20 * GB);
+      kept(...runs({ code: 1 }, {}, {}, {}, {}, {}, { what: "sh -c :" }));
+      expect(await until(() => claim("w") === 2 * GB, 10000)).toBe(true);
+      expect(claim("x")).toBe(20 * GB);
+      gate(["free", token], more);
+      expect(await waiter.exited).toBe(0);
+      expect(await other.exited).toBe(0);
+      const said = await new Response(waiter.stderr).text();
+      expect(said).toContain("gate run: estimate now 2.0G, was 20.0G");
+      expect(said.match(/estimate now /g)).toHaveLength(1);
+      expect(await new Response(other.stderr).text()).toContain(", estimate 20.0G from its last run (300.0M peak at 2026-10-20T12:00:00.000Z), kept at the claim it waited with and ");
+    } finally {
+      await stopAll([waiter, other]);
+    }
+  });
+
+  test("a waiter re-reads its estimate at each look: the queue line shows the new number, and it runs when that fits; a --mem stays as given", async () => {
+    const repo = repository();
+    const more = { FLEET_GATE_SCOPE: "1", FLEET_GATE_MEMORY_BUDGET: "31.4G", FLEET_GATE_MEMORY_FLOOR: "0" };
+    const peaks = (...gb: number[]): JsonObject[] => gb.map((n) => ({ repo: repo.id, what: "true", peak: n * GB }));
+    kept(...peaks(24, 24, 24, 24, 24));
+    const hold = gate(["take", "--as", "other", "busy", "--mem", "9G"], more);
+    const token = /token ([0-9a-f]+)/.exec(hold.stdout)?.[1] ?? "";
+    const waiter = running(["--as", "w", "--wait", "60", "--", "true"], more, repo.dir);
+    const queueLine = (): string => gate([], more).stdout.split("\n").find((line) => line.startsWith("queue 1: w")) ?? "";
+    const fixedLine = (): string => gate([], more).stdout.split("\n").find((line) => line.startsWith("queue 2: f")) ?? "";
+
+    expect(await until(() => queueLine().includes(", 26.4G, "), 10000)).toBe(true);
+    const fixed = running(["--as", "f", "--wait", "60", "--mem", "30G", "--", "sh", "-c", ":"], more, repo.dir);
+
+    try {
+      expect(await until(() => fixedLine().includes(", 30.0G, "), 10000)).toBe(true);
+      // Ten runs of 21G: 23.1G with the margin, and 9G is held of 31.4G: it still waits.
+      kept(...peaks(24, 24, 24, 24, 24, ...Array.from({ length: 10 }, () => 21)));
+      expect(await until(() => queueLine().includes(", 23.1G, "), 10000)).toBe(true);
+      expect(fixedLine()).toContain(", 30.0G, ");
+      expect(standing().holders.map((h) => h["name"])).toEqual(["other"]);
+      // Ten runs of 8G: 8.8G, which fits.
+      kept(...peaks(24, 24, 24, 24, 24, ...Array.from({ length: 10 }, () => 8)));
+      expect(await waiter.exited).toBe(0);
+      const said = await new Response(waiter.stderr).text();
+      expect(said).toContain("gate run: estimate now 23.1G, was 26.4G");
+      expect(said).toContain("gate run: estimate now 8.8G, was 23.1G");
+      expect(said).toContain(", estimate 8.8G from its last 10 runs (p90 8.0G, peak 8.0G at ");
+      expect(records().at(-1)).toMatchObject({ name: "w", estimate: 9012 * MIB });
+    } finally {
+      await stopAll([waiter, fixed]);
+      gate(["free", token], more);
+    }
+  });
+
+  test("a killed run raises a measured estimate: the line says so", () => {
+    const repo = repository();
+    kept(...[8, 8, 30, 8, 8].map((n) => ({ repo: repo.id, what: "true", peak: n * GB, code: n === 30 ? 137 : 0 })));
+    const done = gate(["run", "--as", "w1", "--", "true"], memEnv, repo.dir);
+    expect(done.stderr).toContain(", estimate 30.0G from its last 5 runs (p90 21.2G, peak 30.0G at ");
+    expect(done.stderr).toContain(", at least a killed run's 30.0G: exit 137)");
+    expect(records().at(-1)).toMatchObject({ estimate: 30 * GB });
   });
 
   // 2026-10-20 13:37: load 66.8 on 32 cores with 25G available; a gate timed out with no failed assertion.

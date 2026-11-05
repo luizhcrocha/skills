@@ -81,11 +81,40 @@ export const PEAK_MARGIN_TEXT = `${String(Math.round((PEAK_MARGIN - 1) * 100))}%
 
 const RUNS_MEASURED = 3;
 
+/** The exit of a command SIGKILL ended: what the cap's OOM killer and the machine's send. SIGTERM's and SIGINT's are
+ * someone stopping it. */
+const SIGKILL_EXIT = 137;
+
+/** How long a run that failed or was stopped must have run, in seconds, for its peak to count: a red suite that ran for
+ * 20 minutes reached a real peak, and a command that always fails still builds its history. */
+const FAILURE_COUNTS_S = 60;
+
+/** The margin over a command's own runs ({@link historyEstimate}), smaller than {@link PEAK_MARGIN}: a percentile of
+ * its own runs has their spread in it, where a family's peak is another command's. */
+const HISTORY_MARGIN = 1.1;
+
+/** How many of a command's last runs its memory estimate reads, the share it takes of them, and how many it needs to
+ * take a percentile; with fewer, their largest. */
+const RUNS_ESTIMATED = 10;
+
+const ESTIMATE_SHARE = 0.9;
+
+export const RUNS_FOR_SHARE = 5;
+
 const MIB = 1024 ** 2;
 
 /** The estimate a measured peak gives a run: the peak times {@link PEAK_MARGIN}, in whole MiB, {@link LEAST_CAP} at least. */
 export function memEstimate(peak: number): number {
-  return Math.max(LEAST_CAP, Math.ceil((peak * PEAK_MARGIN) / MIB) * MIB);
+  return marginEstimate(peak, PEAK_MARGIN);
+}
+
+/** The estimate a command's own runs give a run: `high` times {@link HISTORY_MARGIN}, in whole MiB, {@link LEAST_CAP} at least. */
+function historyEstimate(high: number): number {
+  return marginEstimate(high, HISTORY_MARGIN);
+}
+
+function marginEstimate(peak: number, margin: number): number {
+  return Math.max(LEAST_CAP, Math.ceil((peak * margin) / MIB) * MIB);
 }
 
 const UUID = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi;
@@ -566,8 +595,7 @@ export interface RunRecord {
 /** How many runs and holds a record's `behind` keeps. */
 export const BEHIND_KEPT = 5;
 
-/** What a command's last runs that ran in a scope did, whatever their end (a failed run's peak and a killed run's are
- * real peaks), at most {@link RUNS_MEASURED} of them: the largest memory peak and when that run ended, the longest
+/** What a command's last runs that ran in a scope did, those {@link runCounts} keeps, at most {@link RUNS_MEASURED} of them: the largest memory peak and when that run ended, the longest
  * time, and the most CPUs used on average (CPU seconds over time; undefined where none kept its CPU seconds). */
 export interface Measured {
   readonly peak: number;
@@ -577,6 +605,14 @@ export interface Measured {
   readonly runs: number;
   /** How the run whose peak it is was killed ({@link killMark}); absent when it was not. */
   readonly killed?: string;
+  /** What the last {@link RUNS_ESTIMATED} runs' peaks size it by ({@link highOf}), and how many runs there were. */
+  readonly high: number;
+  readonly estimated: number;
+  /** The memory a run of this command estimates: {@link historyEstimate} of {@link high}, {@link least}'s peak at least. */
+  readonly estimate: number;
+  /** The killed run among the last {@link RUNS_MEASURED}, when its peak sets the estimate: no margin, and no later run
+   * lowers it until it leaves those. */
+  readonly least?: { readonly peak: number; readonly killed: string };
 }
 
 /** How a run's record says it was killed, as `{ killed }`: its scope's OOM kills, else an exit of 128 plus a signal's
@@ -587,7 +623,16 @@ function killMark(run: JsonObject): Pick<Measured, "killed"> {
 
   if (oom > 0) return { killed: `${String(oom)} process(es) killed for memory` };
 
-  return code !== undefined && code > 128 ? { killed: `exit ${String(code)}` } : {};
+  return code === SIGKILL_EXIT ? { killed: `exit ${String(code)}` } : {};
+}
+
+/** Whether a run's record says what the command takes: it exited 0, memory killed it, it ran {@link FAILURE_COUNTS_S}
+ * or more before it failed or was stopped, or it is an older line with no code. A quicker failure says nothing: its
+ * peak is however far it got, and 3 seconds at 300M must not shrink a queue. */
+function runCounts(run: JsonObject): boolean {
+  const code = asNumber(run["code"]);
+
+  return code === undefined || code === 0 || killMark(run).killed !== undefined || (asNumber(run["ran"]) ?? 0) >= FAILURE_COUNTS_S;
 }
 
 /** A measured run's line: what {@link Measured} reads of it. */
@@ -598,12 +643,32 @@ interface Ran {
   readonly at: string;
 }
 
+/** The value at share `p` of `sorted` (ascending), interpolated between the two ranks around `p * (n - 1)`. Not
+ * {@link rank}'s nearest rank: at 5 runs that gives the largest, and the replay that chose this rule measured this one. */
+function interpolated(sorted: readonly number[], p: number): number {
+  const at = (sorted.length - 1) * p;
+  const below = Math.floor(at);
+  const low = sorted[below] ?? 0;
+
+  return low + ((sorted[below + 1] ?? low) - low) * (at - below);
+}
+
+/** What `peaks` size an estimate by: their {@link ESTIMATE_SHARE} percentile, or with under {@link RUNS_FOR_SHARE} of them their largest. */
+function highOf(peaks: readonly number[]): number {
+  return peaks.length < RUNS_FOR_SHARE ? Math.max(...peaks) : interpolated(peaks.toSorted((a, b) => a - b), ESTIMATE_SHARE);
+}
+
 /** `runs`, newest first, in numbers: undefined for none. */
 function measuredOf(runs: readonly Ran[]): Measured | undefined {
   const last = runs.slice(0, RUNS_MEASURED);
   const top = last.reduce<Ran | undefined>((max, r) => (max === undefined || r.peak > max.peak ? r : max), undefined);
 
   if (top === undefined) return undefined;
+  const window = runs.slice(0, RUNS_ESTIMATED);
+  const high = highOf(window.map((r) => r.peak));
+  const killed = last.reduce<Ran | undefined>((max, r) => (killMark(r.run).killed !== undefined && (max === undefined || r.peak > max.peak) ? r : max), undefined);
+  const margined = historyEstimate(high);
+  const least = killed !== undefined && killed.peak > margined ? { peak: killed.peak, killed: killMark(killed.run).killed ?? "" } : undefined;
 
   const cores = last.flatMap((r) => {
     const cpuS = asNumber(r.run["cpu_s"]);
@@ -611,7 +676,9 @@ function measuredOf(runs: readonly Ran[]): Measured | undefined {
     return cpuS === undefined || r.ran <= 0 ? [] : [cpuS / r.ran];
   });
 
-  return { peak: top.peak, at: top.at, ran: Math.max(...last.map((r) => r.ran)), cores: cores.length === 0 ? undefined : Math.max(...cores), runs: last.length, ...killMark(top.run) };
+  const measured: Measured = { peak: top.peak, at: top.at, ran: Math.max(...last.map((r) => r.ran)), cores: cores.length === 0 ? undefined : Math.max(...cores), runs: last.length, ...killMark(top.run), high, estimated: window.length, estimate: least?.peak ?? margined };
+
+  return least === undefined ? measured : { ...measured, least };
 }
 
 /** The largest peak of a family's runs in the last day in one repository, whatever their workspace: the run's end,
@@ -968,8 +1035,14 @@ export class Gate {
         };
 
         this.keepQueue([...queue, waiter]);
-      } else if (at >= 0 && queue[at]?.memory !== memory) {
-        this.keepQueue(queue.map((w, i) => (i === at ? { ...w, memory } : w)));
+      } else if (at >= 0) {
+        const light = ask.light === true;
+        const was = queue[at];
+
+        // A run re-reads its estimate at each look: the queue, and whoever judges this waiter by it, has the new one.
+        if (was?.memory !== memory || was.cap !== ask.cap || was.cpus !== ask.cpus || was.light !== light) {
+          this.keepQueue(queue.map((w, i) => (i === at ? { ...w, memory, cap: ask.cap, cpus: ask.cpus, light } : w)));
+        }
       }
 
       return { waiting: short === undefined ? { holders, ahead, fits, lacks } : { holders, ahead, fits, lacks, short } };
@@ -1046,7 +1119,8 @@ export class Gate {
     });
   }
 
-  /** The runs kept that ran in a scope, newest first, whatever their end: a peak and a time measured. */
+  /** The runs kept that ran in a scope and say what the command takes ({@link runCounts}), newest first: a peak and a
+   * time measured. */
   private measuredRuns(): Ran[] {
     return (readText(this.path("runs.jsonl")) ?? "").split("\n").flatMap((line) => {
       const run = Option.getOrUndefined(parseObject(line));
@@ -1054,7 +1128,7 @@ export class Gate {
       const ran = asNumber(run?.["ran"]);
       const at = asString(run?.["at"]);
 
-      return run === undefined || peak === undefined || ran === undefined || at === undefined ? [] : [{ run, peak, ran, at }];
+      return run === undefined || peak === undefined || ran === undefined || at === undefined || !runCounts(run) ? [] : [{ run, peak, ran, at }];
     }).toReversed();
   }
 

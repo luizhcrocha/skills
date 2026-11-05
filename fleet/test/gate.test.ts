@@ -14,6 +14,8 @@ import { readJson, tmp } from "./support.ts";
 
 const GB = 1024 ** 3;
 
+const MIB = 1024 ** 2;
+
 /** The budget of these tests: two runs of a quarter of a 64 GB machine fit it. */
 const BUDGET = 32 * GB;
 
@@ -986,37 +988,135 @@ describe("the runs' records", () => {
     gate.record(run(5, { repo: "/r/a", peak: 2 * GB, ran: 30 }));
     gate.record(run(6, { repo: "/r/b", peak: 9 * GB }));
     gate.record(run(7, { repo: "/r/a", what: "just test", peak: 9 * GB }));
-    expect(gate.history("/r/a", "just test-changed")).toEqual({ peak: 5 * GB, at: "2026-10-05T12:03:00.000Z", ran: 400, cores: 4, runs: 3 });
+    expect(gate.history("/r/a", "just test-changed")).toEqual({ peak: 5 * GB, at: "2026-10-05T12:03:00.000Z", ran: 400, cores: 4, runs: 3, high: 12 * GB, estimated: 4, estimate: 13517 * MIB });
     expect(gate.history("/r/c", "just test-changed")).toBeUndefined();
   });
 
-  // Any exit: a killed run's peak and a failed one's are real peaks, so a run past its estimate raises the next one.
-  test("a run that failed or that was killed is history: its peak counts", () => {
+  // A killed run's peak is a real peak, so a run past its estimate raises the next one.
+  test("a run that was killed is history: its peak counts", () => {
     gate.record(run(1, { repo: "/r/a", peak: 3 * GB, ran: 100 }));
     gate.record(run(2, { repo: "/r/a", peak: 14 * GB, ran: 50, code: 137, killed: 3 }));
     expect(gate.history("/r/a", "just test-changed")).toMatchObject({ peak: 14 * GB, ran: 100, runs: 2 });
-    gate.record(run(3, { repo: "/r/b", peak: GB, ran: 5, code: 1 }));
-    expect(gate.history("/r/b", "just test-changed")).toMatchObject({ peak: GB, ran: 5, runs: 1 });
   });
 
   // A --mem stands against a peak that a killed run left: a run killed at the ceiling would claim the whole budget forever.
-  test("a history and a family's peak say how the run whose peak it is was killed: OOM, or a signal's exit; none for a peak another run left", () => {
+  test("a history and a family's peak say how the run whose peak it is was killed: OOM, or SIGKILL's exit; none for a peak another run left", () => {
     gate.record(run(1, { repo: "/r/a", workspace: "/w/a", what: "bash /w/a/gate-x.sh", peak: 30 * GB, code: 1, killed: 2 }));
     expect(gate.history("/r/a", "bash /w/a/gate-x.sh")?.killed).toBe("2 process(es) killed for memory");
     expect(gate.familyPeak("/r/a", "bash /w/n/gate-x.sh", "/w/n", at(10 * 60))?.killed).toBe("2 process(es) killed for memory");
-    gate.record(run(2, { repo: "/r/b", peak: 30 * GB, code: 143 }));
-    expect(gate.history("/r/b", "just test-changed")?.killed).toBe("exit 143");
+    gate.record(run(2, { repo: "/r/b", peak: 30 * GB, code: 137 }));
+    expect(gate.history("/r/b", "just test-changed")?.killed).toBe("exit 137");
     gate.record(run(3, { repo: "/r/c", peak: 30 * GB, code: 137 }));
-    gate.record(run(4, { repo: "/r/c", peak: 31 * GB, code: 1 }));
+    gate.record(run(4, { repo: "/r/c", peak: 31 * GB }));
     expect(gate.history("/r/c", "just test-changed")).toMatchObject({ peak: 31 * GB, runs: 2 });
     expect(gate.history("/r/c", "just test-changed")?.killed).toBeUndefined();
   });
 
-  // The largest of 3: a typecheck that failed in 5 s at 0.4G does not lower the whole suite's estimate.
-  test("a small failure after a large run does not lower the history: the largest of the last 3 counts", () => {
+  // A typecheck that failed in 5 s at 0.4G does not lower the whole suite's estimate.
+  test("a small failure after a large run does not lower the history: it is not in it", () => {
     gate.record(run(1, { repo: "/r/a", peak: 14 * GB, ran: 600 }));
     gate.record(run(2, { repo: "/r/a", peak: 0.4 * GB, ran: 5, code: 1 }));
-    expect(gate.history("/r/a", "just test-changed")).toMatchObject({ peak: 14 * GB, ran: 600, runs: 2 });
+    expect(gate.history("/r/a", "just test-changed")).toMatchObject({ peak: 14 * GB, ran: 600, runs: 1 });
+  });
+
+  // gate/runs.jsonl on 11-05: one 22.5G run, then 12.9G, 15.9G, 16.7G and 7.6G.
+  test("with 5 runs or more the estimate is the 90th percentile of the last 10, interpolated between ranks, times 1.10", () => {
+    for (const [i, peak] of [40, 22.5, 12.9, 15.9, 16.7, 7.6].entries()) gate.record(run(i + 1, { repo: "/r/a", peak: peak * GB }));
+    // Rank 0.9 * 5 = 4.5 of 6: halfway from 22.5G to 40G, 31.25G; 34.375G with the margin.
+    expect(gate.history("/r/a", "just test-changed")).toMatchObject({ high: 31.25 * GB, estimated: 6, peak: 16.7 * GB, estimate: 35200 * MIB });
+
+    for (const [i, peak] of [99, 40, 22.5, 12.9, 15.9, 16.7, 7.6, 14, 13, 12, 11].entries()) gate.record(run(i + 1, { repo: "/r/ten", peak: peak * GB }));
+    // The 99G run is out of the 10. Rank 0.9 * 9 = 8.1: a tenth of the way from 22.5G to 40G, 24.25G; 26.675G with the margin.
+    const ten = gate.history("/r/ten", "just test-changed");
+    expect(ten).toMatchObject({ estimated: 10, estimate: 27316 * MIB });
+    expect(Math.round((ten?.high ?? 0) / MIB)).toBe(24832);
+  });
+
+  test("with fewer than 5 runs the estimate is their largest times 1.10, 2G at least; the fifth run turns it to the percentile", () => {
+    gate.record(run(1, { repo: "/r/a", peak: 14 * GB }));
+    expect(gate.history("/r/a", "just test-changed")).toMatchObject({ high: 14 * GB, estimated: 1, estimate: 15770 * MIB });
+    gate.record(run(2, { repo: "/r/a", peak: 6 * GB }));
+    expect(gate.history("/r/a", "just test-changed")).toMatchObject({ high: 14 * GB, estimated: 2, estimate: 15770 * MIB });
+    gate.record(run(3, { repo: "/r/a", peak: 8 * GB }));
+    gate.record(run(4, { repo: "/r/a", peak: 10 * GB }));
+    expect(gate.history("/r/a", "just test-changed")).toMatchObject({ high: 14 * GB, estimated: 4, estimate: 15770 * MIB });
+    gate.record(run(5, { repo: "/r/a", peak: 12 * GB }));
+    // Rank 0.9 * 4 = 3.6 of 6, 8, 10, 12, 14: 13.2G; 14.52G with the margin.
+    expect(gate.history("/r/a", "just test-changed")).toMatchObject({ estimated: 5, estimate: 14869 * MIB });
+    gate.record(run(6, { repo: "/r/b", peak: GB / 4 }));
+    expect(gate.history("/r/b", "just test-changed")?.estimate).toBe(2 * GB);
+  });
+
+  test("a run that failed or was stopped within a minute is not in the history: it got only so far; a kill and an older line that names no code are", () => {
+    gate.record(run(1, { repo: "/r/f", peak: 300 * MIB, code: 1, ran: 3 }));
+    expect(gate.history("/r/f", "just test-changed")).toBeUndefined();
+
+    gate.record(run(2, { repo: "/r/f", peak: 9 * GB, ran: 400 }));
+
+    for (const [i, code] of [1, 2, 124, 130, 134, 143].entries()) gate.record(run(i + 3, { repo: "/r/f", peak: 300 * MIB, code, ran: 3 }));
+    expect(gate.history("/r/f", "just test-changed")).toMatchObject({ estimated: 1, peak: 9 * GB, ran: 400 });
+    gate.record(run(9, { repo: "/r/f", peak: 12 * GB, code: 137, ran: 3 }));
+    gate.record(run(10, { repo: "/r/f", peak: 13 * GB, code: 1, killed: 1, ran: 3 }));
+    expect(gate.history("/r/f", "just test-changed")).toMatchObject({ estimated: 3, peak: 13 * GB });
+
+    writeFileSync(join(dir, "runs.jsonl"), `${JSON.stringify({ what: "just test-changed", repo: "/r/old", peak: GB, ran: 1, at: "2026-10-05T12:00:00.000Z" })}\n`, { flag: "a" });
+    expect(gate.history("/r/old", "just test-changed")).toMatchObject({ estimated: 1, peak: GB });
+  });
+
+  test("a family's peak reads no quick failure either", () => {
+    gate.record(run(1, { repo: "/r/f", workspace: "/w/a", peak: 300 * MIB, code: 1, ran: 3 }));
+    expect(gate.familyPeak("/r/f", "just test-changed", "/w/b", new Date("2026-10-05T13:00:00.000Z"))).toBeUndefined();
+  });
+
+  test("a kill sets the minimum for the last 3 runs, not the last 10", () => {
+    for (const [i, more] of [{}, {}, { killed: 2 }, {}, {}].entries()) gate.record(run(i + 1, { repo: "/r/k", peak: (i === 2 ? 30 : 8) * GB, ...more }));
+    expect(gate.history("/r/k", "just test-changed")).toMatchObject({ estimate: 30 * GB, least: { peak: 30 * GB } });
+    gate.record(run(6, { repo: "/r/k", peak: 8 * GB }));
+    const passed = gate.history("/r/k", "just test-changed");
+    expect(passed?.least).toBeUndefined();
+    expect(passed?.estimate).toBeLessThan(30 * GB);
+  });
+
+  test("an interrupted run is no kill: a SIGTERM (143) or a Ctrl-C (130) sets no minimum", () => {
+    for (const code of [143, 130]) {
+      gate.record(run(1, { repo: `/r/${String(code)}`, peak: 30 * GB, code, ran: 600 }));
+      gate.record(run(2, { repo: `/r/${String(code)}`, peak: 8 * GB }));
+      expect(gate.history(`/r/${String(code)}`, "just test-changed")).toMatchObject({ estimated: 2, peak: 30 * GB, high: 30 * GB });
+      expect(gate.history(`/r/${String(code)}`, "just test-changed")?.least).toBeUndefined();
+    }
+  });
+
+  test("a killed run's peak in the last 3 is the estimate's minimum, no margin: OOM or SIGKILL's exit; a small one changes nothing", () => {
+    for (const [i, more] of [{}, {}, { killed: 2 }, {}, {}].entries()) gate.record(run(i + 1, { repo: "/r/oom", peak: (i === 2 ? 30 : 8) * GB, ...more }));
+    expect(gate.history("/r/oom", "just test-changed")).toMatchObject({ estimated: 5, estimate: 30 * GB, least: { peak: 30 * GB, killed: "2 process(es) killed for memory" } });
+
+    for (const [i, more] of [{}, {}, {}, {}, {}, {}, {}, { code: 137 }, {}, {}].entries()) gate.record(run(i + 1, { repo: "/r/sig", peak: (i === 7 ? 26 : 16) * GB, ...more }));
+    expect(gate.history("/r/sig", "just test-changed")).toMatchObject({ estimated: 10, estimate: 26 * GB, least: { peak: 26 * GB, killed: "exit 137" } });
+
+    for (const [i, more] of [{ code: 137 }, {}, {}].entries()) gate.record(run(i + 1, { repo: "/r/small", peak: (i === 0 ? 6 : 16) * GB, ...more }));
+    expect(gate.history("/r/small", "just test-changed")?.estimate).toBe(18023 * MIB);
+    expect(gate.history("/r/small", "just test-changed")?.least).toBeUndefined();
+  });
+
+  test("a failed run of 60 seconds or more counts in the estimate and sets no minimum", () => {
+    for (const [i, peak] of [14, 12].entries()) gate.record(run(i + 1, { repo: "/r/a", peak: peak * GB }));
+    gate.record(run(3, { repo: "/r/a", peak: 23 * GB, code: 1, ran: 1200 }));
+    // The largest of 3 runs: 23G; 25.3G with the margin.
+    expect(gate.history("/r/a", "just test-changed")).toMatchObject({ high: 23 * GB, estimated: 3, peak: 23 * GB, ran: 1200, estimate: 25908 * MIB });
+    expect(gate.history("/r/a", "just test-changed")?.least).toBeUndefined();
+  });
+
+  test("a failed run counts from 60 seconds: 59 is a quick failure", () => {
+    gate.record(run(1, { repo: "/r/edge", peak: 9 * GB, code: 1, ran: 59 }));
+    expect(gate.history("/r/edge", "just test-changed")).toBeUndefined();
+    gate.record(run(2, { repo: "/r/edge", peak: 9 * GB, code: 1, ran: 60 }));
+    expect(gate.history("/r/edge", "just test-changed")).toMatchObject({ estimated: 1, ran: 60, peak: 9 * GB });
+  });
+
+  test("a command that always fails still builds its history: the fifth long failure turns it to the percentile", () => {
+    for (const [i, peak] of [4, 4, 4, 4, 8].entries()) gate.record(run(i + 1, { repo: "/r/red", peak: peak * GB, code: 1, ran: 120 }));
+    // Rank 0.9 * 4 = 3.6 of 4, 4, 4, 4, 8: 6.4G; 7.04G with the margin.
+    expect(gate.history("/r/red", "just test-changed")).toMatchObject({ estimated: 5, estimate: 7209 * MIB });
   });
 
   test("a session's scratchpad and other UUIDs in a command are placeholders: the same suite from another session has its history", () => {
@@ -1078,5 +1178,21 @@ describe("the runs' records", () => {
     const lines = readFileSync(join(dir, "runs.jsonl"), "utf8").trim().split("\n");
     expect(lines.length).toBe(1000);
     expect(JSON.parse(lines.at(-1) ?? "").waited).toBe(2000);
+  });
+});
+
+describe("a waiter's estimate", () => {
+  test("each ask re-reads it: the queue shows the new number, the place is kept, and it is admitted when the new one fits", () => {
+    const holder = asker();
+    expect(ask("a", holder, 9 * GB).took).toBeDefined();
+    const waiter = asker();
+    expect(ask("w", waiter, 25 * GB, 1).waiting?.lacks).toEqual(["memory"]);
+    expect(gate.standing(at(1)).queue[0]?.cap).toBe(25 * GB);
+    const behind = asker();
+    expect(ask("x", behind, GB, 2).waiting?.ahead.map((w) => w.name)).toEqual(["w"]);
+    expect(ask("w", waiter, 24 * GB, 3).waiting?.lacks).toEqual(["memory"]);
+    expect(gate.standing(at(3)).queue.map((w) => [w.name, w.cap])).toEqual([["w", 24 * GB], ["x", GB]]);
+    expect(ask("w", waiter, 10 * GB, 4).took?.cap).toBe(10 * GB);
+    expect(gate.standing(at(4)).queue.map((w) => w.name)).toEqual(["x"]);
   });
 });
