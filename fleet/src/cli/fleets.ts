@@ -23,6 +23,7 @@ import { decodeLedger } from "../ledger/model.ts";
 import { find, number } from "../ledger/numbers.ts";
 import { budgetOf, capBytes, cpuBudgetOf, cpusHeld, endOf, floorOf, floorRefusal, gateOf, holdText, memAvailable, memTotal, plain, roomOf, runCapOf, shortText, sizeText, waitsForMemory, type Ask, type Budget, type Day, type GateHolder, type Standing, type Waiting } from "../gate.ts";
 import { gateRun, RUN_USAGE, runArgs } from "../gate-run.ts";
+import { REAPER_VERBS, reaperCli } from "./reaper.ts";
 import { processes } from "../procs.ts";
 import { stateOf, type Entry } from "../registry.ts";
 import { activeAt, spentBy } from "../transcripts.ts";
@@ -618,6 +619,8 @@ function gate(machine: Machine, argv: readonly string[]): Effect.Effect<void | n
 
       return yield* Effect.promise(() => gateRun(machine, ask, (line) => out.err(`${line}\n`)));
     }
+
+    if (what !== undefined && REAPER_VERBS.has(what)) return yield* reaperCli(machine, what, argv.slice(1));
 
     if (argv.length === 0 || (argv.length === 1 && what === "--json")) {
       const now = machine.now();

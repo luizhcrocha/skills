@@ -25,6 +25,7 @@ import { readRecord } from "./preview/record.ts";
 import { exists, readText } from "./files.ts";
 import { elapsedOf } from "./procs.ts";
 import type { Entry } from "./registry.ts";
+import { configDir } from "./transcripts.ts";
 
 /** One process as the report reads it. */
 export interface ProcRow {
@@ -38,6 +39,8 @@ export interface ProcRow {
   readonly comm: string;
   /** Its arguments joined by spaces. */
   readonly command: string;
+  /** Its arguments as given, when known: `command` cannot be split back. */
+  readonly argv?: readonly string[] | undefined;
   /** The binary it runs, when known (/proc/PID/exe). */
   readonly exe?: string | undefined;
   /** Its working directory, when known. */
@@ -197,7 +200,7 @@ export function isReaper(row: ProcRow | undefined, pid: number): boolean {
 
 /** Whether a process of `tree` is in a session whose leader is alive on a terminal (the Mac, without session ids:
  * whether it has a terminal itself). */
-function onATerminal(tree: readonly ProcRow[], byPid: ReadonlyMap<number, ProcRow>): boolean {
+export function onATerminal(tree: readonly ProcRow[], byPid: ReadonlyMap<number, ProcRow>): boolean {
   return tree.some((r) => {
     if (r.sid === undefined) return (r.tty ?? 0) !== 0;
     const leader = r.sid > 0 ? byPid.get(r.sid) : undefined;
@@ -206,9 +209,15 @@ function onATerminal(tree: readonly ProcRow[], byPid: ReadonlyMap<number, ProcRo
   });
 }
 
-/** The session a row belongs to: its `$CLAUDE_CODE_SESSION_ID`, else the session folder its task file is in. */
-function sessionOf(row: ProcRow): string | undefined {
-  return row.session ?? row.tasks?.split("/").at(-1);
+const SESSION_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/** The session a row belongs to: its `$CLAUDE_CODE_SESSION_ID`, else the session folder its task file is in. Any
+ * process may hold a file under a `tasks/`: only a UUID under Claude's own tmp or `<config>/projects/` names a session. */
+export function sessionOf(row: ProcRow, config: string = configDir((name) => process.env[name])): string | undefined {
+  if (row.session !== undefined) return row.session;
+  const last = row.tasks?.split("/").at(-1);
+
+  return last !== undefined && SESSION_ID.test(last) && (row.tasks?.startsWith(`${config}/projects/`) === true || /^\/tmp\/claude-\d+\//.test(row.tasks ?? "")) ? last : undefined;
 }
 
 /** The command a shell wrapper runs: `eval '...'`'s text, as procs.ts reads a background job. */
@@ -309,7 +318,7 @@ export function fleetOfCwd(cwd: string, workspace: string | null, beats: readonl
 
 /** The report of one found tree at `now`: who started it, from the tree's environment, task files and cwd. */
 export function describe(f: OrphanTree, now: number, entries: readonly Entry[], beats: readonly BeatOf[], workspace: (cwd: string) => string | null = workspaceOf): Orphan {
-  const session = f.tree.find((r) => r.session !== undefined)?.session ?? (f.tree.find((r) => r.tasks !== undefined)?.tasks?.split("/").at(-1) ?? null);
+  const session = f.tree.find((r) => r.session !== undefined)?.session ?? f.tree.flatMap((r) => sessionOf(r) ?? []).at(0) ?? null;
   const dirFleet = f.tree.find((r) => r.fleetDir !== undefined)?.fleetDir;
   const given = f.hit.cwd ?? f.root.cwd;
   const cwd = given === undefined ? null : given.replace(/ \(deleted\)$/, "");
@@ -356,9 +365,10 @@ function linuxRow(pid: number, boot: number): ProcRow | undefined {
     const stat = readFileSync(`/proc/${pid}/stat`, "utf8");
     const comm = stat.slice(stat.indexOf("(") + 1, stat.lastIndexOf(")"));
     const rest = stat.slice(stat.lastIndexOf(")") + 2).split(" ");
-    const command = readFileSync(`/proc/${pid}/cmdline`).toString("utf8").replaceAll("\0", " ").trim();
+    const cmdline = readFileSync(`/proc/${pid}/cmdline`).toString("utf8");
+    const command = cmdline.replaceAll("\0", " ").trim();
 
-    return { pid, ppid: Number(rest[1]), started: boot + Number(rest[19]) / TICKS, rss: Number(rest[21]) * PAGE_KIB, comm, command, sid: Number(rest[3]), tty: Number(rest[4]) };
+    return { pid, ppid: Number(rest[1]), started: boot + Number(rest[19]) / TICKS, rss: Number(rest[21]) * PAGE_KIB, comm, command, argv: cmdline.split("\0").filter((word) => word !== ""), sid: Number(rest[3]), tty: Number(rest[4]) };
   } catch {
     return undefined;
   }
@@ -459,13 +469,18 @@ export function previewPids(live: readonly Entry[]): Set<number> {
 /** The session ids of the Claude Code processes running in `rows`, from Claude Code's live record of each
  * (`<config>/sessions/<pid>.json`). */
 export function liveSessionsOf(rows: readonly ProcRow[], config: string): Set<string> {
-  return new Set(
+  return new Set(recordsOf(rows, config).values());
+}
+
+/** Each Claude Code process in `rows` that has a live record (`<config>/sessions/<pid>.json`), to its session id. */
+export function recordsOf(rows: readonly ProcRow[], config: string): Map<number, string> {
+  return new Map(
     rows.filter(isClaude).flatMap((r) => {
       const text = readText(join(config, "sessions", `${String(r.pid)}.json`));
       const record = text === undefined ? undefined : Option.getOrUndefined(parseObject(text));
       const id = asString(record?.["sessionId"]);
 
-      return id === undefined || id === "" ? [] : [id];
+      return id === undefined || id === "" ? [] : [[r.pid, id] as const];
     }),
   );
 }
@@ -488,7 +503,7 @@ export function orphansNow(known: readonly Entry[], live: readonly Entry[], minA
 export type Stopped = { readonly stopped: readonly number[]; readonly left: readonly number[] } | { readonly why: string };
 
 /** How long a stopped tree has between TERM and KILL. */
-export const STOP_GRACE_MS = 3000;
+export const STOP_GRACE_MS = 5000;
 
 function signal(target: number, name: NodeJS.Signals): void {
   try {
@@ -513,28 +528,47 @@ function same(pid: number, started: number | undefined, table: readonly ProcRow[
   return started === undefined || Math.abs(row.started - started) < 1;
 }
 
-/** TERM every process of a tree (the pids, collected first), then KILL what is left after `graceMs`. Only these
- * processes, each while it is still the same one: never a process group, which may reach outside the tree.
- * `table` reads the process table again, for what is left. */
-export async function stopTree(pids: readonly ProcRow[], graceMs = STOP_GRACE_MS, table: () => ProcRow[] = () => processTable()): Promise<{ readonly stopped: number[]; readonly left: number[] }> {
-  const first = table();
+/** What a kill of a tree does to the machine: the real one by default, a test's table and signals when handed. */
+export interface StopIo {
+  readonly signal: (pid: number, sig: "SIGTERM" | "SIGKILL") => void;
+  readonly table: () => readonly ProcRow[];
+  readonly sleep: (ms: number) => Promise<void>;
+}
 
-  for (const r of pids) if (r.pid > 1 && same(r.pid, r.started, first)) signal(r.pid, "SIGTERM");
+/** The machine's own {@link StopIo}. */
+export const REAL_STOP: StopIo = { signal, table: () => processTable(), sleep: (ms) => Bun.sleep(ms) };
+
+/** TERM every process of a tree, in the order given (the pids, collected first), then KILL what is left after
+ * `graceMs`. Only these processes, each while it is still the same one: never a process group, which may reach
+ * outside the tree, and never a pid now started at another time (`reused`). `io.table` reads the process table again,
+ * for what is left. */
+export async function stopTree(pids: readonly ProcRow[], graceMs = STOP_GRACE_MS, io: StopIo = REAL_STOP): Promise<{ readonly stopped: number[]; readonly left: number[]; readonly reused: number[] }> {
+  const first = io.table();
+
+  const reused = pids.flatMap((r) => {
+    const now = first.find((row) => row.pid === r.pid);
+
+    return now !== undefined && Math.abs(now.started - r.started) >= 1 ? [r.pid] : [];
+  });
+
+  const mine = pids.filter((r) => r.pid > 1 && same(r.pid, r.started, first));
+
+  for (const r of mine) io.signal(r.pid, "SIGTERM");
   const deadline = Date.now() + graceMs;
-  let rest = pids.filter((r) => same(r.pid, r.started, table()));
+  let rest = mine.filter((r) => same(r.pid, r.started, io.table()));
 
   while (rest.length > 0 && Date.now() < deadline) {
-    await Bun.sleep(100);
-    const now = table();
+    await io.sleep(100);
+    const now = io.table();
     rest = rest.filter((r) => same(r.pid, r.started, now));
   }
 
-  for (const r of rest) if (r.pid > 1) signal(r.pid, "SIGKILL");
+  for (const r of rest) io.signal(r.pid, "SIGKILL");
 
-  if (rest.length > 0) await Bun.sleep(200);
-  const after = table();
+  if (rest.length > 0) await io.sleep(200);
+  const after = io.table();
 
-  return { stopped: pids.map((r) => r.pid), left: rest.filter((r) => same(r.pid, r.started, after)).map((r) => r.pid) };
+  return { stopped: mine.map((r) => r.pid), left: rest.filter((r) => same(r.pid, r.started, after)).map((r) => r.pid), reused };
 }
 
 /** Stop the orphaned tree whose root is `pid`, started at `started`: only while it is still reported (an
@@ -548,5 +582,5 @@ export async function stopOrphan(pid: number, started: number, minAge: number, e
 
   if (Math.abs(found.root.started - started) >= 1) return { why: `process ${pid} is not the one the page showed (it started at another time); nothing was stopped` };
 
-  return stopTree(found.tree, STOP_GRACE_MS, rows);
+  return stopTree(found.tree, STOP_GRACE_MS, { ...REAL_STOP, table: rows });
 }

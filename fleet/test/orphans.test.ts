@@ -136,8 +136,8 @@ describe("finding orphaned trees", () => {
     const nohup = [row(905, 900, "claude", { comm: "claude" }), row(600, 900, "zsh -c pnpm dev", { session: "live-session" }), row(601, 600, "node /x/pnpm.cjs dev", { comm: "node" })];
     expect(orphansIn([...base, ...nohup], NOW, 2 * HOURS).map((f) => f.root.pid)).toEqual([600]);
     expect(orphansIn([...base, ...nohup], NOW, 2 * HOURS, new Set(), new Set(["live-session"]))).toEqual([]);
-    const tasked = nohup.map((r) => (r.pid === 600 ? { ...r, session: undefined, tasks: "/tmp/claude-1000/-repo/live-session" } : r));
-    expect(orphansIn([...base, ...tasked], NOW, 2 * HOURS, new Set(), new Set(["live-session"]))).toEqual([]);
+    const tasked = nohup.map((r) => (r.pid === 600 ? { ...r, session: undefined, tasks: "/tmp/claude-1000/-repo/aaaaaaaa-1111-4222-8333-444455556666" } : r));
+    expect(orphansIn([...base, ...tasked], NOW, 2 * HOURS, new Set(), new Set(["aaaaaaaa-1111-4222-8333-444455556666"]))).toEqual([]);
 
     const terminal = [row(700, 900, "/bin/sh -c foot"), row(701, 700, "foot"), row(702, 701, "nu"), row(703, 702, "nvim a.ts"), row(704, 702, "node /x/pnpm.cjs dev", { comm: "node" })];
     expect(orphansIn([...base, ...terminal], NOW, 2 * HOURS)).toEqual([]);
@@ -178,12 +178,12 @@ describe("who started it", () => {
   });
 
   test("without a session in its environment, the task file it writes names the session", () => {
-    const job = JOB.map((r, i) => (i === 0 ? { ...r, session: undefined, tasks: "/tmp/claude-1000/-repo/s-1" } : r));
+    const job = JOB.map((r, i) => (i === 0 ? { ...r, session: undefined, tasks: "/tmp/claude-1000/-repo/bbbbbbbb-1111-4222-8333-444455556666" } : r));
     const found = orphansIn([INIT, ...job], NOW, 2 * HOURS)[0];
 
     if (found === undefined) throw new Error("no orphan");
-    const o = describeOrphan(found, NOW, [entry("api", scratch)], []);
-    expect([o.session, o.fleet]).toEqual(["s-1", "api"]);
+    const o = describeOrphan(found, NOW, [entry("api", `/c/p/bbbbbbbb-1111-4222-8333-444455556666/scratchpad/api`)], []);
+    expect([o.session, o.fleet]).toEqual(["bbbbbbbb-1111-4222-8333-444455556666", "api"]);
   });
 
   test("with no session at all, the fleet whose heartbeats ran in its cwd or its workspace", () => {

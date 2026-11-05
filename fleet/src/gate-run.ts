@@ -47,7 +47,9 @@ import { dirname, join, resolve } from "node:path";
 
 import { stampOf } from "./clock.ts";
 import { readText } from "./files.ts";
-import { BEHIND_KEPT, type Behind, budgetOf, capBytes, cpuBudgetOf, cpusHere, DEFAULT_CAP, floorOf, floorRefusal, gateOf, holdText, LIGHT_CAP, LIGHT_S, memAvailable, memEstimate, memTotal, PEAK_MARGIN_TEXT, plain, pressureNow, RUNS_FOR_SHARE, scopeLives, shortText, sizeText, type GateHolder, type Measured, type Memory, type Pressure, type RunRecord, type WaitedFor, type Waiting } from "./gate.ts";
+import { reportNow } from "./reaper-read.ts";
+import { waiterClause } from "./reaper.ts";
+import { BEHIND_KEPT, type Behind, budgetOf, capBytes, cpuBudgetOf, cpusHere, DEFAULT_CAP, floorOf, floorRefusal, gateOf, holdText, LIGHT_CAP, LIGHT_S, memAvailable, memEstimate, memTotal, PEAK_MARGIN_TEXT, plain, pressureNow, RUNS_FOR_SHARE, scopeLives, shortText, sizeText, type GateHolder, type Measured, type Memory, type Pressure, type RunRecord, type Standing, type WaitedFor, type Waiting } from "./gate.ts";
 import { ancestry } from "./procs.ts";
 import type { Machine } from "./world.ts";
 
@@ -500,6 +502,15 @@ function shown(command: readonly string[], length = 160): string {
   return text.length > length ? `${text.slice(0, length - 3)}...` : text;
 }
 
+/** What the reaper's report says to a waiter short on memory. It only reads: a waiter kills nothing and opens no card, and a reading that fails adds nothing to the line. */
+function memoryClause(machine: Machine, standing: Standing): string | undefined {
+  try {
+    return waiterClause(reportNow(machine, standing));
+  } catch {
+    return undefined;
+  }
+}
+
 /** What a run waits for, the rows of its wait line: the budget's rows its estimate does not fit beside the holds,
  * MemAvailable under the floor, or, with neither, its turn. */
 export function waitedFor(waiting: Pick<Waiting, "lacks" | "short">): WaitedFor[] {
@@ -763,6 +774,9 @@ export async function gateRun(machine: Machine, ask: RunAsk, say: Say): Promise<
     if (!saidWait) {
       say(`gate run: ${why}; waiting up to ${ask.waitS}s`);
       saidWait = true;
+      const clause = result.waiting.short === undefined && !result.waiting.lacks.includes("memory") ? undefined : memoryClause(machine, gate.standing(machine.now()));
+
+      if (clause !== undefined) say(`  ${clause}`);
     }
 
     await sleep(Math.min(1000, Math.max(0, deadline - Date.now())));

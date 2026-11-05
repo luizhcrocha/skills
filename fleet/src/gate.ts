@@ -50,7 +50,7 @@ import { join } from "node:path";
 import { parseInstant, stampOf } from "./clock.ts";
 import { exists, makeDirs, readText, remove, writeAtomic, writeText } from "./files.ts";
 import { asArray, asNumber, asObject, asString, dumps, parseObject, type Json, type JsonObject } from "./json.ts";
-import { withExclusiveLock } from "./lock.ts";
+import { holdExclusiveLock, withExclusiveLock } from "./lock.ts";
 import { startedOf } from "./procs.ts";
 import { alive, pidOf, readObject, type Registry } from "./registry.ts";
 
@@ -914,6 +914,25 @@ export class Gate {
 
     try {
       return withExclusiveLock(fd, body);
+    } finally {
+      closeSync(fd);
+    }
+  }
+
+  /** Run `body`, awaited, with the gate's lock held through it, and the holds as they stand: no other process takes
+   * a hold or admits a run meanwhile. `body` calls no other method of this gate: each of them takes the lock. */
+  async whileLocked<T>(now: () => Date, body: (standing: Standing) => Promise<T>): Promise<T> {
+    makeDirs(this.dir);
+    const fd = openSync(this.path("gate.lock"), "a+");
+
+    try {
+      const release = holdExclusiveLock(fd);
+
+      try {
+        return await body(this.read(now()));
+      } finally {
+        release();
+      }
     } finally {
       closeSync(fd);
     }
