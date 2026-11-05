@@ -100,6 +100,11 @@ class AcceptCase(KindMatchCase):
         kind = self.kind(self.tracked(self.main, b"jj git push --bookmark master\n", "push-master"))
         self.assertEqual((kind["action"], kind["task"]), ("push", "tasks/grant/push-master.sh"))
 
+    def test_tstacks_own_release_script_is_a_push_kind(self):
+        script = (ROOT / "tasks" / "grant" / "push-master.sh").read_bytes()
+        kind = self.kind(self.tracked(self.main, script, "push-master"))
+        self.assertEqual((kind["action"], kind["task"], kind["text"]), ("push", "tasks/grant/push-master.sh", script.decode()))
+
 
 class ThatRepoCase(KindMatchCase):
     def test_another_repo_with_the_same_script_is_another_kind(self):
