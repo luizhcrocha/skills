@@ -29,10 +29,13 @@ const SETTLE_MS = 600_000;
 const POLL_MS = 500;
 
 /** How long a prompt waits for its text to show in the agent's input before it presses Enter. */
-const TYPED_MS = 5_000;
+const TYPED_MS = 30_000;
+
+/** How often a prompt reads the agent's input while it waits for its text to show, or its turn to start. */
+const TYPED_POLL_MS = 250;
 
 /** How long a prompt waits for an Enter to start the agent's turn. */
-const STARTED_MS = 5_000;
+const STARTED_MS = 30_000;
 
 /** How many of a block's last lines are read as Claude Code's input when no rules frame it. */
 const SCREEN_LINES = 30;
@@ -153,8 +156,8 @@ export function rexLauncher(options: RexOptions): Launcher {
   const sleep = options.sleep ?? sleepMs;
 
   /** What `probe` finds before `ms` pass, asked every poll; undefined when it found nothing. */
-  const until = <T>(ms: number, probe: () => T | undefined): T | undefined => {
-    for (const deadline = now() + ms; ; sleep(pollMs)) {
+  const until = <T>(ms: number, probe: () => T | undefined, step = pollMs): T | undefined => {
+    for (const deadline = now() + ms; ; sleep(step)) {
       const found = probe();
 
       if (found !== undefined) return found;
@@ -302,9 +305,9 @@ export function rexLauncher(options: RexOptions): Launcher {
     return { ...seen, status: "ended", ended };
   };
 
-  /** Whether Claude Code's input in the block holds `text`, its rows joined across Ink's wrap, or a paste taken
-   * whole; undefined when rex cannot say, or, when `framed`, when no rules frame an input. */
-  const holding = (sid: string, block: string, text: string, framed = false): boolean | undefined => {
+  /** Claude Code's input in the block, its rows joined across Ink's wrap; undefined when rex cannot say, or, when
+   * `framed`, when no rules frame an input. */
+  const inputIn = (sid: string, block: string, framed = false): string | undefined => {
     const out = printed(["capture", "-s", sid, "-b", block, "--trim", "--unwrap"]);
 
     if ("why" in out) return undefined;
@@ -313,9 +316,19 @@ export function rexLauncher(options: RexOptions): Launcher {
     const [top, bottom] = rules.slice(-2);
 
     if (framed && bottom === undefined) return undefined;
-    const input = (top === undefined || bottom === undefined ? lines.slice(-SCREEN_LINES) : lines.slice(top + 1, bottom)).join("\n");
 
-    return input.replace(FRAMING, "").includes(text.replace(FRAMING, "").slice(0, SHOWN_CHARS)) || PASTED.test(input);
+    return (top === undefined || bottom === undefined ? lines.slice(-SCREEN_LINES) : lines.slice(top + 1, bottom)).join("\n");
+  };
+
+  /** Whether `input` shows `text` itself. */
+  const shows = (input: string, text: string): boolean => input.replace(FRAMING, "").includes(text.replace(FRAMING, "").slice(0, SHOWN_CHARS));
+
+  /** Whether the block's input holds `text`, or a paste taken whole, which only a prompt that found none before it
+   * typed can read as its own; undefined when {@link inputIn} cannot say. */
+  const holding = (sid: string, block: string, text: string, framed = false): boolean | undefined => {
+    const input = inputIn(sid, block, framed);
+
+    return input === undefined ? undefined : shows(input, text) || PASTED.test(input);
   };
 
   /** Why the block's program cannot take a prompt: it ended, or its block is gone with it. */
@@ -454,19 +467,22 @@ export function rexLauncher(options: RexOptions): Launcher {
       const { sid, block } = found;
       const holds = (): true | undefined => holding(sid, block.id, text) || undefined;
 
-      if (holds() === undefined) {
+      const before = inputIn(sid, block.id);
+
+      if (before === undefined || !shows(before, text)) {
+        if (before !== undefined && PASTED.test(before)) return { why: `its input already holds a paste it cannot read, so its opening was not typed after it and Enter was not pressed: clear the input in tab ${agent} (or press Enter there) and run \`fleet team start ${agent}\` again` };
         const typed = rex(["send", "-s", sid, "-b", block.id], text);
 
         if ("why" in typed) return { why: typed.why };
 
-        if (until(TYPED_MS, holds) === undefined) return { why: `its opening did not show in its input within ${String(TYPED_MS / 1000)} s, so Enter was not pressed` };
+        if (until(TYPED_MS, holds, Math.min(pollMs, TYPED_POLL_MS)) === undefined) return { why: `its opening did not show in its input within ${String(TYPED_MS / 1000)} s, so Enter was not pressed` };
       }
 
       for (let pressed = 0; pressed < 2; pressed += 1) {
         const sent = rex(["send-key", "-s", sid, "-b", block.id, "enter"]);
 
         if ("why" in sent) return endedWhy(sid, block.id) ?? { why: sent.why };
-        const took = until(STARTED_MS, () => afterEnter(sid, block.id, text));
+        const took = until(STARTED_MS, () => afterEnter(sid, block.id, text), Math.min(pollMs, TYPED_POLL_MS));
 
         if (took === "started") return undefined;
 

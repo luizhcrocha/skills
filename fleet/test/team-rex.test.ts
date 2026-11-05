@@ -347,8 +347,8 @@ interface Claude {
   readonly pasteMs?: number;
   /** How many Enters on a settled input are lost before one starts the turn. */
   readonly deaf?: number;
-  /** The input shows a paste taken whole as Claude Code's stand-in. */
-  readonly marker?: boolean;
+  /** The input shows a paste taken whole as this stand-in of Claude Code's. */
+  readonly marker?: string;
   /** The input's width, past which Ink wraps its rows. */
   readonly width?: number;
   /** The turn starts on a permission dialog, which an Enter approves. */
@@ -359,6 +359,8 @@ interface Claude {
   readonly lost?: boolean;
   /** The program exits on Enter, its block gone with it. */
   readonly exits?: boolean;
+  /** How long after an Enter the turn starts. */
+  readonly startMs?: number;
   /** The program reports its dialog late: done while the dialog shows. */
   readonly lagging?: boolean;
 }
@@ -368,6 +370,7 @@ function fakeClaude(o: Claude = {}): FakeRex & { readonly launcher: ReturnType<t
   let clock = 0;
   let input: "empty" | "pasting" | "typed" | "broken" | "working" | "dialog" = o.held === undefined ? "empty" : "typed";
   let settles = 0;
+  let starts: number | undefined;
   let deaf = o.deaf ?? 0;
   let text = o.held ?? "";
   let approved = false;
@@ -391,7 +394,7 @@ function fakeClaude(o: Claude = {}): FakeRex & { readonly launcher: ReturnType<t
       case "pasting":
         return boxed([], ["> "]);
       case "typed":
-        return boxed([], o.marker === true ? ["> [Pasted text #1 +0 lines]"] : wrapped(text));
+        return boxed([], o.marker === undefined ? wrapped(text) : [o.marker]);
       case "broken":
         return boxed([], ["> [Pasted text #1 +1 lines]"]);
       case "working":
@@ -405,11 +408,19 @@ function fakeClaude(o: Claude = {}): FakeRex & { readonly launcher: ReturnType<t
     if (input === "pasting") input = "broken";
     else if (input === "dialog") approved = true;
     else if (deaf > 0) deaf -= 1;
-    else if (input === "typed" || input === "broken") input = o.dialog === true ? "dialog" : "working";
+    else if (input === "typed" || input === "broken") {
+      if (o.startMs === undefined) input = o.dialog === true ? "dialog" : "working";
+      else starts = clock + o.startMs;
+    }
   };
 
   const rex = fakeRex((words) => {
     if (input === "pasting" && clock >= settles) input = "typed";
+
+    if (starts !== undefined && clock >= starts) {
+      input = "working";
+      starts = undefined;
+    }
 
     if (gone) return words.includes("block ls") ? { code: 0, stdout: '{"blocks":[]}', stderr: "" } : { code: 1, stdout: "", stderr: "Error: block block:1 not found\n" };
 
@@ -456,10 +467,25 @@ describe("a prompt", () => {
   });
 
   test("Enter waits for Claude Code's stand-in for a paste it took whole", () => {
-    const claude = fakeClaude({ pasteMs: 1_000, marker: true });
+    const claude = fakeClaude({ pasteMs: 1_000, marker: "> [Pasted text #1 +0 lines]" });
 
     expect(claude.launcher.prompt("skills", "ui", OPENING)).toBeUndefined();
     expect(claude.started()).toBe(true);
+  });
+
+  test("a long opening Claude Code shows only as its stand-in, no line count, takes Enter and is sent", () => {
+    const claude = fakeClaude({ pasteMs: 1_000, marker: "❯ [Pasted text #1]" });
+
+    expect(claude.launcher.prompt("skills", "ui", `${OPENING} ${"Read it and take the next row. ".repeat(20)}`)).toBeUndefined();
+    expect(claude.started()).toBe(true);
+    expect(enters(claude.calls)).toBe(1);
+  });
+
+  test("a stand-in already in the input before the opening is not taken as it: nothing typed after it, Enter never pressed", () => {
+    const claude = fakeClaude({ held: "[Pasted text #1]" });
+
+    expect(claude.launcher.prompt("skills", "ui", OPENING)).toEqual({ why: "its input already holds a paste it cannot read, so its opening was not typed after it and Enter was not pressed: clear the input in tab ui (or press Enter there) and run `fleet team start ui` again" });
+    expect(claude.calls.filter((c) => c.startsWith("send"))).toEqual([]);
   });
 
   test("is typed into the agent's block, read back from its input, then Enter once, when the first Enter starts it", () => {
@@ -471,6 +497,14 @@ describe("a prompt", () => {
     expect(claude.inputs[at]).toBe(OPENING);
     expect(claude.calls.slice(at + 1, at + 3)).toEqual([`capture -s ${SID} -b block:1 --trim --unwrap`, `send-key -s ${SID} -b block:1 enter`]);
     expect(claude.calls.filter((c) => c.startsWith("send"))).toHaveLength(2);
+  });
+
+  test("a turn a loaded machine starts only well past 5 s after its Enter takes that one Enter", () => {
+    const claude = fakeClaude({ startMs: 20_000 });
+
+    expect(claude.launcher.prompt("skills", "ui", OPENING)).toBeUndefined();
+    expect(claude.started()).toBe(true);
+    expect(enters(claude.calls)).toBe(1);
   });
 
   test("an Enter that did not start the agent is pressed once more", () => {
@@ -501,11 +535,20 @@ describe("a prompt", () => {
     expect(claude.started()).toBe(true);
   });
 
-  test("a text that never shows in the input fails the prompt, Enter never pressed", () => {
+  test("a text that never shows in the input fails the prompt after 30 s of reads a quarter second apart, Enter never pressed", () => {
     const claude = fakeClaude({ lost: true });
 
-    expect(claude.launcher.prompt("skills", "ui", OPENING)).toEqual({ why: "its opening did not show in its input within 5 s, so Enter was not pressed" });
+    expect(claude.launcher.prompt("skills", "ui", OPENING)).toEqual({ why: "its opening did not show in its input within 30 s, so Enter was not pressed" });
     expect(enters(claude.calls)).toBe(0);
+    expect(claude.calls.slice(claude.calls.indexOf(`send -s ${SID} -b block:1`)).filter((c) => c.startsWith("capture"))).toHaveLength(30_000 / 250 + 1);
+  });
+
+  test("a stand-in a loaded machine draws only after many reads, well past 5 s, takes Enter and is sent", () => {
+    const claude = fakeClaude({ pasteMs: 20_000, marker: "❯ [Pasted text #1]" });
+
+    expect(claude.launcher.prompt("skills", "ui", OPENING)).toBeUndefined();
+    expect(claude.started()).toBe(true);
+    expect(enters(claude.calls)).toBe(1);
   });
 
   test("an Enter that opened a permission dialog started the turn: no second Enter approves it", () => {
