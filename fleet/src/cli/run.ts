@@ -28,12 +28,13 @@ import { grantCli, grantsWith } from "./grant.ts";
 import { projectCli } from "./project.ts";
 import { roomCli } from "./room.ts";
 import { stateCli } from "./state.ts";
+import { tabCli } from "./tab.ts";
 import { teamCli } from "./team.ts";
 import { turnCli } from "./turn.ts";
 import { TRASH_COMMANDS, wsCli } from "./ws.ts";
 import { wasteCli } from "./waste.ts";
 
-const USAGE = "usage: fleet {version,ls,state,chat,fleets,news,secrets,ws,preview,brief,turn,advisor,team,waste,serve,render,usage,spend,served,room,project,grant,grants} ...\n";
+const USAGE = "usage: fleet {version,ls,state,chat,fleets,news,secrets,ws,preview,brief,turn,advisor,team,tab,waste,serve,render,usage,spend,served,room,project,grant,grants} ...\n";
 
 /** This copy of tstack: its version (from the plugin's manifest) and where it is, for `fleet version`. */
 function versionLine(): string {
@@ -151,6 +152,8 @@ function route(argv: readonly string[]): Effect.Effect<number, never, Out | Worl
 
   if (cli === "team") return teamCli(rest);
 
+  if (cli === "tab") return tabCli(rest);
+
   if (cli === "waste") return wasteCli(rest);
   const control = CONTROL_CLIS.find((c) => c === cli);
 
@@ -159,7 +162,7 @@ function route(argv: readonly string[]): Effect.Effect<number, never, Out | Worl
   return Effect.gen(function* () {
     const out = yield* Out;
 
-    out.err(`${USAGE}fleet: error: the first argument is state, chat, fleets, news, secrets, ws, preview, brief, turn, advisor, team, waste, serve, render, usage, spend, served, room, project, grant or grants\n`);
+    out.err(`${USAGE}fleet: error: the first argument is state, chat, fleets, news, secrets, ws, preview, brief, turn, advisor, team, tab, waste, serve, render, usage, spend, served, room, project, grant or grants\n`);
 
     return 2;
   });
