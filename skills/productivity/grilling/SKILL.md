@@ -35,7 +35,7 @@ The session is done when the frontier is empty: every branch of the design tree 
 
 ## On a fleet dashboard
 
-When this session runs a coordinator's or a manager's dashboard, the rounds go on its page, where each question has its own answer and none is lost among chat messages. The dashboard's state CLI is the plugin's `${CLAUDE_PLUGIN_ROOT}/fleet/bin/fleet state` (`fleet state` below, run by that path):
+When this session runs a coordinator's or a manager's dashboard, the rounds go on its page, where each question has its own answer and none is lost among chat messages. The dashboard's state CLI is `fleet state`, which exists when `fleet` is on PATH; without it, ask the rounds in chat:
 
 - A round: `fleet state <dir> grill <id> --title "<what is being decided, in plain words>" --body <context.html> --ask "<title> | <the question> | <option id> | <why, one plain sentence>" --option "Q1 a: <a few words> | <what that means for the user>" --option "Q1 b: ..."`, one `--ask` per frontier question and two to four `--option` for each (questions are numbered in the order asked: Q1, Q2, ... in the first round, on from the last in a later one). The page shows each question like a small decision: the options as cards, the recommended one marked, the reason as a callout. A question without a reason reads as a guess; one missed in an earlier round: `--reason "Q3: why"`. Follow-ups: `--of Q2` on the command that asks them. Then tell the user the page (`<dashboard url>#decision/<id>`), in one line.
 - Write each question to be read cold on a phone (Luiz, on one written for engineers: "i was lost reading this question"):

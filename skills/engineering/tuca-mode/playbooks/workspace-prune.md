@@ -1,12 +1,12 @@
 # Workspace prune
 
-**You own the safety gate. Remove only finished workspaces, only on Luiz's yes.** Deletion is on the pause list, and there is no review to catch a slip, so the checks below are the review. Workspaces a fleet made (`fleet ws add`) go through `fleet ws <dashboard-dir> prune`: it runs these checks itself, its default is the dry run (step 3), and `--apply` is step 5 after Luiz's yes. A coordinator prunes its own as it integrates each worker (or hands the workspace to the lane's next worker with `--reuse`), so this playbook is for the pile those runs left behind: every other workspace, checked by hand, as the reply says.
+**You own the safety gate. Remove only finished workspaces, only on Luiz's yes.** Deletion is on the pause list, and there is no review to catch a slip, so the checks below are the review. Workspaces a fleet made (`fleet ws add`) go, when `fleet` is on PATH, through `fleet ws <dashboard-dir> prune`: it runs these checks itself, its default is the dry run (step 3), and `--apply` is step 5 after Luiz's yes. A coordinator prunes its own as it integrates each worker (or hands the workspace to the lane's next worker with `--reuse`), so this playbook is for the pile those runs left behind: every other workspace, checked by hand, as the reply says.
 
 1. List every workspace: `jj workspace list` from the main workspace, with each one's directory (`jj workspace root --name <ws>` or the path its `.jj/repo` points from). Paths come from jj, never typed by hand.
 2. Run every check per workspace. A workspace is a candidate only when all hold:
    - Not `default`, not a landing workspace (`*-land`, `deploy`), not one Luiz marked protected.
-   - No running worker on it: `fleet fleets list` and `fleet fleets show <fleet>` show no live lane there.
-   - No heartbeat in 20 minutes: `fleet ws <dashboard-dir> list` shows when each fleet worker was last seen; elsewhere, the newest mtime under the directory, `.jj` excluded.
+   - No running worker on it: `fleet fleets list` and `fleet fleets show <fleet>` show no live lane there (without `fleet`, no process has the directory as its cwd).
+   - No heartbeat in 20 minutes: `fleet ws <dashboard-dir> list` shows when each fleet worker was last seen; elsewhere or without `fleet`, the newest mtime under the directory, `.jj` excluded.
    - No process with its cwd inside: `readlink /proc/*/cwd` matched against the directory.
    - No uncommitted work: inside it, `jj workspace update-stale` then `jj status` shows an empty `@`.
    - Nothing unlanded: after `jj git fetch`, `jj log -r '(::<ws>@ ~ ::trunk()) ~ empty()'` is empty.
