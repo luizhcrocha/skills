@@ -711,6 +711,7 @@ export async function gateRun(machine: Machine, ask: RunAsk, say: Say): Promise<
   let saidWait = false;
   let wasByHand = false;
   let wasShort = false;
+  let backfilled = false;
   // The gate reads MemAvailable at each ask, under its lock: what others use (dev servers, sessions) comes and goes. A
   // run without a scope asks for the whole budget, and counts its own estimate against the floor.
   const memoryOf = (now: Sized): Memory => ({ floor: floor.bytes, whole: now.estimate, env: machine.env });
@@ -736,13 +737,14 @@ export async function gateRun(machine: Machine, ask: RunAsk, say: Say): Promise<
 
     const result = gate.ask({
       holder, what, seconds: ask.minutes * 60 + HOLD_GRACE_S, cap: scoped ? estimate : undefined, budget: budget.bytes, pid: process.pid, runs: true, waitS: ask.waitS, memory: memoryOf(sized),
-      cpus: scoped ? cpus : undefined, cpuBudget, landing: ask.landing, repo: where.repo, workspace: where.workspace, light,
+      cpus: scoped ? cpus : undefined, cpuBudget, landing: ask.landing, repo: where.repo, workspace: where.workspace, light, runS: sized.last?.runS,
     }, now);
 
     if ("took" in result) {
       token = result.took.token;
       unit = result.took.unit ?? unit;
-      const as = `${ask.landing ? " as a landing gate" : ""}${light ? ", a light run" : ""}`;
+      backfilled = result.took.backfilled;
+      const as = `${ask.landing ? " as a landing gate" : ""}${light ? ", a light run" : ""}${backfilled ? ", a backfill ahead of the queue's head, which it does not delay" : ""}`;
       say(`gate run: ${plain(ask.name)} holds the gate${as} (token ${token ?? "?"}, until ${result.took.until ?? "?"})${saidWait ? `, after ${String(waited())}s of waiting` : ""}`);
       break;
     }
@@ -991,7 +993,7 @@ export async function gateRun(machine: Machine, ask: RunAsk, say: Say): Promise<
       : `exit ${code} after ${secs}s`;
 
     const cpuS = usec === undefined ? null : Math.round(usec / 1000) / 1000;
-    keep({ name: holder.name, kind: holder.kind, what: command, asked: askedAs(sized), at: stampOf(machine.now()), cap, waited: waitedS, ran: Math.round(ranS * 10) / 10, code, peak: peak ?? null, killed, cpu_s: cpuS, ...marks(sized), ...waitMarks(), push_token: pushing ? token : undefined, psi_start: psiStart, psi_end: psiEnd, psi_max: psiMax });
+    keep({ name: holder.name, kind: holder.kind, what: command, asked: askedAs(sized), at: stampOf(machine.now()), cap, waited: waitedS, ran: Math.round(ranS * 10) / 10, code, peak: peak ?? null, killed, cpu_s: cpuS, ...marks(sized), ...waitMarks(), backfill: backfilled || undefined, push_token: pushing ? token : undefined, psi_start: psiStart, psi_end: psiEnd, psi_max: psiMax });
     say(`gate run: ${how}${peak === undefined ? "" : `, memory peak ${sizeText(peak)}`}; ${slot}`);
 
     if (pushing) say(`gate run: landing passed; push, then fleet fleets gate free ${token ?? ""} (the hold lapses in 2 min)`);

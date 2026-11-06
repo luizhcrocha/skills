@@ -6,9 +6,9 @@
  * not use yet and less its own cap, still leaves the floor free (`--floor`, else
  * $FLEET_GATE_MEMORY_FLOOR, else 8G): the budget counts the holds alone, and dev servers and
  * sessions use the same memory. Whoever does not fit waits in a queue and is admitted in order of
- * arrival: only the head of the queue may take, so a large ask is never passed by smaller ones
- * that would fit, a waiter that waits for the memory floor alone included (the holds that pass it
- * would keep it short of the floor). A hold lapses at its `until`, a fleet's when the fleet is no
+ * arrival: the head of the queue takes first, and a later ask passes it only as a backfill, when
+ * it fits now and either ends (by its last runs' time) before the head's reserved start or fits
+ * beside the head, so a large ask is never delayed by smaller ones but by their overrun. A hold lapses at its `until`, a fleet's when the fleet is no
  * longer served, a run's when its runner is gone; a waiter leaves the queue when its process is
  * gone or its own `--wait` has run out, and keeps its place for {@link REASK_S} for a re-ask of the same run
  * ({@link Left}). Every change runs under an exclusive `flock` of `gate.lock`, so two takers never both pass the budget,
@@ -389,6 +389,11 @@ export interface Hold extends GateHolder {
   readonly light: boolean;
   /** Whether it is a landing that passed, waiting for its push: no other landing of {@link repo} is admitted beside it. */
   readonly pushing: boolean;
+  /** When its run is expected to end: its start and the time its last runs took ({@link Ask}'s `runS`); undefined
+   * when it had none, and its `until` stands for it. What a head's reserved start is reckoned from ({@link reservedStart}). */
+  readonly ends: string | undefined;
+  /** Whether it was admitted past the head of the queue as a backfill ({@link backfills}). */
+  readonly backfilled: boolean;
   /** The hold as gate.json has it. */
   readonly raw: JsonObject;
 }
@@ -418,6 +423,8 @@ export interface Waiter extends GateHolder {
   readonly floor: number | undefined;
   /** The workspace it runs in, part of what a re-ask matches ({@link Left}); a waiter an older fleet queued has none. */
   readonly workspace: string | undefined;
+  /** Seconds its run is expected to take ({@link Ask}'s `runS`); undefined when it has no runs, or an older fleet queued it. */
+  readonly runS: number | undefined;
 }
 
 /** A place in the queue a waiter left without being admitted. A later ask that is the same run (the same name and
@@ -466,6 +473,8 @@ export interface Ask {
   readonly repo?: string | undefined;
   /** The workspace it runs in: a re-ask of the same run in the same workspace rejoins the place it left ({@link Left}). */
   readonly workspace?: string | undefined;
+  /** Seconds its run is expected to take, from its own last runs; undefined reckons it at `seconds`, the longest it may. */
+  readonly runS?: number | undefined;
   /** Whether it is light (an estimate of {@link LIGHT_CAP} at most, each of its last runs {@link LIGHT_S} at most): it
    * passes a head that would not fit even with every light hold gone. */
   readonly light?: boolean | undefined;
@@ -588,6 +597,89 @@ export function floorRefusal(given: string | undefined, env: Env): string {
   return `cannot read ${what}: give a size (8G) or a share of the RAM (12%), 64M at least, or 0 to keep nothing free`;
 }
 
+/** The limits a waiter is judged by: the budget's bytes, the CPU budget and what it keeps free. */
+interface Limits {
+  readonly budget: number;
+  readonly cpuBudget: number | undefined;
+  readonly memory: Memory | undefined;
+}
+
+/** The limits `w` asked under; for a waiter an older fleet queued without them, those of `ask`. */
+function limitsOf(w: Waiter, ask: Ask): Limits {
+  if (w.budget === undefined) return { budget: ask.budget, cpuBudget: ask.cpuBudget, memory: ask.memory };
+
+  return { budget: w.budget, cpuBudget: w.cpuBudget, memory: ask.memory === undefined || w.floor === undefined ? undefined : { ...ask.memory, floor: w.floor } };
+}
+
+/** When the run of `h` is expected to end, as of `now`: its `ends`, `now` at the earliest. A hold with no `ends`
+ * (a first run, a hold by hand, an older fleet's) counts as ending now: its `until` is a lease, often an hour off, and
+ * reckoning by it would let long runs pass a head before it. */
+function endsAt(h: Hold, now: Date): number {
+  return Math.max(now.getTime(), parseInstant(h.ends ?? "") ?? now.getTime());
+}
+
+/** When a waiting head may start, reckoned from the holds' ends: `at` (ms), with the holds still `running` then and
+ * those `gone` by then. */
+export interface Reserved {
+  readonly at: number;
+  readonly running: readonly Hold[];
+  readonly gone: readonly Hold[];
+}
+
+/** When `head` fits, in both rows and by the floor, once the holds that end first are gone, as of `now`; undefined
+ * when it would not fit even with every hold gone. No `gone`: it fits now. */
+export function reservedStart(head: Part, limits: Limits, holders: readonly Hold[], now: Date): Reserved | undefined {
+  const sorted = holders.toSorted((a, b) => endsAt(a, now) - endsAt(b, now));
+
+  for (let k = 0; k <= sorted.length; k += 1) {
+    const gone = sorted.slice(0, k);
+    const running = sorted.slice(k);
+
+    if (fitsBeside(head, limits.budget, running, limits.cpuBudget) && shortOf(head, limits.memory, running, gone) === undefined) {
+      return { at: gone.reduce((last, h) => Math.max(last, endsAt(h, now)), now.getTime()), running, gone };
+    }
+  }
+
+  return undefined;
+}
+
+/** Whether `part`, taken at `now` and expected to run `runS` seconds, leaves `head`'s reserved start `res` where it
+ * is: it ends by then, or `head` fits beside it and the holds still running then, in both rows and by the floor. A
+ * part or a head of the whole budget never fits beside another. */
+export function backfills(part: Part & { readonly budget: number }, runS: number, head: Part, limits: Limits, res: Reserved, now: Date): boolean {
+  if (Number.isFinite(res.at) && now.getTime() + runS * 1000 <= res.at) return true;
+  const held = holdOf(plus(plus({ fleet: "", kind: "session", what: "", since: "", budget: part.budget }, "cap", part.cap), "cpus", part.cpus));
+  const beside = [...res.running, held];
+
+  return fitsBeside(head, limits.budget, beside, limits.cpuBudget) && shortOf(head, limits.memory, beside, res.gone) === undefined;
+}
+
+/** Whether `asker` is a landing of a repository a landing among `earlier` lands in: it never passes that one. */
+function landsAfter(asker: Pick<Ask, "landing" | "repo">, earlier: readonly Waiter[]): boolean {
+  return asker.landing === true && asker.repo !== undefined && earlier.some((w) => w.landing && w.repo === asker.repo);
+}
+
+/** Whether `ask`, which fits now, passes the waiters `ahead` of it as a backfill: the first of them cannot start now
+ * and will start no later for it ({@link backfills}, with its own `runS`, else `seconds`), none between them could
+ * backfill now, judged by its `runS` (none known: it never ends first), and no landing passes one of its repository. */
+function backfillsPast(ask: Ask, ahead: readonly Waiter[], holders: readonly Hold[], now: Date): boolean {
+  const [head, ...between] = ahead;
+
+  if (head === undefined || landsAfter(ask, ahead)) return false;
+  const limits = limitsOf(head, ask);
+  const res = reservedStart(head, limits, holders, now);
+
+  if (res === undefined || res.gone.length === 0) return false;
+
+  const could = (w: Waiter, i: number): boolean => {
+    const own = limitsOf(w, ask);
+
+    return !landsAfter(w, ahead.slice(0, i + 1)) && fitsBeside(w, own.budget, holders, own.cpuBudget) && shortOf(w, own.memory, holders) === undefined && backfills({ ...w, budget: own.budget }, w.runS ?? Infinity, head, limits, res, now);
+  };
+
+  return backfills(ask, ask.runS ?? ask.seconds, head, limits, res, now) && !between.some(could);
+}
+
 /** What a run waited for, a row of its wait line: a budget row the holds' estimates fill (`memory`, `cpu`), MemAvailable
  * under the floor (`floor`), or its turn in the queue (`turn`). */
 export type WaitedFor = "memory" | "cpu" | "floor" | "turn";
@@ -641,6 +733,8 @@ export interface RunRecord {
   readonly psi_max?: Pressure | undefined;
   /** Whether it asked the gate as a light run, and was admitted as one when it ran. Older lines have none. */
   readonly light?: boolean | undefined;
+  /** Whether it was admitted past the head of the queue as a backfill; none when it was not. */
+  readonly backfill?: boolean | undefined;
   /** What it waited for over its whole wait, each once, in the order first seen; none when it never waited. */
   readonly waited_for?: readonly WaitedFor[] | undefined;
   /** The holds, then the waiters before it, when it first waited, {@link BEHIND_KEPT} at most; none when it never
@@ -657,6 +751,9 @@ export interface Measured {
   readonly peak: number;
   readonly at: string;
   readonly ran: number;
+  /** The seconds a run of this command is expected to take: what the last {@link RUNS_ESTIMATED} runs' times size it
+   * by, as {@link highOf} sizes the memory. */
+  readonly runS: number;
   readonly cores: number | undefined;
   readonly runs: number;
   /** How the run whose peak it is was killed ({@link killMark}); absent when it was not. */
@@ -732,7 +829,7 @@ function measuredOf(runs: readonly Ran[]): Measured | undefined {
     return cpuS === undefined || r.ran <= 0 ? [] : [cpuS / r.ran];
   });
 
-  const measured: Measured = { peak: top.peak, at: top.at, ran: Math.max(...last.map((r) => r.ran)), cores: cores.length === 0 ? undefined : Math.max(...cores), runs: last.length, ...killMark(top.run), high, estimated: window.length, estimate: least?.peak ?? margined };
+  const measured: Measured = { peak: top.peak, at: top.at, ran: Math.max(...last.map((r) => r.ran)), runS: highOf(window.map((r) => r.ran)), cores: cores.length === 0 ? undefined : Math.max(...cores), runs: last.length, ...killMark(top.run), high, estimated: window.length, estimate: least?.peak ?? margined };
 
   return least === undefined ? measured : { ...measured, least };
 }
@@ -767,7 +864,7 @@ function unitOf(value: Json | undefined): string | undefined {
   return unit !== undefined && /^fleet-gate-[0-9a-f]+-[0-9]+$/.test(unit) ? unit : undefined;
 }
 
-function holdOf(raw: JsonObject): Hold {
+export function holdOf(raw: JsonObject): Hold {
   return {
     name: asString(raw["fleet"]) ?? "",
     kind: raw["kind"] === "session" ? "session" : "fleet",
@@ -786,6 +883,8 @@ function holdOf(raw: JsonObject): Hold {
     repo: asString(raw["repo"]),
     light: raw["light"] === true,
     pushing: raw["pushing"] === true,
+    ends: asString(raw["ends"]),
+    backfilled: raw["backfill"] === true,
     raw,
   };
 }
@@ -814,6 +913,7 @@ function waiterOf(raw: JsonObject): Waiter | undefined {
     cpuBudget: asNumber(raw["cpu_budget"]),
     floor: asNumber(raw["floor"]),
     workspace: asString(raw["workspace"]),
+    runS: asNumber(raw["run_s"]),
   };
 }
 
@@ -851,7 +951,7 @@ function waiterJson(w: Waiter): JsonObject {
 
   const kind = plus(plus(plus(plus(base, "cpus", w.cpus), "landing", w.landing || undefined), "repo", w.repo), "light", w.light || undefined);
 
-  return plus(plus(plus(plus(kind, "budget", w.budget), "cpu_budget", w.cpuBudget), "floor", w.floor), "workspace", w.workspace);
+  return plus(plus(plus(plus(plus(kind, "budget", w.budget), "cpu_budget", w.cpuBudget), "floor", w.floor), "workspace", w.workspace), "run_s", w.runS);
 }
 
 /** Whether the process `pid` that started at `started` still runs: a later process with its pid is another. */
@@ -1133,7 +1233,7 @@ export class Gate {
       // rows, or not by the floor. Once the lights are what keeps a waiter out they stop passing it, and drain in
       // minutes. A waiter is judged by the limits it asked under; one an older fleet queued, by this ask's.
       const blocks = (w: Waiter): boolean => {
-        const own = w.budget === undefined ? ask : { budget: w.budget, cpuBudget: w.cpuBudget, memory: ask.memory === undefined || w.floor === undefined ? undefined : { ...ask.memory, floor: w.floor } };
+        const own = limitsOf(w, ask);
 
         return fitsBeside(w, own.budget, heavy, own.cpuBudget) && shortOf(w, own.memory, heavy, lights) === undefined;
       };
@@ -1142,9 +1242,11 @@ export class Gate {
 
       const short = shortOf(ask, ask.memory, holders);
       const memory = fits && short !== undefined;
+      // EASY backfill: a run passes a waiting head when it does not delay the start the holds' ends reserve for it.
+      const backfill = fits && short === undefined && backfillsPast(ask, ahead, holders, now);
 
-      if (ahead.length === 0 && fits && short === undefined) {
-        const made = this.made(ask, since, now, holders);
+      if ((ahead.length === 0 || backfill) && fits && short === undefined) {
+        const made = this.made(ask, since, now, holders, backfill);
 
         this.keepHolds([...holders, made]);
 
@@ -1191,10 +1293,11 @@ export class Gate {
       cpuBudget: ask.cpuBudget,
       floor: ask.memory?.floor,
       workspace: ask.workspace,
+      runS: ask.runS,
     };
   }
 
-  private made(ask: Ask, since: string, now: Date, holders: readonly Hold[]): Hold {
+  private made(ask: Ask, since: string, now: Date, holders: readonly Hold[], backfill: boolean): Hold {
     const base = `${plain(ask.holder.name)}\n${plain(ask.what)}\n${since}`;
     let token = short(base);
 
@@ -1215,7 +1318,10 @@ export class Gate {
     // A run with a cap is a run in a scope (without one it asks for the whole budget): the scope's name is the hold's.
     const scoped = ask.runs && ask.cap !== undefined ? { ...run, unit: `fleet-gate-${token}-${String(ask.pid)}` } : run;
 
-    return holdOf(plus(plus(plus(plus(plus({ ...scoped, budget: ask.budget }, "cap", ask.cap), "cpus", ask.cpus), "landing", ask.landing === true ? true : undefined), "repo", ask.landing === true ? ask.repo : undefined), "light", ask.light === true ? true : undefined));
+    const kind = plus(plus(plus(plus(plus({ ...scoped, budget: ask.budget }, "cap", ask.cap), "cpus", ask.cpus), "landing", ask.landing === true ? true : undefined), "repo", ask.landing === true ? ask.repo : undefined), "light", ask.light === true ? true : undefined);
+    const ends = ask.runS === undefined ? undefined : stampOf(new Date(now.getTime() + ask.runS * 1000));
+
+    return holdOf(plus(plus(kind, "ends", ends), "backfill", backfill || undefined));
   }
 
   /** The landing run `runner`, whose command passed, keeps the hold `token` for its push: {@link PUSH_HOLD_S} seconds
@@ -1227,7 +1333,7 @@ export class Gate {
       const hold = holders.find((h) => h.token === token && h.pid === runner);
 
       if (hold === undefined) return undefined;
-      const gone = new Set(["pid", "started", "unit", "cpus", "light"]);
+      const gone = new Set(["pid", "started", "unit", "cpus", "light", "ends", "backfill"]);
       const raw = Object.fromEntries(Object.entries(hold.raw).filter(([key]) => !gone.has(key)));
       const kept = holdOf({ ...raw, cap: MIN_CAP, until: stampOf(new Date(now.getTime() + PUSH_HOLD_S * 1000)), pushing: true });
 

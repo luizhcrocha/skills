@@ -303,6 +303,31 @@ describe.skipIf(!SCOPE)("gate run's record, and its estimate from the last runs"
     expect(above.stderr).toContain(", estimate 12.0G from --mem and ");
   });
 
+  test("a run whose last runs end before a waiting head could start passes it as a backfill: it says so, and its record keeps it", async () => {
+    const GB = 1024 ** 3;
+    const repo = gitRepo();
+    const store = realpathSync(join(repo, ".git"));
+    mkdirSync(join(home, "gate"), { recursive: true });
+    writeFileSync(join(home, "gate", "runs.jsonl"), `${JSON.stringify({ at: new Date(Date.now() - 3600_000).toISOString(), name: "w", kind: "session", what: "true", asked: "1G", cap: 8 * GB, waited: 0, ran: 200, code: 0, peak: GB / 2, killed: 0, repo: store })}\n`);
+    const others = [Bun.spawn(["sleep", "300"]), Bun.spawn(["sleep", "300"])];
+
+    try {
+      const [holder = 0, head = 0] = others.map((p) => p.pid);
+      const machine = new Gate(join(home, "gate"), () => []);
+      const asked = { seconds: 3600, budget: 8 * GB, runs: true, waitS: 600, cpus: 1, runS: 600 };
+      expect("took" in machine.ask({ ...asked, holder: { name: "long", kind: "session" }, what: "long", cap: 4 * GB, pid: holder }, new Date())).toBe(true);
+      expect("waiting" in machine.ask({ ...asked, holder: { name: "head", kind: "session" }, what: "head", cap: 6 * GB, pid: head }, new Date())).toBe(true);
+
+      const done = gate(["run", "--as", "w1", "--mem", "1G", "--cpus", "1", "--", "true"], { ...more, FLEET_GATE_MEMORY_BUDGET: "8G", FLEET_GATE_MEMORY_FLOOR: "0" }, repo);
+      expect(done.code).toBe(0);
+      expect(done.stderr).toContain("w1 holds the gate, a backfill ahead of the queue's head, which it does not delay (token");
+      expect(records().at(-1)).toMatchObject({ name: "w1", code: 0, backfill: true });
+      expect(standing().queue.map((w) => w["name"])).toEqual(["head"]);
+    } finally {
+      await stopAll(others);
+    }
+  });
+
   // The review of 10-22 (A3): a leak killed at the ceiling leaves a peak of the whole budget, which no later run lowers.
   test("a --mem below a peak that a killed run left (OOM-killed, or a signal's exit) is kept as given, and the run says why", () => {
     const GB = 1024 ** 3;

@@ -8,8 +8,11 @@ import { join } from "node:path";
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 
+import * as fc from "fast-check";
+
+import { stampOf } from "../src/clock.ts";
 import { asArray, asObject, asString, type JsonObject } from "../src/json.ts";
-import { capBytes, cpuBudgetOf, cpusHere, endOf, floorOf, Gate, holdText, familyOf, memAvailable, MIN_CAP, pressureNow, REASK_S, whatKey, type Ask, type Hold, type RunRecord, type Waiting } from "../src/gate.ts";
+import { backfills, capBytes, cpuBudgetOf, cpusHere, endOf, floorOf, Gate, holdOf, holdText, familyOf, memAvailable, MIN_CAP, pressureNow, REASK_S, reservedStart, whatKey, type Ask, type Hold, type RunRecord, type Waiting } from "../src/gate.ts";
 import { readJson, tmp } from "./support.ts";
 
 const GB = 1024 ** 3;
@@ -253,12 +256,12 @@ describe("admission by the memory available", () => {
 
   /** `name` asks for `cap` bytes on the machine `env`, keeping {@link FLOOR} free; an ask of the whole budget counts a
    * quarter of the RAM. */
-  function askOn(env: (name: string) => string | undefined, name: string, pid: number, cap: number | undefined, seconds = 0, waitS = 600): Asked {
-    return gate.ask({ holder: { name, kind: "session" }, what: `suite ${name}`, seconds: 3600, cap, budget: BUDGET, pid, runs: true, waitS, memory: { floor: FLOOR, whole: QUARTER, env } }, at(seconds));
+  function askOn(env: (name: string) => string | undefined, name: string, pid: number, cap: number | undefined, seconds = 0, waitS = 600, more: Partial<Ask> = {}): Asked {
+    return gate.ask({ holder: { name, kind: "session" }, what: `suite ${name}`, seconds: 3600, cap, budget: BUDGET, pid, runs: true, waitS, memory: { floor: FLOOR, whole: QUARTER, env }, ...more }, at(seconds));
   }
 
-  function askWith(available: number, name: string, pid: number, cap: number | undefined, seconds = 0, waitS = 600): Asked {
-    return askOn(machine(available), name, pid, cap, seconds, waitS);
+  function askWith(available: number, name: string, pid: number, cap: number | undefined, seconds = 0, waitS = 600, more: Partial<Ask> = {}): Asked {
+    return askOn(machine(available), name, pid, cap, seconds, waitS, more);
   }
 
   test("a run goes ahead while MemAvailable less its cap keeps the floor free", () => {
@@ -360,16 +363,25 @@ describe("admission by the memory available", () => {
     expect(behind.took).toBeUndefined();
     expect(behind.waiting).toMatchObject({ fits: true, lacks: [] });
     expect(names(behind.waiting?.ahead)).toEqual(["big"]);
-    expect(askWith(30 * GB, "big", big, QUARTER, 2).took?.name).toBe("big");
-    expect(askWith(30 * GB, "small", small, GB, 3).took?.name).toBe("small");
+    expect(askWith(30 * GB, "big", big, QUARTER, 2, 600, { runS: 600 }).took?.name).toBe("big");
+    expect(askWith(30 * GB, "small", small, GB, 3, 600, { runS: 60 }).took?.name).toBe("small");
 
-    // One that waits on the budget keeps its place as well.
+    // One that waits on the budget keeps its place as well, from a smaller run that would delay it.
     const c = askWith(200 * GB, "c", asker(), QUARTER, 3);
     expect(names(c.waiting?.holders)).toEqual(["big", "small"]);
     expect(gate.standing(at(4)).queue[0]).toMatchObject({ name: "c", memory: false });
-    const tiny = askWith(200 * GB, "tiny", asker(), GB, 5);
+    const tiny = askWith(200 * GB, "tiny", asker(), GB, 5, 600, { runS: 600 });
     expect(tiny.took).toBeUndefined();
     expect(names(tiny.waiting?.ahead)).toEqual(["c"]);
+
+    // A whole-budget one too, whatever the smaller run's time.
+    gate = new Gate(join(dir, "..", "whole"), () => served);
+    askWith(200 * GB, "big", asker(), QUARTER);
+    const all = askWith(200 * GB, "all", asker(), undefined, 1);
+    expect(all.waiting?.fits).toBe(false);
+    const quick = askWith(200 * GB, "quick", asker(), GB, 2);
+    expect(quick.took).toBeUndefined();
+    expect(names(quick.waiting?.ahead)).toEqual(["all"]);
   });
 
   /** `name` asks as a run of `cap` bytes and `cpus` CPUs on the machine `env`, light or not, with a CPU budget of 24,
@@ -457,6 +469,7 @@ describe("the CPU row and light runs", () => {
     readonly landing?: boolean;
     readonly light?: boolean;
     readonly budget?: number;
+    readonly runS?: number;
   }
 
   /** `name` asks for `run`'s memory and CPUs, marked a landing gate or not, light or not, under the budget it reads. */
@@ -509,15 +522,15 @@ describe("the CPU row and light runs", () => {
   // Review 3's S2, ported: arrival order for all but lights, and --landing has no priority in step 1.
   test("a run marked a landing gate waits its turn as any other: no room of its own, and an earlier run before it (S2)", () => {
     expect(askRun("landA", asker(), { cap: 8 * GB, cpus: 16, landing: true }).took?.name).toBe("landA");
-    expect(askRun("landB", asker(), { cap: 8 * GB, cpus: 16, landing: true }, 1).waiting?.lacks).toEqual(["CPU"]);
-    // The tier fits beside landA, and waits its turn behind landB.
-    const tier = askRun("tier", asker(), { cap: 4 * GB, cpus: 4 }, 2);
+    expect(askRun("landB", asker(), { cap: 8 * GB, cpus: 20, landing: true }, 1).waiting?.lacks).toEqual(["CPU"]);
+    // The tier fits beside landA, not beside landB, and waits its turn behind landB.
+    const tier = askRun("tier", asker(), { cap: 4 * GB, cpus: 5 }, 2);
     expect(tier.waiting).toMatchObject({ fits: true, lacks: [] });
     expect(names(tier.waiting?.ahead)).toEqual(["landB"]);
 
     // A bench before a landing gate delays it by the bench's own estimate.
     const bench = askRun("bench", asker(), { cap: 4 * GB, cpus: 16 }, 3);
-    const late = askRun("late gate", asker(), { cap: 4 * GB, cpus: 4, landing: true }, 4);
+    const late = askRun("late gate", asker(), { cap: 4 * GB, cpus: 5, landing: true }, 4);
     expect(names(late.waiting?.ahead)).toEqual(["landB", "tier", "bench"]);
     expect(bench.took).toBeUndefined();
   });
@@ -525,9 +538,10 @@ describe("the CPU row and light runs", () => {
   test("a light run passes a head that would not fit even with every light hold gone; any other run keeps its place", () => {
     askRun("gate", asker(), { cap: QUARTER, cpus: 16 });
     // The head waits for the first run's CPUs: no light hold is in its way.
-    expect(askRun("heavy", asker(), { cap: QUARTER, cpus: 16 }, 1).took).toBeUndefined();
+    expect(askRun("heavy", asker(), { cap: QUARTER, cpus: 20 }, 1).took).toBeUndefined();
 
-    const same = askRun("tier", asker(), { cap: 2 * GB, cpus: 2 }, 2, 0);
+    // A run that is not light and would not fit beside the head once the first run ends waits.
+    const same = askRun("tier", asker(), { cap: 2 * GB, cpus: 6 }, 2, 0);
     expect(same.took).toBeUndefined();
     expect(names(same.waiting?.ahead)).toEqual(["heavy"]);
 
@@ -549,15 +563,16 @@ describe("the CPU row and light runs", () => {
 
   // A light run passes a light waiter as it passes any other: only when the light holds are not what keeps it out.
   test("a light run waits behind a light waiter only the light holds keep out, though it passes the head before both", async () => {
-    expect(askRun("bench", asker(), { cap: 4 * GB, cpus: 16 }).took?.name).toBe("bench");
+    expect(askRun("bench", asker(), { cap: 4 * GB, cpus: 16, runS: 3000 }).took?.name).toBe("bench");
     const l0 = asker();
-    expect(askRun("l0", l0, { cap: 2 * GB, cpus: 4, light: true }, 1).took?.name).toBe("l0");
+    expect(askRun("l0", l0, { cap: 2 * GB, cpus: 4, light: true, runS: 60 }, 1).took?.name).toBe("l0");
     // 16 + 16 is past 24 with no light at all: the head waits for the bench.
     expect(askRun("head", asker(), { cap: 4 * GB, cpus: 16 }, 2).waiting?.lacks).toEqual(["CPU"]);
     // 16 + 4 + 6 is past 24; without the light, 16 + 6 fits.
     const l1 = asker();
     expect(askRun("l1", l1, { cap: 2 * GB, cpus: 6, light: true }, 3).waiting?.lacks).toEqual(["CPU"]);
-    const l2 = askRun("l2", asker(), { cap: 2 * GB, cpus: 2, light: true }, 4);
+    // 16 + 6 + 3 is past 24 too: l2 would delay l1, which starts when l0 ends.
+    const l2 = askRun("l2", asker(), { cap: 2 * GB, cpus: 3, light: true }, 4);
     expect(l2.waiting).toMatchObject({ fits: true, lacks: [] });
     expect(names(l2.waiting?.ahead)).toEqual(["l1"]);
 
@@ -567,8 +582,8 @@ describe("the CPU row and light runs", () => {
 
   // A light run that reads a smaller budget would read the head as out with every light gone, and pass it for ever.
   test("a light run judges a waiter by the CPU budget and the budget the waiter read, not by its own smaller ones", () => {
-    expect(askRun("bench", asker(), { cap: 4 * GB, cpus: 16 }).took?.name).toBe("bench");
-    expect(askRun("l0", asker(), { cap: 2 * GB, cpus: 4, light: true }, 1).took?.name).toBe("l0");
+    expect(askRun("bench", asker(), { cap: 4 * GB, cpus: 16, runS: 3000 }).took?.name).toBe("bench");
+    expect(askRun("l0", asker(), { cap: 2 * GB, cpus: 4, light: true, runS: 60 }, 1).took?.name).toBe("l0");
     // 16 + 4 + 8 is past the head's 24; without the light, 16 + 8 fits it. By 22, 16 + 8 would not.
     expect(askRun("head", asker(), { cap: 4 * GB, cpus: 8 }, 2).waiting?.lacks).toEqual(["CPU"]);
     const cpu = askRun("l1", asker(), { cap: 2 * GB, cpus: 2, light: true }, 3, 600, 22);
@@ -585,9 +600,9 @@ describe("the CPU row and light runs", () => {
   // Review 3's S1, ported: overlapping light runs kept an 8-CPU head waiting for ever. Now a light stops passing once
   // the light holds are what keeps the head out, and the head goes as soon as they end.
   test("a stream of overlapping light runs does not starve the head: once the lights are what keeps it out, a light waits behind it (S1)", async () => {
-    expect(askRun("bench", asker(), { cap: 4 * GB, cpus: 16 }).took?.name).toBe("bench");
+    expect(askRun("bench", asker(), { cap: 4 * GB, cpus: 16, runS: 3000 }).took?.name).toBe("bench");
     const l0 = asker();
-    expect(askRun("l0", l0, { cap: 2 * GB, cpus: 2, light: true }, 1).took?.name).toBe("l0");
+    expect(askRun("l0", l0, { cap: 2 * GB, cpus: 2, light: true, runS: 60 }, 1).took?.name).toBe("l0");
 
     // 16 + 2 + 8 is past 24; without the light, 16 + 8 fits.
     const heavy = asker();
@@ -726,6 +741,158 @@ describe("the queue", () => {
     ask("w2", w2, QUARTER, 2);
     gate.leave(w1, at(3));
     expect(names(gate.standing(at(3)).queue)).toEqual(["w2"]);
+  });
+});
+
+describe("a small run passes a waiting head that it does not delay (backfill)", () => {
+  const CPUS = 24;
+
+  interface Run {
+    readonly cap: number | undefined;
+    readonly runS?: number;
+  }
+
+  /** `name` asks for `run`'s memory and 2 CPUs, its last runs taking `runS`. */
+  function askRun(name: string, pid: number, run: Run, seconds: number, more: Partial<Ask> = {}): Asked {
+    return gate.ask({ holder: { name, kind: "session" }, what: `suite ${name}`, seconds: 3600, budget: BUDGET, pid, runs: true, waitS: 600, cpus: 2, cpuBudget: CPUS, ...run, ...more }, at(seconds));
+  }
+
+  function endsAt(hold: Hold | undefined): number {
+    return Date.parse(hold?.ends ?? "");
+  }
+
+  function machine(available: number): (name: string) => string | undefined {
+    const info = join(dir, "..", "meminfo");
+    writeFileSync(info, `MemTotal:       67108864 kB\nMemAvailable:   ${String(available / 1024)} kB\n`);
+
+    return (name) => (name === "FLEET_MEMINFO" ? info : name === "FLEET_CGROUP_ROOT" ? join(dir, "..", "cgroup") : undefined);
+  }
+
+  test("a run that ends before the head could start takes the gate, and its hold says when it ends; one that would end after waits", () => {
+    const long = askRun("long", asker(), { cap: QUARTER, runS: 600 }, 0).took;
+    expect(endsAt(long)).toBe(at(600).getTime());
+    expect(long?.backfilled).toBe(false);
+    const head = asker();
+    expect(askRun("head", head, { cap: 24 * GB, runS: 600 }, 1).took).toBeUndefined();
+
+    const late = askRun("late", asker(), { cap: 10 * GB, runS: 900 }, 10);
+    expect(late.took).toBeUndefined();
+    expect(names(late.waiting?.ahead)).toEqual(["head"]);
+
+    const quick = askRun("quick", asker(), { cap: 8 * GB, runS: 300 }, 11).took;
+    expect(quick?.backfilled).toBe(true);
+    expect(endsAt(quick)).toBe(at(311).getTime());
+    expect(names(gate.standing(at(12)).queue)).toEqual(["head", "late"]);
+
+    end(quick, 311);
+    end(long, 600);
+    expect(askRun("head", head, { cap: 24 * GB, runS: 600 }, 600).took?.name).toBe("head");
+  });
+
+  test("a run that fits beside the head where the head will start takes the gate, however long it runs; nothing fits beside a whole-budget head", () => {
+    const long = askRun("long", asker(), { cap: QUARTER, runS: 600 }, 0).took;
+    const head = asker();
+    askRun("head", head, { cap: 20 * GB, runS: 600 }, 1);
+    expect(askRun("wide", asker(), { cap: 10 * GB, runS: 3600 }, 2).took?.backfilled).toBe(true);
+    end(long, 600);
+    expect(askRun("head", head, { cap: 20 * GB, runS: 600 }, 600).took?.name).toBe("head");
+
+    gate = new Gate(join(dir, "..", "whole"), () => served);
+    askRun("long", asker(), { cap: QUARTER, runS: 600 }, 0);
+    expect(askRun("all", asker(), { cap: undefined, runS: 600 }, 1).took).toBeUndefined();
+    expect(askRun("wide", asker(), { cap: 4 * GB, runS: 3600 }, 2).took).toBeUndefined();
+    expect(askRun("quick", asker(), { cap: 4 * GB, runS: 60 }, 3).took?.backfilled).toBe(true);
+  });
+
+  test("backfills keep their order: a later one waits for an earlier one that could backfill now; one whose time is unknown holds nobody back", () => {
+    askRun("long", asker(), { cap: QUARTER, runS: 600 }, 0);
+    const short = askRun("short", asker(), { cap: 8 * GB, runS: 100 }, 0).took;
+    askRun("head", asker(), { cap: 24 * GB, runS: 600 }, 1);
+    const w1 = asker();
+    expect(askRun("w1", w1, { cap: 10 * GB, runS: 300 }, 2).took).toBeUndefined();
+    expect(askRun("w2", asker(), { cap: 10 * GB }, 3).took).toBeUndefined();
+    end(short, 50);
+
+    const b = asker();
+    const first = askRun("b", b, { cap: 8 * GB, runS: 300 }, 60);
+    expect(first.took).toBeUndefined();
+    expect(names(first.waiting?.ahead)).toEqual(["head", "w1", "w2"]);
+
+    const took = askRun("w1", w1, { cap: 10 * GB, runS: 300 }, 61).took;
+    expect(took?.backfilled).toBe(true);
+    end(took, 70);
+    expect(askRun("b", b, { cap: 8 * GB, runS: 300 }, 71).took?.backfilled).toBe(true);
+    expect(names(gate.standing(at(72)).queue)).toEqual(["head", "w2"]);
+  });
+
+  test("a landing never passes an earlier landing of its repository, though it fits beside it; another repository's does", () => {
+    askRun("long", asker(), { cap: 20 * GB, runS: 600 }, 0);
+    expect(askRun("l1", asker(), { cap: QUARTER, runS: 600 }, 1, { landing: true, repo: "/r" }).took).toBeUndefined();
+
+    const l2 = askRun("l2", asker(), { cap: 4 * GB, runS: 3000 }, 2, { landing: true, repo: "/r" });
+    expect(l2.took).toBeUndefined();
+    expect(names(l2.waiting?.ahead)).toEqual(["l1"]);
+    expect(askRun("elsewhere", asker(), { cap: 4 * GB, runS: 3000 }, 3, { landing: true, repo: "/s" }).took?.backfilled).toBe(true);
+  });
+
+  test("a hold whose end is unknown counts as ending now: a run passes the head only beside it", () => {
+    askRun("long", asker(), { cap: QUARTER }, 0);
+    askRun("head", asker(), { cap: 24 * GB, runS: 600 }, 1);
+    const slow = askRun("slow", asker(), { cap: 10 * GB, runS: 3000 }, 2);
+    expect(slow.took).toBeUndefined();
+    expect(names(slow.waiting?.ahead)).toEqual(["head"]);
+    expect(askRun("beside", asker(), { cap: 8 * GB, runS: 3000 }, 3).took?.backfilled).toBe(true);
+  });
+
+  test("no run passes a head whose start the gate cannot reckon: one the floor would keep out with every hold gone", () => {
+    const memory = { floor: 8 * GB, whole: QUARTER, env: machine(30 * GB) };
+
+    expect(askRun("long", asker(), { cap: QUARTER, runS: 600 }, 0, { memory }).took?.name).toBe("long");
+    expect(askRun("head", asker(), { cap: 24 * GB, runS: 600 }, 1, { memory }).took).toBeUndefined();
+    const small = askRun("small", asker(), { cap: 4 * GB, runS: 60 }, 2, { memory });
+    expect(small.took).toBeUndefined();
+    expect(names(small.waiting?.ahead)).toEqual(["head"]);
+  });
+
+  test("the hold a backfill adds never moves the head's reserved start later", () => {
+    const now = at(0);
+    const env = machine(48 * GB);
+    const stamp = (s: number | undefined): string | undefined => (s === undefined ? undefined : stampOf(new Date(now.getTime() + s * 1000)));
+    const cap = fc.option(fc.integer({ min: 1, max: 40 }).map((g) => g * GB), { nil: undefined });
+    const cpus = fc.option(fc.integer({ min: 0, max: 24 }), { nil: undefined });
+    const budget = fc.integer({ min: 16, max: 40 }).map((g) => g * GB);
+    const seconds = (min: number, max: number): fc.Arbitrary<number | undefined> => fc.option(fc.integer({ min, max }), { nil: undefined });
+    const held = fc.record({ cap, cpus, budget, ends: seconds(-60, 3600), until: seconds(1, 7200) });
+
+    const holdFrom = (h: { cap: number | undefined; cpus: number | undefined; budget: number; ends: number | undefined; until: number | undefined }): Hold => {
+      const [ends, until] = [stamp(h.ends), stamp(h.until)];
+      let raw: JsonObject = { fleet: "h", kind: "session", what: "w", since: stampOf(now), budget: h.budget };
+
+      if (h.cap !== undefined) raw = { ...raw, cap: h.cap };
+
+      if (h.cpus !== undefined) raw = { ...raw, cpus: h.cpus };
+
+      if (ends !== undefined) raw = { ...raw, ends };
+
+      if (until !== undefined) raw = { ...raw, until };
+
+      return holdOf(raw);
+    };
+
+    const limits = fc.record({ budget, cpuBudget: seconds(8, 32), memory: fc.option(fc.integer({ min: 0, max: 16 }).map((g) => ({ floor: g * GB, whole: QUARTER, env })), { nil: undefined }) });
+    const part = fc.record({ cap, cpus, budget, runS: fc.integer({ min: 1, max: 3600 }) });
+
+    fc.assert(
+      fc.property(fc.array(held, { maxLength: 5 }), fc.record({ cap, cpus }), part, limits, (hs, head, ask, own) => {
+        const holders = hs.map(holdFrom);
+        const before = reservedStart(head, own, holders, now);
+
+        fc.pre(before !== undefined && backfills(ask, ask.runS, head, own, before, now));
+        const after = reservedStart(head, own, [...holders, holdFrom({ ...ask, ends: ask.runS, until: 3600 })], now);
+
+        expect(after?.at ?? Infinity).toBeLessThanOrEqual(before.at);
+      }),
+    );
   });
 });
 
@@ -1112,7 +1279,7 @@ describe("the runs' records", () => {
     gate.record(run(5, { repo: "/r/a", peak: 2 * GB, ran: 30 }));
     gate.record(run(6, { repo: "/r/b", peak: 9 * GB }));
     gate.record(run(7, { repo: "/r/a", what: "just test", peak: 9 * GB }));
-    expect(gate.history("/r/a", "just test-changed")).toEqual({ peak: 5 * GB, at: "2026-10-05T12:03:00.000Z", ran: 400, cores: 4, runs: 3, high: 12 * GB, estimated: 4, estimate: 13517 * MIB });
+    expect(gate.history("/r/a", "just test-changed")).toEqual({ peak: 5 * GB, at: "2026-10-05T12:03:00.000Z", ran: 400, runS: 900, cores: 4, runs: 3, high: 12 * GB, estimated: 4, estimate: 13517 * MIB });
     expect(gate.history("/r/c", "just test-changed")).toBeUndefined();
   });
 
@@ -1313,9 +1480,9 @@ describe("a waiter's estimate", () => {
     expect(ask("w", waiter, 25 * GB, 1).waiting?.lacks).toEqual(["memory"]);
     expect(gate.standing(at(1)).queue[0]?.cap).toBe(25 * GB);
     const behind = asker();
-    expect(ask("x", behind, GB, 2).waiting?.ahead.map((w) => w.name)).toEqual(["w"]);
+    expect(ask("x", behind, 8 * GB, 2).waiting?.ahead.map((w) => w.name)).toEqual(["w"]);
     expect(ask("w", waiter, 24 * GB, 3).waiting?.lacks).toEqual(["memory"]);
-    expect(gate.standing(at(3)).queue.map((w) => [w.name, w.cap])).toEqual([["w", 24 * GB], ["x", GB]]);
+    expect(gate.standing(at(3)).queue.map((w) => [w.name, w.cap])).toEqual([["w", 24 * GB], ["x", 8 * GB]]);
     expect(ask("w", waiter, 10 * GB, 4).took?.cap).toBe(10 * GB);
     expect(gate.standing(at(4)).queue.map((w) => w.name)).toEqual(["x"]);
   });
