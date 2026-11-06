@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Land's verdict on one push: may it go without asking?
 
-    land-check --bookmark B [--head REV] [--remote origin] [--apply-skip-ci | --pre-gate]
+    land-check --bookmark B [--head REV] [--remote origin] [--apply-skip-ci | --pre-gate] [--push-token T]
     land-check --interdiff CHANGE@COMMIT [--to CHANGE]
 
 Prints JSON. Run it after `jj git fetch` and the rebase, from inside the
@@ -34,6 +34,15 @@ workspace. Exit 0 when the verdict is "push", 1 for "ask" or "stop", 2 on error.
     turn               in a fleet whose machine serves a manager, why this fleet
                        may not land yet (`fleet turn`): the manager has not given
                        it the landing turn. The verdict is then "stop"
+    freeze             the landings of this repository (its jj store) that hold the
+                       machine's gate for another workspace: a landing gate
+                       running, or one that passed and keeps the landing turn
+                       for its push (fleet, what, pushing, until, ends). A push
+                       now would move the tip that landing proved, and it would
+                       gate again, so the verdict is "stop" until it has pushed
+                       or ended. A hold whose workspace is this one, whose token
+                       is --push-token, or whose run (the gate's runs.jsonl) ran
+                       here is this lane's own and freezes nothing
     review             whether the stack needs a review before landing (the
                        coordinator's Integrate rule): `lines` changed (lockfiles
                        and generated files left out), the `sensitive` paths or
@@ -61,6 +70,9 @@ workspace. Exit 0 when the verdict is "push", 1 for "ask" or "stop", 2 on error.
 
 --ledger DIR names the fleet's dashboard directory; else $FLEET_DIR, else the
 fleet whose registry entry's pid is among this process's parents.
+
+--push-token T names the token this lane's passed `gate run --landing` printed,
+when its push hold does not name this workspace.
 
 --apply-skip-ci appends " [skip ci]" to head's subject when suggest_skip_ci
 holds (idempotent, head only), then reports on the rewritten head.
@@ -525,7 +537,8 @@ def skip_ci_habit(repo, base, head, tracked, workflows_text):
 
 # --- the check -------------------------------------------------------------
 
-def land_check(repo, bookmark, head_rev=None, remote=LANDING_REMOTE, apply_skip_ci=False, ledger_dir=None):
+def land_check(repo, bookmark, head_rev=None, remote=LANDING_REMOTE, apply_skip_ci=False, ledger_dir=None,
+               push_token=None):
     reasons = []
     remote_ref = f"{bookmark}@{remote}"
     if repo.exists(remote_ref):
@@ -598,7 +611,7 @@ def land_check(repo, bookmark, head_rev=None, remote=LANDING_REMOTE, apply_skip_
     if apply_skip_ci and suggest:
         first, _, rest = head["description"].partition("\n")
         repo.jj("describe", "-r", head["commit"], "-m", f"{first.rstrip()} [skip ci]\n{rest}".rstrip("\n") + "\n")
-        result = land_check(repo, bookmark, head["change"], remote, ledger_dir=ledger_dir)
+        result = land_check(repo, bookmark, head["change"], remote, ledger_dir=ledger_dir, push_token=push_token)
         result["skip_ci_applied"] = True
         return result
 
@@ -612,7 +625,12 @@ def land_check(repo, bookmark, head_rev=None, remote=LANDING_REMOTE, apply_skip_
             reasons += review_reasons(result["review"])
         except (CheckError, OSError) as e:
             reasons.append(f"note: the review check did not run: {e}")
-    blocked = (not ff or not stack or any(not r["subject"] or r["conflict"] for r in stack))
+    holds = others_landings(repo.cwd, push_token)
+    if holds:
+        result["freeze"] = [{"fleet": h.get("fleet"), "what": h.get("what"), "pushing": h.get("pushing") is True,
+                             "until": h.get("until"), "ends": h.get("ends")} for h in holds]
+        reasons += [freeze_reason(h) for h in holds]
+    blocked = (not ff or not stack or any(not r["subject"] or r["conflict"] for r in stack) or bool(holds))
     if blocked:
         result["verdict"] = "stop"
     elif deploys is False:
@@ -1030,6 +1048,105 @@ def with_turn(result, turn):
     return result
 
 
+# --- another lane's landing ---------------------------------------------------
+
+RUNS_TAIL = 256 * 1024  # bytes of the gate's run log read for a push hold's run: it passed within the last 2 minutes
+
+
+def jj_store(root):
+    """The jj store a workspace shares with its repository's others, as the gate names a landing's repository: its
+    `.jj/repo` directory, or the one a later workspace's `.jj/repo` file names. None outside a jj workspace."""
+    pointer = Path(root) / ".jj" / "repo"
+    try:
+        return os.path.realpath(pointer if pointer.is_dir() else pointer.parent / pointer.read_text().strip())
+    except OSError:
+        return None
+
+
+def same_path(a, b):
+    return isinstance(a, str) and isinstance(b, str) and os.path.realpath(a) == os.path.realpath(b)
+
+
+def alive(pid):
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except OSError:
+        return True
+    return True
+
+
+def run_workspace(gate, token):
+    """The workspace of the gate run that kept the push hold `token`, from the end of the gate's run log."""
+    try:
+        with open(gate / "runs.jsonl", "rb") as f:
+            f.seek(max(0, f.seek(0, os.SEEK_END) - RUNS_TAIL))
+            lines = f.read().decode(errors="replace").splitlines()
+    except OSError:
+        return None
+    for line in reversed(lines):
+        try:
+            run = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(run, dict) and run.get("push_token") == token:
+            return run.get("workspace")
+    return None
+
+
+def others_landings(path, push_token=None):
+    """The landings of the repository holding `path` that hold the machine's gate for another workspace: a landing
+    gate running, or one that passed and keeps the landing turn for its push. A push now moves the tip that landing
+    proved, and it gates again. Its own push is not one: the hold's workspace is this one, its token is
+    `push_token`, or the run that kept it ran here; nor a gate run this process runs under. gate.json read only; a
+    missing, unreadable or older file holds nothing."""
+    root = workspace_root(path)
+    store = jj_store(root) if root else None
+    if store is None:
+        return []
+    gate = registry_home() / "gate"
+    try:
+        held = json.loads((gate / "gate.json").read_text())
+    except (OSError, ValueError):
+        return []
+    holds = held.get("holds") if isinstance(held, dict) else None
+    now = datetime.now(timezone.utc)
+    mine = set(ancestors())
+    out = []
+    for h in holds if isinstance(holds, list) else []:
+        if not isinstance(h, dict) or h.get("landing") is not True or not same_path(h.get("repo"), store):
+            continue
+        try:
+            until = datetime.fromisoformat(str(h.get("until")).replace("Z", "+00:00"))
+        except ValueError:
+            continue
+        if until.tzinfo is None or until <= now:
+            continue
+        pid = h.get("pid")
+        if isinstance(pid, int) and (pid in mine or not alive(pid)):
+            continue
+        if same_path(h.get("workspace"), str(root)) or (push_token and h.get("token") == push_token):
+            continue
+        if h.get("pushing") is True and same_path(run_workspace(gate, h.get("token")), str(root)):
+            continue
+        out.append(h)
+    return out
+
+
+def freeze_reason(hold):
+    who = hold.get("fleet") or "another lane"
+    then = "fetch, rebase onto its push, and run land-check again"
+    if hold.get("pushing") is True:
+        return (f"{who}'s landing gate of this repository passed and holds the landing turn for its push until "
+                f"{clock(str(hold.get('until')))}: a push now moves the tip it proved, and it gates again. Wait for "
+                f"its push (`fleet fleets gate` shows the hold), then {then} (this lane's own landing: pass "
+                "--push-token <the token its gate run printed>)")
+    return (f"{who} is running a landing gate of this repository ({hold.get('what')}), expected to end by "
+            f"{clock(str(hold.get('ends') or hold.get('until')))}: a push now moves the tip it is proving, and it "
+            f"gates again. Wait until it has pushed or ended (`fleet fleets gate` shows the hold), then {then}")
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(prog="land-check", description=__doc__.split("\n\n")[0],
                                      formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -1047,6 +1164,8 @@ def main(argv=None):
                       help="print what changed in CHANGE since a review read COMMIT, and nothing else")
     parser.add_argument("--ledger", metavar="DIR", help="the fleet's dashboard directory, whose reviewed events are read")
     parser.add_argument("--to", metavar="CHANGE", help="with --interdiff: the change a reshape made of CHANGE")
+    parser.add_argument("--push-token", metavar="TOKEN",
+                        help="the token this lane's passed landing gate printed: its own push hold freezes nothing")
     args = parser.parse_args(argv)
     if args.interdiff:
         return show_interdiff(Repo(str(Path(args.repo).resolve())), args.interdiff, args.to)
@@ -1056,7 +1175,7 @@ def main(argv=None):
         parser.error("the following arguments are required: --bookmark/-b")
     try:
         result = land_check(Repo(str(Path(args.repo).resolve())), args.bookmark, args.head, args.remote,
-                            args.apply_skip_ci, args.ledger)
+                            args.apply_skip_ci, args.ledger, args.push_token)
     except CheckError as e:
         print(f"land-check: {e}", file=sys.stderr)
         return 2

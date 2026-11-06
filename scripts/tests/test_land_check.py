@@ -15,6 +15,7 @@ import time
 import unittest
 from importlib.machinery import SourceFileLoader
 from importlib.util import module_from_spec, spec_from_loader
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent.parent
@@ -152,9 +153,11 @@ class RepoCase(unittest.TestCase):
             write(self.repo, path, text)
         jj(self.repo, "commit", "-m", subject, at=at)
 
-    def check(self, *args):
-        r = subprocess.run([sys.executable, str(CHECK), "-R", str(self.repo), "-b", "master", *args],
-                           capture_output=True, text=True, env=ENV)
+    def check(self, *args, home=None, cwd=None):
+        """land-check's JSON; `home` is the fleet registry ($FLEET_HOME) whose gate it reads, `cwd` the workspace."""
+        env = {**ENV, "FLEET_HOME": str(home)} if home else ENV
+        r = subprocess.run([sys.executable, str(CHECK), "-R", str(cwd or self.repo), "-b", "master", *args],
+                           capture_output=True, text=True, env=env)
         self.assertIn(r.returncode, (0, 1), r.stderr)
         result = json.loads(r.stdout)
         self.assertEqual(r.returncode == 0, result["verdict"] == "push")
@@ -780,6 +783,105 @@ class LandingTurnTest(unittest.TestCase):
         result = self.verdict()
         self.assertEqual(result["verdict"], "push")
         self.assertIn("acme holds the landing turn: l2 (acme: push)", result["reasons"][0])
+
+
+class FreezeTest(RepoCase):
+    """A landing gate of this repository, running or passed and waiting for its push, freezes the repository's other
+    pushes: on 11-05 a 23-minute landing gate passed, but another lane pushed master during its run, and it gated
+    again. The landing's own push goes. The holds are in the shape fleet/src/gate.ts writes them: `made()` for a
+    running landing, `awaitPush()` for one that passed."""
+
+    def setUp(self):
+        super().setUp()
+        self.home = self.tmp / "registry"
+        (self.home / "gate").mkdir(parents=True)
+        self.trunk(("feat: a", {"a.ts": "a\n"}))
+        self.change("feat: b", {"b.ts": "b\n"})
+        self.runner = subprocess.Popen(["sleep", "600"])  # the other lane's `gate run`: alive, not an ancestor
+        self.addCleanup(self.runner.wait)
+        self.addCleanup(self.runner.kill)
+
+    def store(self, workspace=None):
+        return str((Path(workspace or self.repo) / ".jj" / "repo").resolve())
+
+    def hold(self, **extra):
+        """A running landing gate's hold, another workspace's unless `workspace` says."""
+        now = datetime.now(timezone.utc)
+        stamp = lambda minutes: (now + timedelta(minutes=minutes)).isoformat(timespec="seconds")
+        pid = self.runner.pid
+        held = {"fleet": "gerador", "kind": "fleet", "what": "just test", "since": stamp(-3), "until": stamp(20),
+                "token": "1ee395cb", "pid": pid, "started": "123456", "unit": f"fleet-gate-1ee395cb-{pid}",
+                "budget": 64 * 2 ** 30, "cap": 8 * 2 ** 30, "cpus": 16, "landing": True, "repo": self.store(),
+                "workspace": str(self.tmp / "gerador"), "ends": stamp(9), **extra}
+        return {k: v for k, v in held.items() if v is not None}
+
+    def pushed(self, **extra):
+        """The same landing passed, holding the landing turn for its push."""
+        gone = {"pid", "started", "unit", "cpus", "light", "ends", "backfill"}
+        later = (datetime.now(timezone.utc) + timedelta(minutes=2)).isoformat(timespec="seconds")
+        kept = {k: v for k, v in self.hold().items() if k not in gone}
+        held = {**kept, "cap": 64 * 2 ** 20, "until": later, "pushing": True, **extra}
+        return {k: v for k, v in held.items() if v is not None}
+
+    def gate(self, *holds, runs=()):
+        (self.home / "gate" / "gate.json").write_text(json.dumps({"v": 2, "holds": list(holds)}))
+        (self.home / "gate" / "runs.jsonl").write_text("".join(json.dumps(r) + "\n" for r in runs))
+
+    def test_another_lanes_running_landing_gate_stops_the_push(self):
+        ends = (datetime.now(timezone.utc) + timedelta(minutes=9)).astimezone()
+        self.gate(self.hold(ends=ends.isoformat(timespec="seconds")))
+        result = self.check(home=self.home)
+        self.assertEqual(result["verdict"], "stop")
+        self.assertEqual([(f["fleet"], f["pushing"]) for f in result["freeze"]], [("gerador", False)])
+        self.said(result, f"gerador is running a landing gate of this repository (just test), expected to "
+                          f"end by {ends.strftime('%H:%M')}")
+        self.said(result, "Wait until it has pushed or ended")
+
+    def test_another_lanes_passed_landing_holds_the_turn_for_its_push(self):
+        self.gate(self.pushed())
+        result = self.check(home=self.home)
+        self.assertEqual(result["verdict"], "stop")
+        self.said(result, "gerador's landing gate of this repository passed and holds the landing turn for its push")
+        self.said(result, "--push-token")
+
+    def test_a_lane_checking_during_its_own_background_landing_gate_is_not_frozen(self):
+        self.gate(self.hold(workspace=str(self.repo)))
+        result = self.check(home=self.home)
+        self.assertEqual(result["verdict"], "push")
+        self.assertNotIn("freeze", result)
+
+    def test_the_landing_gates_own_push_goes(self):
+        self.gate(self.pushed())
+        self.assertEqual(self.check("--push-token", "1ee395cb", home=self.home)["verdict"], "push")
+        self.gate(self.pushed(workspace=str(self.repo)))
+        self.assertEqual(self.check(home=self.home)["verdict"], "push")
+        own = {"name": "gerador", "what": "just test", "repo": self.store(), "workspace": str(self.repo),
+               "landing": True, "push_token": "1ee395cb"}
+        old = self.pushed(workspace=None)  # an older fleet's hold names no workspace: its run's line does
+        self.gate(old, runs=[{"name": "x", "push_token": "0000aaaa", "workspace": "/elsewhere"}, own])
+        result = self.check(home=self.home)
+        self.assertEqual(result["verdict"], "push")
+        self.assertNotIn("freeze", result)
+
+    def test_a_landing_from_another_workspace_of_the_same_repository_stops(self):
+        other = self.tmp / "other"
+        jj(self.repo, "workspace", "add", "--name", "other", "-r", "@-", str(other))
+        self.gate(self.pushed(workspace=str(self.repo)))
+        self.assertEqual(self.check(home=self.home, cwd=other)["verdict"], "stop")
+        self.gate(self.hold(workspace=str(self.repo)))
+        self.assertEqual(self.check(home=self.home, cwd=other)["verdict"], "stop")
+
+    def test_what_does_not_freeze(self):
+        for holds in ([self.hold(repo="/elsewhere/.jj/repo")], [self.hold(landing=None, repo=None, workspace=None)],
+                      [self.pushed(until="2026-01-05T10:00:00+00:00")], [self.hold(pid=2 ** 22 + 7)]):
+            self.gate(*holds)
+            self.assertEqual(self.check(home=self.home)["verdict"], "push", holds)
+        (self.home / "gate" / "gate.json").write_text('{"fleet": "x", "what": "y", "since": "z", "until": "w"}')
+        self.assertEqual(self.check(home=self.home)["verdict"], "push")
+        (self.home / "gate" / "gate.json").write_text("not json")
+        self.assertEqual(self.check(home=self.home)["verdict"], "push")
+        (self.home / "gate" / "gate.json").unlink()
+        self.assertEqual(self.check(home=self.home)["verdict"], "push")
 
 
 if __name__ == "__main__":
