@@ -432,6 +432,16 @@ describe("gate run and the memory available", () => {
     return { FLEET_GATE_SCOPE: "0", FLEET_GATE_MEMORY_BUDGET: "32G", FLEET_GATE_MEMORY_MAX: "16G", FLEET_MEMINFO: path, ...more };
   }
 
+  test("the same command run again after it gave up is back in the place it left", () => {
+    const env = withAvailable(20 * GB);
+    expect(gate(["run", "--as", "w1", "--wait", "1", "--", "sh", "-c", "echo ran"], env).code).toBe(75);
+    const left = asObject(asArray(asObject(JSON.parse(readFileSync(join(home, "gate", "queue.json"), "utf8")))?.["left"])?.[0]);
+
+    const again = gate(["run", "--as", "w1", "--wait", "1", "--", "sh", "-c", "echo ran"], env);
+    expect(again.code).toBe(75);
+    expect(again.stderr).toContain(`gate run: back in the place in the queue it left, which it first took at ${String(left?.["since"])}\n`);
+  });
+
   test("below the floor it waits in the queue, says why, and gives up at --wait, exit 75, running nothing", () => {
     const done = gate(["run", "--as", "w1", "--wait", "1", "--", "sh", "-c", "echo ran"], withAvailable(20 * GB));
     expect(done.code).toBe(75);
@@ -439,7 +449,7 @@ describe("gate run and the memory available", () => {
     expect(done.stderr).toContain("gate run: waiting for the memory floor: not enough memory: 24.0G needed, 20.0G available (16.0G for this run, one run's cap, as it takes the whole budget, 8.0G floor); place 1 in the queue; waiting up to 1s\n");
     expect(done.stderr).toContain(
       "gate run: waiting for the memory floor: not enough memory: 24.0G needed, 20.0G available (16.0G for this run, one run's cap, as it takes the whole budget, 8.0G floor); place 1 in the queue; gave up after 1s without running the command (exit 75). " +
-        "Run it again later, or with a longer --wait\n",
+        "Run the same command again here within 10 minutes to keep its place in the queue, with a longer --wait\n",
     );
     expect(records()[0]).toMatchObject({ name: "w1", code: 75, ran: null, waited_for: ["floor"] });
     // Nobody held the gate or waited before it.

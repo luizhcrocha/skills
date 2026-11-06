@@ -10,8 +10,9 @@
  * that would fit, a waiter that waits for the memory floor alone included (the holds that pass it
  * would keep it short of the floor). A hold lapses at its `until`, a fleet's when the fleet is no
  * longer served, a run's when its runner is gone; a waiter leaves the queue when its process is
- * gone or its own `--wait` has run out. Every change runs under an exclusive `flock` of
- * `gate.lock`, so two takers never both pass the budget.
+ * gone or its own `--wait` has run out, and keeps its place for {@link REASK_S} for a re-ask of the same run
+ * ({@link Left}). Every change runs under an exclusive `flock` of `gate.lock`, so two takers never both pass the budget,
+ * and two re-asks never both take one place.
  *
  * Three files: `gate.json` (the holds), `queue.json` (the waiters, in order), `runs.jsonl` (one line per finished
  * `gate run`). `gate.json` is read by older fleets too (a `gate run` in flight, a hub, the plugin's hook), which
@@ -64,6 +65,13 @@ export const DEFAULT_CAP = "25%";
 
 /** Seconds a waiter stays in the queue past its own `--wait` before anyone may drop it (a stopped waiter). */
 const WAIT_GRACE_S = 10;
+
+/** Seconds a waiter that left the queue unadmitted (gave up, or its process went) keeps its place for a re-ask of the
+ * same run: 27 runs in a week gave up after 16 h in line between them and asked again at the back. */
+export const REASK_S = 600;
+
+/** The most places queue.json keeps for re-asks; the oldest go first. */
+const LEFT_KEPT = 100;
 
 /** What MemAvailable, less the part an ask takes, must leave free when neither `--floor` nor $FLEET_GATE_MEMORY_FLOOR says. */
 export const DEFAULT_FLOOR = "8G";
@@ -408,6 +416,26 @@ export interface Waiter extends GateHolder {
   readonly budget: number | undefined;
   readonly cpuBudget: number | undefined;
   readonly floor: number | undefined;
+  /** The workspace it runs in, part of what a re-ask matches ({@link Left}); a waiter an older fleet queued has none. */
+  readonly workspace: string | undefined;
+}
+
+/** A place in the queue a waiter left without being admitted. A later ask that is the same run (the same name and
+ * kind, the same command as {@link whatKey} keys it, the same workspace) and is ready to wait rejoins the queue at
+ * `since`, before every waiter that arrived after it, if it asks before `until` ({@link REASK_S} after it left). The
+ * first such ask takes the place; queue.json's `left`. */
+export interface Left extends GateHolder {
+  readonly what: string;
+  readonly workspace: string | undefined;
+  /** When the waiter first arrived: its place. */
+  readonly since: string;
+  readonly until: string;
+}
+
+/** queue.json: the waiters in order of arrival, and the places waiters left unadmitted. */
+interface QueueFile {
+  readonly waiters: Waiter[];
+  readonly left: Left[];
 }
 
 /** What a process asks of the gate. */
@@ -436,6 +464,8 @@ export interface Ask {
   readonly landing?: boolean | undefined;
   /** The repository it runs in; kept for a landing, read for nothing else. */
   readonly repo?: string | undefined;
+  /** The workspace it runs in: a re-ask of the same run in the same workspace rejoins the place it left ({@link Left}). */
+  readonly workspace?: string | undefined;
   /** Whether it is light (an estimate of {@link LIGHT_CAP} at most, each of its last runs {@link LIGHT_S} at most): it
    * passes a head that would not fit even with every light hold gone. */
   readonly light?: boolean | undefined;
@@ -451,6 +481,8 @@ export interface Waiting {
   readonly lacks: readonly Row[];
   /** Set when the memory available, less what the holds may still take and its part, is under the floor. */
   readonly short?: Short | undefined;
+  /** Set on the ask that rejoined a place it left ({@link Left}): when it first arrived. */
+  readonly rejoined?: string | undefined;
 }
 
 /** The gate at an instant. */
@@ -781,7 +813,32 @@ function waiterOf(raw: JsonObject): Waiter | undefined {
     budget: asNumber(raw["budget"]),
     cpuBudget: asNumber(raw["cpu_budget"]),
     floor: asNumber(raw["floor"]),
+    workspace: asString(raw["workspace"]),
   };
+}
+
+function leftOf(raw: JsonObject): Left | undefined {
+  const name = asString(raw["fleet"]);
+  const since = asString(raw["since"]);
+  const until = asString(raw["until"]);
+
+  if (name === undefined || since === undefined || until === undefined) return undefined;
+
+  return { name, kind: raw["kind"] === "session" ? "session" : "fleet", what: asString(raw["what"]) ?? "", workspace: asString(raw["workspace"]), since, until };
+}
+
+function leftJson(l: Left): JsonObject {
+  return plus({ fleet: l.name, kind: l.kind, what: l.what, since: l.since, until: l.until }, "workspace", l.workspace);
+}
+
+/** The place `w` leaves at `now`, unadmitted: kept {@link REASK_S} for a re-ask. */
+function leftBy(w: Waiter, now: Date): Left {
+  return { name: w.name, kind: w.kind, what: w.what, workspace: w.workspace, since: w.since, until: stampOf(new Date(now.getTime() + REASK_S * 1000)) };
+}
+
+/** Whether `ask` is the run that left `place`. */
+function asksFor(ask: Ask, place: Left): boolean {
+  return place.name === plain(ask.holder.name) && place.kind === ask.holder.kind && place.workspace === ask.workspace && whatKey(place.what) === whatKey(plain(ask.what));
 }
 
 /** `raw` with `key` set to `value`, or `raw` itself when there is no value. */
@@ -794,7 +851,7 @@ function waiterJson(w: Waiter): JsonObject {
 
   const kind = plus(plus(plus(plus(base, "cpus", w.cpus), "landing", w.landing || undefined), "repo", w.repo), "light", w.light || undefined);
 
-  return plus(plus(plus(kind, "budget", w.budget), "cpu_budget", w.cpuBudget), "floor", w.floor);
+  return plus(plus(plus(plus(kind, "budget", w.budget), "cpu_budget", w.cpuBudget), "floor", w.floor), "workspace", w.workspace);
 }
 
 /** Whether the process `pid` that started at `started` still runs: a later process with its pid is another. */
@@ -953,12 +1010,22 @@ export class Gate {
     return several.length > 0 ? several : [holdOf(raw)];
   }
 
-  private queueRead(): Waiter[] {
-    return (asArray(readObject(this.path("queue.json"))?.["waiters"]) ?? []).flatMap((w) => {
+  private queueRead(): QueueFile {
+    const raw = readObject(this.path("queue.json"));
+
+    const waiters = (asArray(raw?.["waiters"]) ?? []).flatMap((w) => {
       const waiter = waiterOf(asObject(w) ?? {});
 
       return waiter === undefined ? [] : [waiter];
     });
+
+    const left = (asArray(raw?.["left"]) ?? []).flatMap((l) => {
+      const place = leftOf(asObject(l) ?? {});
+
+      return place === undefined ? [] : [place];
+    });
+
+    return { waiters, left };
   }
 
   private holding(hold: Hold, now: Date): boolean {
@@ -975,10 +1042,11 @@ export class Gate {
     return hold.kind === "session" || runnerLives(hold) || this.served().includes(hold.name);
   }
 
-  /** What the files say at `now`, and whether they keep a lapsed hold or a waiter that is gone. */
-  private read(now: Date): Standing & { readonly lapsed: boolean } {
+  /** What the files say at `now`, and whether they keep a lapsed hold, a waiter that is gone or a lapsed place. A
+   * waiter that is gone leaves its place in `left`. */
+  private read(now: Date): Standing & { readonly left: readonly Left[]; readonly lapsed: boolean } {
     const holds = this.holdsRead();
-    const waiters = this.queueRead();
+    const { waiters, left: kept } = this.queueRead();
     const holders = holds.filter((h) => this.holding(h, now));
 
     const queue = waiters.filter((w) => {
@@ -987,7 +1055,13 @@ export class Gate {
       return running(w.pid, w.started) && (until === undefined || now.getTime() < until);
     });
 
-    return { holders, queue, lapsed: holders.length < holds.length || queue.length < waiters.length };
+    const lives = (l: Left): boolean => now.getTime() < (parseInstant(l.until) ?? 0);
+    const live = kept.filter(lives);
+    // A waiter's process may have died long before this read: it left by its own until at the latest.
+    const gone = waiters.filter((w) => !queue.includes(w)).map((w) => leftBy(w, new Date(Math.min(now.getTime(), parseInstant(w.until) ?? now.getTime()))));
+    const left = [...live, ...gone.filter(lives)];
+
+    return { holders, queue, left, lapsed: holders.length < holds.length || queue.length < waiters.length || live.length < kept.length };
   }
 
   private keepHolds(holders: readonly Hold[]): void {
@@ -995,18 +1069,20 @@ export class Gate {
     else writeAtomic(this.path("gate.json"), dumps(fileOf(holders)));
   }
 
-  private keepQueue(queue: readonly Waiter[]): void {
-    if (queue.length === 0) remove(this.path("queue.json"));
-    else writeAtomic(this.path("queue.json"), dumps({ waiters: queue.map(waiterJson) }));
+  private keepQueue(queue: readonly Waiter[], left: readonly Left[]): void {
+    const places = left.slice(-LEFT_KEPT);
+
+    if (queue.length === 0 && places.length === 0) remove(this.path("queue.json"));
+    else writeAtomic(this.path("queue.json"), dumps(plus({ waiters: queue.map(waiterJson) }, "left", places.length === 0 ? undefined : places.map(leftJson))));
   }
 
   /** The gate at `now`, read under the lock, with what lapsed removed from the files. */
-  private settled(now: Date): Standing {
+  private settled(now: Date): Standing & { readonly left: readonly Left[] } {
     const found = this.read(now);
 
     if (found.lapsed) {
       this.keepHolds(found.holders);
-      this.keepQueue(found.queue);
+      this.keepQueue(found.queue, found.left);
     }
 
     return found;
@@ -1031,8 +1107,19 @@ export class Gate {
    * (`waitS`) then has its place in the queue, kept across calls by its pid. */
   ask(ask: Ask, now: Date): { readonly took: Hold } | { readonly waiting: Waiting } {
     return this.locked(() => {
-      const { holders, queue } = this.settled(now);
-      const at = queue.findIndex((w) => w.pid === ask.pid);
+      const standing = this.settled(now);
+      const { holders } = standing;
+      const since = stampOf(now);
+      const fresh = (arrived: string, memory: boolean): Waiter => this.waiterFor(ask, arrived, now, memory);
+      const found = standing.queue.findIndex((w) => w.pid === ask.pid);
+      const place = found < 0 && ask.waitS > 0 ? standing.left.find((l) => asksFor(ask, l)) : undefined;
+      const left = place === undefined ? standing.left : standing.left.filter((l) => l !== place);
+      const arrivedAt = parseInstant(place?.since ?? "") ?? 0;
+      const after = standing.queue.findIndex((w) => (parseInstant(w.since) ?? 0) > arrivedAt);
+      const slot = after < 0 ? standing.queue.length : after;
+      // The place a re-ask rejoins is in the queue before anything is judged, so it is judged from there.
+      const queue = place === undefined ? standing.queue : standing.queue.toSpliced(slot, 0, fresh(place.since, false));
+      const at = place === undefined ? found : slot;
       const lacks = lacksBeside(ask, ask.budget, holders, ask.cpuBudget);
       const fits = lacks.length === 0 && !landingHeld(ask, holders);
       // A landing waiting on its repository's is not in line for anything else: a forgotten free costs nobody behind it.
@@ -1055,51 +1142,56 @@ export class Gate {
 
       const short = shortOf(ask, ask.memory, holders);
       const memory = fits && short !== undefined;
-      const since = stampOf(now);
 
       if (ahead.length === 0 && fits && short === undefined) {
         const made = this.made(ask, since, now, holders);
 
         this.keepHolds([...holders, made]);
 
-        if (at >= 0) this.keepQueue(queue.filter((w) => w.pid !== ask.pid));
+        if (at >= 0) this.keepQueue(queue.filter((w) => w.pid !== ask.pid), left);
 
         return { took: made };
       }
 
       if (at < 0 && ask.waitS > 0) {
-        const waiter: Waiter = {
-          name: plain(ask.holder.name),
-          kind: ask.holder.kind,
-          what: plain(ask.what),
-          cap: ask.cap,
-          since,
-          until: stampOf(new Date(now.getTime() + (ask.waitS + WAIT_GRACE_S) * 1000)),
-          pid: ask.pid,
-          started: startedOf(ask.pid),
-          memory,
-          cpus: ask.cpus,
-          landing: ask.landing === true,
-          repo: ask.landing === true ? ask.repo : undefined,
-          light: ask.light === true,
-          budget: ask.budget,
-          cpuBudget: ask.cpuBudget,
-          floor: ask.memory?.floor,
-        };
-
-        this.keepQueue([...queue, waiter]);
+        this.keepQueue([...queue, fresh(since, memory)], left);
       } else if (at >= 0) {
         const light = ask.light === true;
         const was = queue[at];
 
         // A run re-reads its estimate at each look: the queue, and whoever judges this waiter by it, has the new one.
-        if (was?.memory !== memory || was.cap !== ask.cap || was.cpus !== ask.cpus || was.light !== light) {
-          this.keepQueue(queue.map((w, i) => (i === at ? { ...w, memory, cap: ask.cap, cpus: ask.cpus, light } : w)));
+        if (place !== undefined || was?.memory !== memory || was.cap !== ask.cap || was.cpus !== ask.cpus || was.light !== light) {
+          this.keepQueue(queue.map((w, i) => (i === at ? { ...w, memory, cap: ask.cap, cpus: ask.cpus, light } : w)), left);
         }
       }
 
-      return { waiting: short === undefined ? { holders, ahead, fits, lacks } : { holders, ahead, fits, lacks, short } };
+      const waiting: Waiting = short === undefined ? { holders, ahead, fits, lacks } : { holders, ahead, fits, lacks, short };
+
+      return { waiting: place === undefined ? waiting : { ...waiting, rejoined: place.since } };
     });
+  }
+
+  /** The waiter `ask` makes, arrived at `since`. */
+  private waiterFor(ask: Ask, since: string, now: Date, memory: boolean): Waiter {
+    return {
+      name: plain(ask.holder.name),
+      kind: ask.holder.kind,
+      what: plain(ask.what),
+      cap: ask.cap,
+      since,
+      until: stampOf(new Date(now.getTime() + (ask.waitS + WAIT_GRACE_S) * 1000)),
+      pid: ask.pid,
+      started: startedOf(ask.pid),
+      memory,
+      cpus: ask.cpus,
+      landing: ask.landing === true,
+      repo: ask.landing === true ? ask.repo : undefined,
+      light: ask.light === true,
+      budget: ask.budget,
+      cpuBudget: ask.cpuBudget,
+      floor: ask.memory?.floor,
+      workspace: ask.workspace,
+    };
   }
 
   private made(ask: Ask, since: string, now: Date, holders: readonly Hold[]): Hold {
@@ -1145,12 +1237,13 @@ export class Gate {
     });
   }
 
-  /** The process `pid` gives up its place in the queue. */
+  /** The process `pid` gives up its place in the queue; it is kept {@link REASK_S} for a re-ask of the same run. */
   leave(pid: number, now: Date): void {
     this.locked(() => {
-      const { queue } = this.settled(now);
+      const { queue, left } = this.settled(now);
+      const gone = queue.find((w) => w.pid === pid);
 
-      if (queue.some((w) => w.pid === pid)) this.keepQueue(queue.filter((w) => w.pid !== pid));
+      if (gone !== undefined) this.keepQueue(queue.filter((w) => w !== gone), [...left, leftBy(gone, now)]);
     });
   }
 

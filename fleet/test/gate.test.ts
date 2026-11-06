@@ -9,7 +9,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 
 import { asArray, asObject, asString, type JsonObject } from "../src/json.ts";
-import { capBytes, cpuBudgetOf, cpusHere, endOf, floorOf, Gate, holdText, familyOf, memAvailable, MIN_CAP, pressureNow, whatKey, type Ask, type Hold, type RunRecord, type Waiting } from "../src/gate.ts";
+import { capBytes, cpuBudgetOf, cpusHere, endOf, floorOf, Gate, holdText, familyOf, memAvailable, MIN_CAP, pressureNow, REASK_S, whatKey, type Ask, type Hold, type RunRecord, type Waiting } from "../src/gate.ts";
 import { readJson, tmp } from "./support.ts";
 
 const GB = 1024 ** 3;
@@ -726,6 +726,130 @@ describe("the queue", () => {
     ask("w2", w2, QUARTER, 2);
     gate.leave(w1, at(3));
     expect(names(gate.standing(at(3)).queue)).toEqual(["w2"]);
+  });
+});
+
+describe("a re-ask keeps its place", () => {
+  /** `name` asks for a quarter as the process `pid`, running `what` in `workspace`. */
+  function run(name: string, pid: number, seconds: number, more: Partial<Ask> = {}): Asked {
+    return gate.ask({ holder: { name, kind: "session" }, what: "gate run: just test mznklkup", seconds: 3600, cap: QUARTER, budget: BUDGET, pid, runs: true, waitS: 600, workspace: "/w/a", ...more }, at(seconds));
+  }
+
+  function since(name: string, seconds: number): string | undefined {
+    return gate.standing(at(seconds)).queue.find((w) => w.name === name)?.since;
+  }
+
+  test("a run that gave up and asks again within 10 minutes rejoins its place, before those that came after it", () => {
+    ask("first", asker(), BUDGET);
+    const w1 = asker();
+    run("w1", w1, 1, { waitS: 1800 });
+    run("w2", asker(), 2, { waitS: 3600 });
+    const first = since("w1", 3);
+    gate.leave(w1, at(1800));
+
+    const again = run("w1", asker(), 1800 + REASK_S - 1, { what: "gate run: just test qpvuntsm" });
+    expect(again.waiting?.rejoined).toBe(first);
+    expect(names(again.waiting?.ahead)).toEqual([]);
+    expect(names(gate.standing(at(1800 + REASK_S)).queue)).toEqual(["w1", "w2"]);
+    expect(since("w1", 1800 + REASK_S)).toBe(first);
+  });
+
+  test("a run whose waiting process was killed rejoins its place too", async () => {
+    ask("first", asker(), BUDGET);
+    const w1 = asker();
+    run("w1", w1, 1);
+    run("w2", asker(), 2);
+    await die(w1);
+    expect(names(gate.standing(at(3)).queue)).toEqual(["w2"]);
+
+    expect(names(run("w1", asker(), 60).waiting?.ahead)).toEqual([]);
+    expect(names(gate.standing(at(61)).queue)).toEqual(["w1", "w2"]);
+  });
+
+  test("past 10 minutes, or as another name, command or workspace, a re-ask goes to the back", () => {
+    ask("first", asker(), BUDGET);
+    const w1 = asker();
+    run("w1", w1, 1);
+    run("w2", asker(), 2);
+    gate.leave(w1, at(3));
+
+    expect(run("w3", asker(), 4, { what: "gate run: just test mznklkup" }).waiting?.rejoined).toBeUndefined();
+    expect(run("w1", asker(), 5, { what: "gate run: just lint" }).waiting?.rejoined).toBeUndefined();
+    expect(run("w1", asker(), 6, { workspace: "/w/b" }).waiting?.rejoined).toBeUndefined();
+    expect(run("w1", asker(), 3 + REASK_S).waiting?.rejoined).toBeUndefined();
+    expect(names(gate.standing(at(3 + REASK_S)).queue)).toEqual(["w2", "w3", "w1", "w1", "w1"]);
+  });
+
+  test("the first re-ask takes the place; a second of the same run goes to the back", () => {
+    ask("first", asker(), BUDGET);
+    const w1 = asker();
+    run("w1", w1, 1);
+    run("w2", asker(), 2);
+    gate.leave(w1, at(3));
+
+    const [a, b] = [asker(), asker()];
+    expect(run("w1", a, 4).waiting?.rejoined).toBeDefined();
+    expect(run("w1", b, 4).waiting?.rejoined).toBeUndefined();
+    const queue = gate.standing(at(5)).queue;
+    expect(names(queue)).toEqual(["w1", "w2", "w1"]);
+    expect([queue[0]?.pid, queue[2]?.pid]).toEqual([a, b]);
+  });
+
+  test("an ask that does not wait takes no place, and one that rejoins at the head and fits is admitted at once", () => {
+    const holder = ask("first", asker(), BUDGET).took;
+    const w1 = asker();
+    run("w1", w1, 1);
+    run("w2", asker(), 2);
+    gate.leave(w1, at(3));
+    end(holder, 4);
+
+    expect(run("w1", asker(), 5, { waitS: 0, cap: BUDGET }).took).toBeUndefined();
+    expect(run("w1", asker(), 6).took?.name).toBe("w1");
+    expect(names(gate.standing(at(7)).queue)).toEqual(["w2"]);
+  });
+
+  test("the places stay in queue.json beside the waiters, and a queue.json an older fleet wrote, with none, reads", () => {
+    ask("first", asker(), BUDGET);
+    const w1 = asker();
+    run("w1", w1, 1);
+    gate.leave(w1, at(2));
+    const kept = readJson(join(dir, "queue.json"));
+    expect(kept["waiters"]).toEqual([]);
+    expect(asArray(kept["left"])?.map((l) => asObject(l)?.["fleet"])).toEqual(["w1"]);
+
+    writeFileSync(join(dir, "queue.json"), JSON.stringify({ waiters: [{ fleet: "old", kind: "session", what: "x", since: at(1).toISOString(), until: at(900).toISOString(), pid: asker() }] }));
+    expect(names(gate.standing(at(3)).queue)).toEqual(["old"]);
+    expect(run("w1", asker(), 4).waiting?.rejoined).toBeUndefined();
+  });
+
+  test("a waiter whose process died unseen keeps its place from its own until at the latest, not from when the gate next looks", async () => {
+    ask("first", asker(), BUDGET);
+    const w1 = asker();
+    run("w1", w1, 1);
+    await die(w1);
+
+    expect(run("w1", asker(), 611 + REASK_S).waiting?.rejoined).toBeUndefined();
+  });
+
+  test("queue.json keeps the last 100 places", async () => {
+    const pid = asker();
+    await die(pid);
+    const waiters = Array.from({ length: 101 }, (_, i) => ({ fleet: `w${String(i)}`, kind: "session", what: "x", since: at(1).toISOString(), until: at(900).toISOString(), pid }));
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "queue.json"), JSON.stringify({ waiters }));
+    expect(gate.standing(at(2)).queue).toEqual([]);
+
+    const left = asArray(readJson(join(dir, "queue.json"))["left"])?.map((l) => asObject(l)?.["fleet"]);
+    expect(left).toEqual(waiters.slice(1).map((w) => w.fleet));
+  });
+
+  test("a place lapses from queue.json 10 minutes after it was left", () => {
+    ask("first", asker(), BUDGET);
+    const w1 = asker();
+    run("w1", w1, 1);
+    gate.leave(w1, at(2));
+    gate.standing(at(2 + REASK_S));
+    expect(existsSync(join(dir, "queue.json"))).toBe(false);
   });
 });
 

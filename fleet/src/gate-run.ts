@@ -49,7 +49,7 @@ import { stampOf } from "./clock.ts";
 import { readText } from "./files.ts";
 import { reportNow } from "./reaper-read.ts";
 import { waiterClause } from "./reaper.ts";
-import { BEHIND_KEPT, type Behind, budgetOf, capBytes, cpuBudgetOf, cpusHere, DEFAULT_CAP, floorOf, floorRefusal, gateOf, holdText, LIGHT_CAP, LIGHT_S, memAvailable, memEstimate, memTotal, PEAK_MARGIN_TEXT, plain, pressureNow, RUNS_FOR_SHARE, scopeLives, shortText, sizeText, type GateHolder, type Measured, type Memory, type Pressure, type RunRecord, type Standing, type WaitedFor, type Waiting } from "./gate.ts";
+import { BEHIND_KEPT, type Behind, REASK_S, budgetOf, capBytes, cpuBudgetOf, cpusHere, DEFAULT_CAP, floorOf, floorRefusal, gateOf, holdText, LIGHT_CAP, LIGHT_S, memAvailable, memEstimate, memTotal, PEAK_MARGIN_TEXT, plain, pressureNow, RUNS_FOR_SHARE, scopeLives, shortText, sizeText, type GateHolder, type Measured, type Memory, type Pressure, type RunRecord, type Standing, type WaitedFor, type Waiting } from "./gate.ts";
 import { ancestry } from "./procs.ts";
 import type { Machine } from "./world.ts";
 
@@ -736,7 +736,7 @@ export async function gateRun(machine: Machine, ask: RunAsk, say: Say): Promise<
 
     const result = gate.ask({
       holder, what, seconds: ask.minutes * 60 + HOLD_GRACE_S, cap: scoped ? estimate : undefined, budget: budget.bytes, pid: process.pid, runs: true, waitS: ask.waitS, memory: memoryOf(sized),
-      cpus: scoped ? cpus : undefined, cpuBudget, landing: ask.landing, repo: where.repo, light,
+      cpus: scoped ? cpus : undefined, cpuBudget, landing: ask.landing, repo: where.repo, workspace: where.workspace, light,
     }, now);
 
     if ("took" in result) {
@@ -746,6 +746,8 @@ export async function gateRun(machine: Machine, ask: RunAsk, say: Say): Promise<
       say(`gate run: ${plain(ask.name)} holds the gate${as} (token ${token ?? "?"}, until ${result.took.until ?? "?"})${saidWait ? `, after ${String(waited())}s of waiting` : ""}`);
       break;
     }
+
+    if (result.waiting.rejoined !== undefined) say(`gate run: back in the place in the queue it left, which it first took at ${result.waiting.rejoined}`);
 
     for (const row of waitedFor(result.waiting)) waitedOn.add(row);
     behind ??= behindOf(result.waiting);
@@ -766,7 +768,7 @@ export async function gateRun(machine: Machine, ask: RunAsk, say: Say): Promise<
     if (Date.now() >= deadline) {
       gate.leave(process.pid, machine.now());
       keep({ name: holder.name, kind: holder.kind, what: command, asked: askedAs(sized), at: stampOf(machine.now()), cap, waited: waited(), ran: null, code: 75, peak: null, killed: 0, cpu_s: null, ...marks(sized), ...waitMarks() });
-      say(`gate run: ${why}; gave up after ${ask.waitS}s without running the command (exit 75). Run it again later, or with a longer --wait`);
+      say(`gate run: ${why}; gave up after ${ask.waitS}s without running the command (exit 75). Run the same command again here within ${String(REASK_S / 60)} minutes to keep its place in the queue, with a longer --wait`);
 
       return 75;
     }
