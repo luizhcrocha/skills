@@ -1014,6 +1014,7 @@ class HooksJsonTest(unittest.TestCase):
                     self.assertFalse(h.get("async", False), event)
         self.assertEqual(config["hooks"]["SessionStart"][0]["matcher"], "startup|resume|clear|compact")
         self.assertEqual([g["matcher"] for g in config["hooks"]["PreToolUse"]], ["Bash|Monitor"])
+        self.assertEqual([h.get("onFailure") for g in config["hooks"]["PreToolUse"] for h in g["hooks"]], ["block"])
         self.assertTrue(os.access(HOOK, os.X_OK))
         self.assertTrue(os.access(MEMO, os.X_OK))
         self.assertEqual((ROOT / "bin" / "memo").resolve(), MEMO.resolve())

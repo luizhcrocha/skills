@@ -27,7 +27,7 @@
       {
         "matcher": "Bash|Monitor",
         "hooks": [
-          { "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/tstack-hook\" PreToolUse", "timeout": 30 }
+          { "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/tstack-hook\" PreToolUse", "timeout": 30, "onFailure": "block" }
         ]
       }
     ]
