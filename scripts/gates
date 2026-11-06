@@ -7,9 +7,8 @@
                                              (default master@origin..@, the stack), from SCOPE
     gates plan PATH...                       the suites PATH... would run, and why; runs nothing
 
-A suite is a just recipe (`just --no-deps test-page`). The installs the suites share run once,
-first, one per directory (`_deps-lint` is lint/ts's bun install, which test-lint-ts, test-fleet-ts-own
-and test-page would otherwise run at the same time in one node_modules), then the suites run
+A suite is a just recipe (`just --no-deps test-lint-ts`). The installs the suites share run once,
+first, one per directory (`_deps-lint` is lint/ts's bun install), then the suites run
 concurrently, longest first. Each suite's output is printed whole when it ends, under its
 PASS/FAIL line and duration, and a summary closes the run. Exit 1 when any suite or install
 failed. Every suite already works in throwaway temp dirs and ephemeral ports, so they share
@@ -19,11 +18,8 @@ The caps, so that gates of several fleets on one machine cannot run it out of me
 - at most --jobs suites at once (default a quarter of the cores), and a suite starts only while
   MemAvailable covers its MEM_MB estimate plus RESERVE_MB; with nothing else of the gate running, it
   waits for min(its estimate, half the RAM) only, and after FIRST_WAIT_S starts anyway with a warning;
-- each suite gets $TSTACK_TEST_JOBS worker processes (unittest_shards.py's shards, bun test --parallel
-  up to 4, the oracle's replay threads): an eighth of the cores, lowered so the sharded suites' workers
-  fit in half of MemAvailable at MB_PER_JOB each (jobs_per_suite);
-- the oracle suites run at nice 10 (NICE) with twice the workers, so the suites that assert on timing
-  get the cores first and the oracles soak up the rest;
+- each suite gets $TSTACK_TEST_JOBS worker processes (unittest_shards.py's shards): an eighth of the cores,
+  lowered so the sharded suites' workers fit in half of MemAvailable at MB_PER_JOB each (jobs_per_suite);
 - each suite's $TMPDIR is its own directory on a tmpfs (unittest_shards.tmp_root(): the per-user
   $XDG_RUNTIME_DIR, which the system caps at 10% of RAM), removed when the suite passes and kept, with
   its path printed, when it fails. The tests' jj, git and SQLite fsyncs were most of the gate's
@@ -31,12 +27,11 @@ The caps, so that gates of several fleets on one machine cannot run it out of me
 
 SIGTERM, SIGINT or SIGHUP to the gate stops every install and suite still running, process group and all
 (SIGTERM, then SIGKILL STOP_GRACE seconds on), and the gate exits 128+signal: each runs in a session of its own,
-so a kill of the gate alone would leave them running (a Bash tool's timeout, Ctrl-C, `fleet fleets gate run`).
+so a kill of the gate alone would leave them running (a Bash tool's timeout, Ctrl-C, a fleet's gate slot).
 
 A suite that outlives its wall-clock limit is killed, process group and all, and reported as FAIL
 with "timed out after Ns" and the last lines of its output, so a hung worker fails the gate instead
-of holding it. `bun test` has no such limit of its own: its --timeout (default 5000 ms) is per test,
-and a hung --parallel worker process is outside any test. The limit is LIMITS[suite], about three times the
+of holding it. The limit is LIMITS[suite], about three times the
 suite's normal time, or one number for every suite: `--timeout SECONDS` or $GATES_TIMEOUT.
 """
 import argparse
@@ -60,95 +55,48 @@ REPO = Path(__file__).resolve().parent.parent
 DEFAULT_REVSET = "master@origin..@"
 
 # The suites, longest first (the order they start in), with the installs each needs. A suite is the just
-# recipe that runs it: `just <suite>` reruns one alone. The TypeScript fleet's recipe is two here, its own
-# checks and the oracle against it, so they overlap instead of queueing.
-FLEET_TS = ("test-fleet-ts-own", "test-fleet-ts-oracle")
+# recipe that runs it: `just <suite>` reruns one alone.
 SUITES = {
-    "test-scripts": ("_deps-fleet",),  # test_prelude_types.py runs the fleet's pinned tsc
-    "test-coordinator": (),
-    "test-fleet-ts-own": ("_deps-fleet", "_deps-lint"),
-    "test-fleet-ts-oracle": ("_deps-fleet",),
-    "test-page": ("_deps-page", "_deps-lint"),
-    "test-fleet": (),
+    "test-scripts": (),
     "test-lint-ts": ("_deps-lint",),
-    "test-coordinator-page": (),  # page.test.mjs alone; test-coordinator runs it too
     "validate": (),
 }
-# Wall-clock limit per suite in seconds: about 3x its normal time under the parallel gate's load. The normal times
-# (2026-10-09, after tmpfs and sharding; quiet machine to load 60) are in the comments.
+# Wall-clock limit per suite in seconds: about 3x its normal time under the parallel gate's load.
 DEFAULT_LIMIT = 900
 LIMITS = {
-    "test-scripts": 240,             # 57-77 s
-    "test-coordinator": 240,         # 62-88 s
-    "test-fleet-ts-own": 300,        # 66-97 s
-    "test-fleet-ts-oracle": 300,     # 79-97 s
-    "test-page": 420,                # 140-190 s since the frame's content-policy, mutation-XSS and visibility suites (headless Chromium; 37-55 s before)
-    "test-fleet": 240,               # 66-86 s
+    "test-scripts": 240,
     "test-lint-ts": 120,             # 8-14 s
-    "test-coordinator-page": 120,    # under 1 s
     "validate": 300,
-    "_deps-fleet": 600,
     "_deps-lint": 600,
-    "_deps-page": 600,
 }
 # Peak memory per suite in MB: measured alone on 2026-10-09 with TSTACK_TEST_JOBS=8 and TMPDIR on tmpfs (cgroup
 # memory.peak, its tmpfs files included), times about 1.5. A suite starts only while MemAvailable covers its
 # estimate plus RESERVE_MB.
 MEM_MB = {
     "test-scripts": 500,             # measured 323
-    "test-coordinator": 800,         # 515
-    "test-fleet-ts-own": 1300,       # 851
-    "test-fleet-ts-oracle": 1000,    # 652
-    "test-page": 5000,               # 3286: headless Chromium
-    "test-fleet": 600,               # 350
     "test-lint-ts": 200,             # 76
-    "test-coordinator-page": 200,
     "validate": 500,
 }
 RESERVE_MB = 2048
 RAMP_S = 30  # a suite this young has not reached its peak yet: its estimate still counts against MemAvailable
 FIRST_WAIT_S = 120  # the longest a suite waits for memory when nothing else of the gate runs; then it starts, warned
-# Suites run at a lower CPU priority (nice 10): the oracles' replays are most of the gate's CPU time and time nothing,
-# while test-page (Chromium renders), test-scripts (hook latency budgets) and the bun suites assert on timing, so
-# they get the cores first and the oracles take what is left, with twice the workers to soak it up.
-NICE = {"test-fleet": 10, "test-fleet-ts-oracle": 10}
 # The suites whose workers $TSTACK_TEST_JOBS sets; jobs_per_suite() fits their workers in memory.
-SHARDED = ("test-scripts", "test-coordinator", "test-fleet-ts-own", "test-fleet-ts-oracle", "test-page", "test-fleet")
+SHARDED = ("test-scripts",)
 TAIL_LINES = 25
-FULL = tuple(s for s in SUITES if s not in ("test-coordinator-page", "validate"))  # `just test`
+FULL = tuple(s for s in SUITES if s != "validate")  # `just test`
 EVERYTHING = FULL + ("validate",)
 
 # Path pattern -> suites, and why. The first pattern a path matches decides; `*` crosses `/`.
 # A path no pattern matches runs EVERYTHING.
 SCOPE = (
-    ("skills/productivity/coordinator/assets/dashboard.html", ("test-page", "test-coordinator-page", "test-fleet"),
-     "the built page: test-page checks it against a fresh build, page.test.mjs reads it, the oracle renders through it"),
-    ("skills/productivity/coordinator/assets/*", ("test-coordinator", "test-fleet", *FLEET_TS),
-     "the templates both fleets copy into a dashboard dir (brief.md, standing.md)"),
-    ("skills/productivity/coordinator/scripts/*", ("test-coordinator", "test-fleet"),
-     "the Python fleet: its tests, and the oracle that replays the traces on it"),
-    ("skills/productivity/coordinator/tests/page.test.mjs", ("test-coordinator-page",), "the page's node tests"),
-    ("skills/productivity/coordinator/tests/*", ("test-coordinator",), "the Python fleet's tests"),
     ("skills/*", ("test-scripts", "validate"),
      "skill content: test-scripts checks skill links, sources tables, model and effort pairs and the skills' own scripts"),
     ("agents/*", ("test-scripts", "validate"), "the agent definitions: test-scripts checks their model and effort"),
     ("*.md", ("validate",), "prose no test reads"),
-    ("fleet/page/*", ("test-page", "test-coordinator-page"), "the page's source"),
-    ("fleet/src/ledger/link-kind.ts", ("test-page", "test-coordinator-page", *FLEET_TS, "test-fleet"),
-     "the link kinds the page bundles as well as the fleet"),
-    ("fleet/src/ledger/card-address.ts", ("test-page", "test-coordinator-page", *FLEET_TS, "test-fleet"),
-     "the card addresses the page bundles as well as the fleet"),
-    ("fleet/oracle/*", ("test-fleet", *FLEET_TS[1:]), "the oracle runs against both fleets"),
-    ("fleet/bin/fleet-run", ("test-scripts",), "the shim that runs the fleet repo's client, tested in scripts/tests"),
-    ("fleet/*", (*FLEET_TS, "test-fleet"), "the TypeScript fleet, and the oracle against both"),
-    ("lint/*", ("test-lint-ts", "test-fleet-ts-own", "test-page", "test-scripts"),
-     "the lint packs every TypeScript suite runs, and the registry test-scripts checks"),
-    ("scripts/unittest_shards.py", ("test-scripts", "test-coordinator", *FLEET_TS, "test-fleet"),
-     "the runner that shards the Python suites, the caps gates reads from it, and bun_files.py's durations cache"),
-    ("scripts/bun_files.py", ("test-scripts", FLEET_TS[0]), "the runner of the TypeScript fleet's test files"),
-    ("scripts/run_limits.py", ("test-scripts", "test-coordinator", *FLEET_TS, "test-fleet"),
-     "what the runners share: the $TSTACK_TEST_JOBS cap (unittest_shards.py, bun_files.py, the oracle's replays) "
-     "and run_limited (gates' suites, bun_files.py's files)"),
+    ("fleet/bin/*", ("test-scripts",), "the stubs that hand over to the fleet plugin's CLI, tested in scripts/tests"),
+    ("lint/*", ("test-lint-ts", "test-scripts"), "the lint packs, and the registry test-scripts checks"),
+    ("scripts/unittest_shards.py", ("test-scripts",), "the runner that shards the Python suites, and the caps gates reads from it"),
+    ("scripts/run_limits.py", ("test-scripts",), "what the runners share: the $TSTACK_TEST_JOBS cap and run_limited (gates' suites)"),
     ("scripts/*", ("test-scripts",), "the repo scripts"),
     ("bin/*", ("test-scripts",), "the scripts' wrappers"),
     ("hooks/*", ("test-scripts",), "the plugin hook"),
@@ -167,8 +115,6 @@ def choose(paths: list[str]) -> dict[str, list[str]]:
             pattern, suites, why = None, EVERYTHING, "no pattern matches it, so everything runs"
         for suite in suites:
             chosen.setdefault(suite, []).append(f"{path} ({why})" if pattern is None else f"{path} [{pattern}]: {why}")
-    if "test-coordinator" in chosen and "test-coordinator-page" in chosen:
-        chosen["test-coordinator"] += chosen.pop("test-coordinator-page")
     return {s: chosen[s] for s in SUITES if s in chosen}
 
 
@@ -206,9 +152,7 @@ HERMETIC_GIT = {"GIT_CONFIG_GLOBAL": "/dev/null", "GIT_CONFIG_NOSYSTEM": "1"}
 
 def _run(recipe: str, override: float | None = None, env: dict | None = None) -> tuple[str, int, float, str]:
     limit = _limit(recipe, override)
-    # A suite runs this checkout's fleet, never the newest tstack elsewhere on the machine.
-    code, timed_out, secs, out = run_limited(["just", "--no-deps", recipe], limit, cwd=REPO, nice=NICE.get(recipe, 0),
-                                             env={"FLEET_NO_FORWARD": "1", **HERMETIC_GIT, **(env or {})})
+    code, timed_out, secs, out = run_limited(["just", "--no-deps", recipe], limit, cwd=REPO, env={**HERMETIC_GIT, **(env or {})})
     if timed_out:
         lines = out.splitlines()[-TAIL_LINES:]
         out = (f"gates: {recipe} timed out after {limit:g}s; its process group was killed. "
@@ -226,12 +170,11 @@ def _report(recipe: str, code: int, secs: float, out: str) -> None:
 
 
 def jobs_per_suite(suites: list[str], avail_mb: int | None) -> int:
-    """$TSTACK_TEST_JOBS for each suite: an eighth of the cores, so the sharded suites together (the oracles run two
-    replays at once, the bun suites four workers each) hold about one worker per core, lowered until their workers
-    fit in half of MemAvailable at MB_PER_JOB each. 2026-10-09, 32 cores: a quarter (8 each) ran the gate slower
-    than an eighth and failed two timing tests (a 2 ms hook budget, a 2 s page render) on CPU contention."""
+    """$TSTACK_TEST_JOBS for each suite: an eighth of the cores, lowered until the sharded suites' workers fit in half
+    of MemAvailable at MB_PER_JOB each. 2026-10-09, 32 cores: a quarter (8 each) ran the gate slower than an eighth
+    and failed a timing test (a 2 ms hook budget) on CPU contention."""
     n = max(2, (os.cpu_count() or 4) // 8)
-    sharded = sum(2 if s in NICE else 1 for s in suites if s in SHARDED) or 1  # a niced suite gets twice the workers
+    sharded = sum(1 for s in suites if s in SHARDED) or 1
     if avail_mb is not None:
         n = min(n, (avail_mb // 2) // (MB_PER_JOB * sharded))
     return max(1, n)
@@ -271,7 +214,7 @@ def run(suites: list[str], jobs: int, timeout: float | None = None) -> int:
           f"TMPDIR under {base or 'the default'})", flush=True)
 
     def one(recipe: str) -> tuple[str, int, float, str]:
-        env = {"TSTACK_TEST_JOBS": str(per_suite * (2 if recipe in NICE else 1))}  # a niced suite only takes idle cores
+        env = {"TSTACK_TEST_JOBS": str(per_suite)}
         tmp = None
         if base is not None:
             tmp = base / recipe
@@ -346,7 +289,7 @@ def _fits(recipe: str, running) -> bool:
 
 
 def default_jobs() -> int:
-    """Every suite at once on a big machine; the heavy two (Chromium, the oracle) set the floor."""
+    """Every suite at once on a big machine; the heaviest sets the floor."""
     return max(2, min(len(SUITES), (os.cpu_count() or 4) // 4))
 
 
