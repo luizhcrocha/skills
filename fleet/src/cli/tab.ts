@@ -32,7 +32,8 @@ const USAGE = "usage: fleet tab [-h] {run,wait,read,close} ...\n";
 
 export const HELP = `${USAGE}
 A long command in a Rex tab beside yours, where the user sees it: a dev server, a watcher, a deploy, a
-backfill, any run longer than about a minute. Your tab is the one REX_SESSION and REX_BLOCK name; outside
+backfill, any run longer than about a minute that prints as it goes. One that prints nothing until it ends
+(its output goes to log files) is a background Bash call, not a tab. Your tab is the one REX_SESSION and REX_BLOCK name; outside
 Rex every command refuses (exit 1), and you run the command as a background Bash call instead.
     run --as WORKER --tab NAME [--label PANE] [--cwd DIR] -- COMMAND...
                            run COMMAND in tab "NAME WORKER <your tab>", opened right after yours, or, when
