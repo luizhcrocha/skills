@@ -32,6 +32,13 @@ workspace. Exit 0 when the verdict is "push", 1 for "ask" or "stop", 2 on error.
                        "ask": the push would deploy, or nobody can tell;
                        "stop": not a fast-forward, several heads, nothing to
                        push, or a revision jj would refuse to push
+    gate_needed        false when every file is a Markdown file, LICENSE or
+                       CODEOWNERS at the root, a .md or .txt file in the
+                       top-level docs/, doc/, adr/ or adrs/, a memo note
+                       (.tstack/memo/) or a review record (.tstack/reviews/
+                       *.tsv): the stack fast-forwards without a gate run. A
+                       README or docs folder among code, .mdx, .rst, a
+                       requirements.txt, tests and tooling keep it true
     reasons            one line per finding behind the verdict
     turn               in a fleet whose machine serves a manager, why this fleet
                        may not land yet (`fleet turn`): the manager has not given
@@ -560,6 +567,21 @@ def kind(path):
     return None
 
 
+GATE_FREE = re.compile(
+    r"[^/]+\.md|LICENSE(\.(md|txt))?|CODEOWNERS"  # the root's docs
+    r"|(docs?|adrs?)/(.+/)?[^/]+\.(md|txt)"  # the top-level docs and ADR folders
+    r"|\.tstack/memo/.+|\.tstack/reviews/[^/]+\.tsv")  # memo notes and review records
+GATED_TEXT = re.compile(r"(^|/)((requirements|constraints)[^/]*\.txt|CMakeLists\.txt)$")  # build inputs
+
+
+def gate_free(path):
+    """Whether no gate run reads path: a Markdown file, LICENSE or CODEOWNERS at the root, a .md or .txt file in the
+    top-level docs/, doc/, adr/ or adrs/ folder, a memo note, or a review record. A README or docs folder among code
+    may be what a gate validates or compiles (a skill's README, a crate's through include_str!), .mdx and .rst
+    compile, and a requirements.txt or CMakeLists.txt is a build's input."""
+    return bool(GATE_FREE.fullmatch(path)) and not GATED_TEXT.search(path)
+
+
 def has_marker(text):
     low = text.lower()
     return any(m in low for m in SKIP_MARKERS)
@@ -600,7 +622,7 @@ def land_check(repo, bookmark, head_rev=None, remote=LANDING_REMOTE, apply_skip_
         heads = repo.revs(f"heads({work})")
     result = {"bookmark": bookmark, "remote": remote, "head": None, "ff": False, "stack": [], "files": [],
               "deploys_on_push": "unknown", "skip_ci_habit": False, "skip_ci_marked": False,
-              "suggest_skip_ci": False, "verdict": "stop", "reasons": reasons}
+              "suggest_skip_ci": False, "gate_needed": True, "verdict": "stop", "reasons": reasons}
     if not heads:
         reasons.append(f"nothing to push: no described work between {base} and @")
         return result
@@ -663,6 +685,7 @@ def land_check(repo, bookmark, head_rev=None, remote=LANDING_REMOTE, apply_skip_
     result.update({
         "head": rev_json(head, commit=True), "ff": ff, "stack": [rev_json(r) for r in stack], "files": files,
         "deploys_on_push": deploys, "skip_ci_habit": habit, "skip_ci_marked": marked, "suggest_skip_ci": suggest,
+        "gate_needed": not files or not all(gate_free(f) for f in files),
     })
     unreviewed = False
     if stack:

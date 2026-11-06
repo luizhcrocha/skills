@@ -1045,5 +1045,42 @@ class ReviewRecordTest(RepoCase):
         self.assertIn("jj evolog does not show", review["why"])
 
 
+class GateNeededTest(RepoCase):
+    """A stack of docs and memo notes alone fast-forwards without a gate run: nothing the gate runs reads it. Tests,
+    tooling, and a Markdown file among code (a skill's SKILL.md, which tstack's validate reads) still need the gate."""
+
+    def needed(self, files):
+        self.trunk(("feat: a", {"a.ts": "a\n"}))
+        self.change("docs: d", files)
+        return self.check()["gate_needed"]
+
+    def test_docs_and_memo_notes_need_no_gate(self):
+        self.assertIs(self.needed({"README.md": "r\n", "CONTEXT.md": "c\n", "docs/adr/0003-x.md": "a\n",
+                                   "docs/guide.md": "g\n", "adr/0001-y.md": "a\n",
+                                   ".tstack/memo/notes/01M6.md": "n\n", ".tstack/reviews/abcd.tsv": "x\n"}), False)
+
+    def test_what_a_gate_may_read_or_compile_is_not_gate_free(self):
+        free = ["README.md", "CONTEXT.md", "LICENSE", "docs/guide.md", "docs/notes.txt", "docs/adr/0003-x.md",
+                "doc/intro.md", "adr/0001-y.md", "adrs/0002-z.txt", ".tstack/memo/notes/01M6.md",
+                ".tstack/memo/index.tsv", ".tstack/reviews/abcd.tsv"]
+        gated = ["skills/x/README.md", "skills/x/docs/a.md", "skills/x/adr/0001.md", "fleet/README.md",
+                 "fleet/CONTEXT.md", "crates/core/README.md", "docs/page.mdx", "index.mdx", "docs/requirements.txt",
+                 "docs/constraints.txt", "docs/conf.rst", ".tstack/hooks/pre.sh", ".tstack/reviews/abcd.md",
+                 ".tstack/reviews/sub/abcd.tsv", ".tstack/config.toml", "requirements.txt",
+                 "CMakeLists.txt", "docs/CMakeLists.txt", "notes.txt"]
+        self.assertEqual([p for p in free if not lc.gate_free(p)], [])
+        self.assertEqual([p for p in gated if lc.gate_free(p)], [])
+
+    def test_a_markdown_file_among_code_needs_the_gate(self):
+        self.assertIs(self.needed({"docs/a.md": "a\n", "skills/x/SKILL.md": "s\n"}), True)
+
+    def test_tests_tooling_and_code_under_docs_need_the_gate(self):
+        for files in ({"docs/a.md": "a\n", "scripts/tests/test_x.py": "t\n"}, {"justfile": "j\n"},
+                      {"docs/build.ts": "b\n"}):
+            with self.subTest(files=files):
+                self.setUp()
+                self.assertIs(self.needed(files), True)
+
+
 if __name__ == "__main__":
     unittest.main()
