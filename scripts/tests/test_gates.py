@@ -42,9 +42,6 @@ class Scope(unittest.TestCase):
     def test_the_shard_runner_and_its_shared_module_run_test_scripts(self):
         self.assertEqual(suites("scripts/unittest_shards.py", "scripts/run_limits.py"), ["test-scripts"])
 
-    def test_the_fleet_stubs_run_their_test_in_test_scripts(self):
-        self.assertEqual(suites("fleet/bin/fleet", "fleet/bin/fleet-run"), ["test-scripts"])
-
     def test_scripts_run_test_scripts(self):
         self.assertEqual(suites("scripts/land-check", "scripts/tests/test_gates.py"), ["test-scripts"])
 

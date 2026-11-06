@@ -15,7 +15,7 @@ Each bucket folder has a `README.md` that lists every skill in the bucket with a
 
 ## The fleet
 
-The fleet (CLI, coordinator and manager skills, advisor agent, fleet hook) lives in the fleet repo and its own plugin, `fleet agent install`. tstack keeps `fleet/bin/fleet` and `fleet/bin/fleet-run` as stubs that exec the one on PATH, for sessions started on an older tstack; delete them once none is left. tstack's fleet steps run when `fleet` is on PATH.
+The fleet (CLI, coordinator and manager skills, advisor agent, fleet hook) lives in the fleet repo and its own plugin, `fleet agent install`. tstack's fleet steps run when `fleet` is on PATH; tstack's hook has no fleet guard.
 
 ## Testing
 

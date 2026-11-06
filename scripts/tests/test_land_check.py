@@ -689,16 +689,13 @@ class LandingBookmarkTest(RepoCase):
 
 
 class FleetCliTest(unittest.TestCase):
-    """land-check finds the fleet CLI as bare `fleet` on PATH, else the in-repo launcher, else none, and says which."""
+    """land-check finds the fleet CLI as bare `fleet` on PATH, else none, and says which."""
 
     def setUp(self):
         self.tmp = Path(tempfile.mkdtemp())
         self.addCleanup(shutil.rmtree, self.tmp, True)
         self.bin = self.tmp / "bin"
         self.bin.mkdir()
-        self.repo_cli = self.tmp / "repo-fleet"
-        self.repo_cli.write_text("#!/bin/sh\n")
-        self.repo_cli.chmod(0o755)
 
     def on_path(self):
         cli = self.bin / "fleet"
@@ -706,16 +703,12 @@ class FleetCliTest(unittest.TestCase):
         cli.chmod(0o755)
         return cli
 
-    def test_fleet_on_path_wins_over_the_repo_launcher(self):
+    def test_fleet_on_path_is_the_cli(self):
         cli = self.on_path()
-        self.assertEqual(lc.fleet_cli(path=str(self.bin), repo_cli=self.repo_cli), cli)
+        self.assertEqual(lc.fleet_cli(path=str(self.bin)), cli)
 
-    @unittest.skipUnless(shutil.which("bun"), "the repo launcher needs Bun")
-    def test_without_fleet_on_path_the_repo_launcher_is_the_fallback(self):
-        self.assertEqual(lc.fleet_cli(path=str(self.bin), repo_cli=self.repo_cli), self.repo_cli)
-
-    def test_with_no_fleet_anywhere_there_is_no_cli(self):
-        self.assertIsNone(lc.fleet_cli(path=str(self.bin), repo_cli=self.tmp / "missing"))
+    def test_with_no_fleet_on_path_there_is_no_cli(self):
+        self.assertIsNone(lc.fleet_cli(path=str(self.bin)))
 
     def test_the_turn_runs_the_cli_on_path(self):
         self.on_path()
@@ -728,7 +721,7 @@ class FleetCliTest(unittest.TestCase):
         saved = os.environ["PATH"]
         self.addCleanup(os.environ.__setitem__, "PATH", saved)
         os.environ["PATH"] = str(self.bin)
-        self.assertIsNone(lc.landing_turn(repo_cli=self.tmp / "missing"))
+        self.assertIsNone(lc.landing_turn())
 
     def test_the_json_names_the_cli_or_null(self):
         self.assertEqual(lc.with_fleet({"reasons": []}, None)["fleet_cli"], None)

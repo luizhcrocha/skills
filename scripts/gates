@@ -97,7 +97,6 @@ SCOPE = (
      "skill content: test-scripts checks skill links, sources tables, model and effort pairs and the skills' own scripts"),
     ("agents/*", ("test-scripts", "validate"), "the agent definitions: test-scripts checks their model and effort"),
     ("*.md", ("validate",), "prose no test reads"),
-    ("fleet/bin/*", ("test-scripts",), "the stubs that hand over to the fleet plugin's CLI, tested in scripts/tests"),
     ("lint/*", ("test-lint-ts", "test-scripts"), "the lint packs, and the registry test-scripts checks"),
     ("scripts/unittest_shards.py", ("test-scripts",), "the runner that shards the Python suites, and the caps gates reads from it"),
     ("scripts/run_limits.py", ("test-scripts",), "what the runners share: the $TSTACK_TEST_JOBS cap and run_limited (gates' suites)"),
