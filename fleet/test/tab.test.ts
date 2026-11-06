@@ -195,7 +195,7 @@ function tab(rex: { readonly run: RexRunner }, argv: readonly string[], env: Rea
 }
 
 describe("fleet tab", () => {
-  test("run opens a tab named after the caller's tab and the worker, right beside the caller's, its pane labelled and kept open", () => {
+  test("run opens a tab named first, then the worker and the caller's tab, right beside the caller's, its pane labelled and kept open", () => {
     const rex = new FakeRex([
       ["window:ui", "ui"],
       ["window:ux", "ux"],
@@ -204,7 +204,7 @@ describe("fleet tab", () => {
     const ran = tab(rex, ["run", "--as", "w1", "--tab", "deploy", "--cwd", "/repo", "--", "sh", "-c", "make deploy"], inRex());
 
     expect(ran).toMatchObject({ code: 0, stdout: "block:new-1\n" });
-    expect(rex.windows.map((w) => w.label)).toEqual(["ui", "ui w1 deploy", "ux"]);
+    expect(rex.windows.map((w) => w.label)).toEqual(["ui", "deploy w1 ui", "ux"]);
     const pane = rex.panes.find((p) => p.id === "block:new-1");
     expect(pane).toMatchObject({ label: "sh", argv: ["sh", "-c", "make deploy"] });
     expect(pane?.flags).toEqual(expect.arrayContaining(["--keep-open", "--focus=false", "-c", "/repo"]));
@@ -236,8 +236,8 @@ describe("fleet tab", () => {
     expect(tab(rex, ["run", "--as", "w1", "--tab", "ops", "--label", "backfill", "--", "make", "backfill"], env).stdout).toBe("block:new-2\n");
     expect(tab(rex, ["run", "--as", "w1", "--tab", "ops", "--label", "logs", "--", "tail", "-f", "log"], env).stdout).toBe("block:new-3\n");
 
-    expect(rex.windows.map((w) => w.label)).toEqual(["ui", "ui w1 ops"]);
-    expect(rex.inTab("ui w1 ops")).toEqual(["deploy", "backfill", "logs"]);
+    expect(rex.windows.map((w) => w.label)).toEqual(["ui", "ops w1 ui"]);
+    expect(rex.inTab("ops w1 ui")).toEqual(["deploy", "backfill", "logs"]);
     expect(rex.panes.find((p) => p.id === "block:new-2")?.flags).toEqual(expect.arrayContaining(["--keep-open", "--focus=false", "-b", "block:new-1", "--split=below"]));
     expect(rex.panes.find((p) => p.id === "block:new-3")?.flags).toEqual(expect.arrayContaining(["-b", "block:new-1", "--split=right"]));
   });
@@ -249,10 +249,10 @@ describe("fleet tab", () => {
     tab(rex, ["run", "--as", "w1", "--tab", "ops", "--label", "deploy", "--", "make", "deploy"], env);
 
     expect(rex.panes.map((p) => p.id)).toEqual(["block:window:ui", "block:new-2"]);
-    expect(rex.inTab("ui w1 ops")).toEqual(["deploy"]);
+    expect(rex.inTab("ops w1 ui")).toEqual(["deploy"]);
 
     tab(rex, ["run", "--as", "w1", "--tab", "ops", "--label", "deploy", "--", "make", "deploy"], env);
-    expect(rex.inTab("ui w1 ops")).toEqual(["deploy", "deploy"]);
+    expect(rex.inTab("ops w1 ui")).toEqual(["deploy", "deploy"]);
   });
 
   test("a tab holds at most 4 panes: a fifth is refused with what to do instead", () => {
@@ -264,7 +264,7 @@ describe("fleet tab", () => {
 
     expect(fifth.code).toBe(1);
     expect(fifth.stderr).toContain("close the tab");
-    expect(rex.inTab("ui w1 ops")).toEqual(["a", "b", "c", "d"]);
+    expect(rex.inTab("ops w1 ui")).toEqual(["a", "b", "c", "d"]);
   });
 
   test("two workers of one coordinator with the same purpose get a tab each, and one's close leaves the other's", () => {
@@ -273,25 +273,25 @@ describe("fleet tab", () => {
 
     expect(tab(rex, ["run", "--as", "w1", "--tab", "dev", "--", "bun", "dev"], env).code).toBe(0);
     expect(tab(rex, ["run", "--as", "w2", "--tab", "dev", "--", "bun", "dev"], env).code).toBe(0);
-    expect(rex.windows.map((w) => w.label).toSorted()).toEqual(["ui", "ui w1 dev", "ui w2 dev"]);
+    expect(rex.windows.map((w) => w.label).toSorted()).toEqual(["dev w1 ui", "dev w2 ui", "ui"]);
 
     expect(tab(rex, ["close", "--as", "w1", "dev"], env).code).toBe(0);
-    expect(rex.windows.map((w) => w.label)).toEqual(["ui", "ui w2 dev"]);
-    expect(rex.inTab("ui w2 dev")).toEqual(["bun"]);
+    expect(rex.windows.map((w) => w.label)).toEqual(["ui", "dev w2 ui"]);
+    expect(rex.inTab("dev w2 ui")).toEqual(["bun"]);
     expect(tab(rex, ["close", "--as", "w1", "dev"], env).code).toBe(1);
   });
 
   test("close closes only a tab its run recorded, never one that only bears the label", () => {
     const rex = new FakeRex([
       ["window:ui", "ui"],
-      ["window:look-alike", "ui w1 deploy"],
-      ["window:ux-deploy", "ux w1 deploy"],
+      ["window:look-alike", "deploy w1 ui"],
+      ["window:ux-deploy", "deploy w1 ux"],
     ]);
 
     const closed = tab(rex, ["close", "--as", "w1", "deploy"], inRex());
 
     expect(closed.code).toBe(1);
-    expect(rex.windows.map((w) => w.label)).toEqual(["ui", "ui w1 deploy", "ux w1 deploy"]);
+    expect(rex.windows.map((w) => w.label)).toEqual(["ui", "deploy w1 ui", "deploy w1 ux"]);
     expect(tab(rex, ["close", "--as", "w1", "cmd"], inRex()).code).toBe(2);
     expect(tab(rex, ["run", "--as", "w1", "--tab", "cmd", "--", "true"], inRex()).code).toBe(2);
   });

@@ -2,8 +2,8 @@
  * `fleet tab {run,wait,read,close}`: a long command (a dev server, a watcher, a deploy, a backfill) in a Rex tab
  * right beside the caller's own, where the user sees it, in place of a background job no one sees. The caller is
  * the pane REX_SESSION and REX_BLOCK name, and `--as` the worker it runs for: Agent-tool workers share their
- * coordinator's pane, so the worker's name keeps their tabs apart. A tab is labelled `<caller's tab> <as> <name>`,
- * and `run` records each tab it opens, with its worker and name, in `tabs.json` in the fleets' state dir: a second
+ * coordinator's pane, so the worker's name keeps their tabs apart. A tab is labelled `<name> <as> <caller's tab>`,
+ * its name first, where a narrow tab bar still shows it, and `run` records each tab it opens, with its worker and name, in `tabs.json` in the fleets' state dir: a second
  * run adds a pane to that tab, and close closes only a tab so recorded, never one that only bears the label. A tab
  * holds at most {@link MAX_PANES} panes; a pane of the same label whose command ended is closed before the new one
  * splits the tab's largest pane. Each pane starts in the caller's cwd unless told otherwise, and is kept open after
@@ -34,7 +34,7 @@ A long command in a Rex tab beside yours, where the user sees it: a dev server, 
 backfill, any run longer than about a minute. Your tab is the one REX_SESSION and REX_BLOCK name; outside
 Rex every command refuses (exit 1), and you run the command as a background Bash call instead.
     run --as WORKER --tab NAME [--label PANE] [--cwd DIR] -- COMMAND...
-                           run COMMAND in tab "<your tab> WORKER NAME", opened right after yours, or, when
+                           run COMMAND in tab "NAME WORKER <your tab>", opened right after yours, or, when
                            WORKER's run opened it, in a new pane of it; WORKER is your worker id (a
                            coordinator gives its own). The pane is labelled PANE (default: the command's
                            first word), starts in DIR (default: your cwd) with the login shell's environment,
@@ -266,7 +266,7 @@ function program(run: RexRunner, argv: readonly string[], env: (name: string) =>
       const at = yield* place;
       const label = given.get("--label") ?? words[0]?.split("/").pop() ?? "";
       const where = ["-c", given.get("--cwd") ?? here];
-      const title = `${at.mine.label} ${as} ${name}`;
+      const title = `${name} ${as} ${at.mine.label}`;
       const [open] = yield* recorded(at, as, name);
       const inTab = at.panes.filter((p) => p.window === open?.id);
 
@@ -331,7 +331,7 @@ function program(run: RexRunner, argv: readonly string[], env: (name: string) =>
       const at = yield* place;
       const open = (yield* recorded(at, as, name)).filter((w) => w.id !== at.mine.id);
 
-      if (open.length === 0) return yield* refuse(`you have no tab ${at.mine.label} ${as} ${name} that fleet tab run opened`);
+      if (open.length === 0) return yield* refuse(`you have no tab ${name} ${as} ${at.mine.label} that fleet tab run opened`);
 
       for (const w of open) yield* printed(["window", "close", "-s", at.sid, w.id]);
       const closed = new Set(open.map((w) => w.id));
