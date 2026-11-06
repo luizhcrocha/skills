@@ -385,6 +385,9 @@ export interface Hold extends GateHolder {
   readonly landing: boolean;
   /** The repository a landing lands in; undefined on any other hold. */
   readonly repo: string | undefined;
+  /** The root of the workspace a landing runs in, so that its own lane's land-check is not frozen by it; undefined on
+   * any other hold, and on a landing an older fleet wrote. */
+  readonly workspace: string | undefined;
   /** Whether its run is light: a light waiter passes a head that would not fit even without the light holds. */
   readonly light: boolean;
   /** Whether it is a landing that passed, waiting for its push: no other landing of {@link repo} is admitted beside it. */
@@ -881,6 +884,7 @@ export function holdOf(raw: JsonObject): Hold {
     cpus: asNumber(raw["cpus"]),
     landing: raw["landing"] === true,
     repo: asString(raw["repo"]),
+    workspace: asString(raw["workspace"]),
     light: raw["light"] === true,
     pushing: raw["pushing"] === true,
     ends: asString(raw["ends"]),
@@ -1318,7 +1322,7 @@ export class Gate {
     // A run with a cap is a run in a scope (without one it asks for the whole budget): the scope's name is the hold's.
     const scoped = ask.runs && ask.cap !== undefined ? { ...run, unit: `fleet-gate-${token}-${String(ask.pid)}` } : run;
 
-    const kind = plus(plus(plus(plus(plus({ ...scoped, budget: ask.budget }, "cap", ask.cap), "cpus", ask.cpus), "landing", ask.landing === true ? true : undefined), "repo", ask.landing === true ? ask.repo : undefined), "light", ask.light === true ? true : undefined);
+    const kind = plus(plus(plus(plus(plus(plus({ ...scoped, budget: ask.budget }, "cap", ask.cap), "cpus", ask.cpus), "landing", ask.landing === true ? true : undefined), "repo", ask.landing === true ? ask.repo : undefined), "workspace", ask.landing === true ? ask.workspace : undefined), "light", ask.light === true ? true : undefined);
     const ends = ask.runS === undefined ? undefined : stampOf(new Date(now.getTime() + ask.runS * 1000));
 
     return holdOf(plus(plus(kind, "ends", ends), "backfill", backfill || undefined));

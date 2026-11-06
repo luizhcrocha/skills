@@ -1550,6 +1550,15 @@ describe("a landing that passed holds the slot for its push", () => {
     expect(asked("next", { landing: true, repo: REPO }, 130, waiter).took).toBeDefined();
   });
 
+  test("a landing's hold names its workspace, running and kept for its push; another run's names none, and an old hold reads", () => {
+    const running = asked("lander", { waitS: 0, landing: true, repo: REPO, workspace: "/w/lander" }).took;
+    expect(running).toMatchObject({ workspace: "/w/lander", repo: REPO });
+    expect(file()["holds"]).toEqual([expect.objectContaining({ workspace: "/w/lander" })]);
+    expect(gate.awaitPush(running?.token ?? "", running?.pid ?? 0, at(10))).toMatchObject({ workspace: "/w/lander", pushing: true });
+    expect(asked("plain", { workspace: "/w/plain" }, 11).took?.workspace).toBeUndefined();
+    expect(holdOf({ fleet: "old", kind: "fleet", what: "x", since: "s", until: "u", landing: true, repo: REPO }).workspace).toBeUndefined();
+  });
+
   test("a hold that has lapsed, or another's token, is not held on to", () => {
     const hold = asked("l", { seconds: 5, waitS: 0, landing: true, repo: REPO }).took;
     expect(gate.awaitPush(hold?.token ?? "", hold?.pid ?? 0, at(5))).toBeUndefined();
