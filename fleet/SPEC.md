@@ -3132,7 +3132,10 @@ room: 2 lines since #0 you did not read; `fleet room casos since 0 --as api`
 The second line is the `re` chain, nearest first, at most 5 lines and 600 tokens (characters / 4), the nearest
 cut to fit rather than left out; then the pointer below; then a `!` line for each of T's workers the line names,
 after every other line the watch prints. A sender is `you` (the user), `us` (T), `manager` (the manager team) or a
-team id; a text's whitespace runs print as one space. The words and the chain are the fleet's ledger
+team id; a text's whitespace runs print as one space. A text over 600 characters (the line's or a chain line's)
+prints its first 300 cut at the last space, then `… (+N chars; \`fleet room <project> line <id> --as <team>\`)`, N
+the characters it left out; a line T forwards to one of its workers prints whole, as the coordinator sends it on
+verbatim from it. The words and the chain are the fleet's ledger
 `roomWakeText` and `chainOf` (packages/ledger/src/room.ts), which session-wake prints too. On
 exit the watch appends the ids it showed (the lines and their chains) to `DIR/room.seen`, one id a line, as the
 host's session-wake does (not when it stood down), and appends one `delivered` event per waking line. A line wakes
@@ -3148,6 +3151,7 @@ every state command (warning 10), and the hook's SessionStart and Stop (`fleet_r
 | Command | Does | Output | Exit |
 | :-- | :-- | :-- | :-- |
 | `room PROJECT since K [--as TEAM]` | prints the lines after #K; moves `DIR/room.cursor` to the last one printed when that is past it; appends a `pull` event | one line each, `#<id> <from> -> <to>: <text>` and ` ↳#<re>` when it has one, `<to>` `everyone` or `@manager`, `@<team>`, `@<team>/<agent>` | 0; 1 refused |
+| `room PROJECT line K [--as TEAM]` | prints line #K whole; moves no cursor, marks nothing seen, appends no event | one line, as `since` prints it | 0; 1 refused: no line #K |
 | `room PROJECT say [--as TEAM] [--re K] TEXT` | sends `return await room(TEXT, { re: K });` on the stdin of fleet-run (`TSTACK_FLEET_RUN`, else the plugin's) with `FLEET_DIR` the team's folder | fleet-run's | fleet-run's; 1 refused |
 | `room PROJECT answer K [--as TEAM] TEXT` | sends `return await room.answer(K, TEXT);` the same way: a worker's answer posted as a reply to #K | fleet-run's | fleet-run's; 1 refused |
 | `room PROJECT forwarded K --to AGENT [--as TEAM]` | sends `return await room.forwarded(K, "AGENT");` the same way; on exit 0 appends a `forwarded` event | fleet-run's | fleet-run's; 1 refused: no line #K |

@@ -1,6 +1,6 @@
 /**
- * `fleet room PROJECT since|say|forwarded …`: the project room from a team folder (room design, slice 5). `since`
- * reads the folder's `room.jsonl`; `say` and `forwarded` write through the team's one program command, fleet-run,
+ * `fleet room PROJECT since|line|say|forwarded …`: the project room from a team folder (room design, slice 5). `since`
+ * and `line` read the folder's `room.jsonl`; `say` and `forwarded` write through the team's one program command, fleet-run,
  * as the cloud takes a room line only from a program of the team (`from` is the program's fleet).
  */
 import { spawnSync } from "node:child_process";
@@ -23,16 +23,18 @@ const AS = opt.value("--as", { metavar: "TEAM" });
 /** Each room command and what it takes. */
 export const ROOM_COMMANDS: readonly CommandSpec[] = [
   { name: "since", positionals: [{ dest: "k" }], options: [AS] },
+  { name: "line", positionals: [{ dest: "k" }], options: [AS] },
   { name: "say", positionals: [{ dest: "text" }], options: [AS, opt.value("--re", { int: true, metavar: "K" })], optionsFirst: true },
   { name: "answer", positionals: [{ dest: "k" }, { dest: "text" }], options: [AS] },
   { name: "forwarded", positionals: [{ dest: "k" }], options: [AS, opt.value("--to", { required: true, metavar: "AGENT" })] },
 ];
 
-const HELP = `usage: ${PROG} PROJECT {since,say,answer,forwarded} ...
+const HELP = `usage: ${PROG} PROJECT {since,line,say,answer,forwarded} ...
 
 The project's room as this machine's team folders hold it (DIR/room.jsonl, written by the host's export).
 
     since K [--as TEAM]                  the lines after #K, one each (\`↳#J\` is its re); moves the team's cursor
+    line K [--as TEAM]                   line #K whole, as a wake cut it; moves nothing
     say [--as TEAM] [--re K] TEXT        post TEXT to the room as TEAM, one program through fleet-run
     answer K [--as TEAM] TEXT            post a worker's answer to line #K back to the room, as a reply to it
     forwarded K --to AGENT [--as TEAM]   you forwarded line #K to AGENT verbatim: ack it, so it is not told again
@@ -144,6 +146,15 @@ function run(machine: Machine, argv: readonly string[]): Effect.Effect<number, R
       if (code === 0) recordEvent(machine, room.root, { kind: "forwarded", team: room.team, line: k, agent });
 
       return code;
+    }
+
+    if (cmd === "line") {
+      const line = room.lines.find((l) => l.id === k);
+
+      if (line === undefined) return yield* Effect.fail(refuse(`no line #${k} in the room of ${project} that ${room.root} holds`));
+      out.out(`${sinceLine(line, room.team, room.members.manager)}\n`);
+
+      return 0;
     }
 
     const after = readRoom(room.root).filter((l) => l.id > k);

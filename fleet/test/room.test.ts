@@ -3,7 +3,7 @@
  * `room.json` beside `chat.jsonl`; `fleet room <project> since|say|forwarded` reads and writes it; the host's
  * `--once` watch wakes for the lines that name its team; `fleet state` says what is left unread.
  */
-import { appendFileSync, chmodSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { appendFileSync, chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { beforeEach, describe, expect, test } from "bun:test";
@@ -143,7 +143,9 @@ describe("the --once watch wakes a team for the room lines that name it", () => 
   test("the chain cuts its nearest line to about 600 tokens, and a text's breaks to spaces", () => {
     writeFileSync(join(api, "room.jsonl"), [line(1, "user", "everyone", "x".repeat(3000)), line(2, "mgr", [{ team: "api" }], "api:\n  look", 1)].join(""));
 
-    expect(fleet(["chat", api, "watch", "--as", "coordinator", "--resume", "--once"], env).stdout).toBe(`room casos #2 from manager to @api: api: look\n  re #1 you: ${"x".repeat(2399)}…\n`);
+    expect(fleet(["chat", api, "watch", "--as", "coordinator", "--resume", "--once"], env).stdout).toBe(
+      `room casos #2 from manager to @api: api: look\n  re #1 you: ${"x".repeat(300)}… (+2700 chars; \`fleet room casos line 1 --as api\`)\n`,
+    );
   });
 
   test("a line the export appends while the watch waits wakes it", async () => {
@@ -172,6 +174,64 @@ describe("the --once watch wakes a team for the room lines that name it", () => 
     expect(await lines.rest()).toContain(
       "! #4 for c208 is not forwarded yet: forward it verbatim (SendMessage c208), then `fleet room casos forwarded 4 --to c208 --as api`\n",
     );
+  });
+});
+
+describe("a wake cuts a room line over 600 characters to 300, at a word, and names the command for it whole", () => {
+  const words = (n: number): string => Array.from({ length: n }, (_, i) => `w${i % 10}`).join(" ");
+  const short = words(200);
+  const long = words(250);
+  const kept = words(100);
+  const watch = (): string => fleet(["chat", api, "watch", "--as", "coordinator", "--resume", "--once"], env).stdout;
+
+  test("a line of 599 characters stays whole", () => {
+    expect(short.length).toBe(599);
+    writeFileSync(join(api, "room.jsonl"), line(1, "user", [{ team: "api" }], short));
+
+    expect(watch()).toBe(`room casos #1 from you to @api: ${short}\n`);
+  });
+
+  test("a line of 749 is cut at the last word within 300, with what it left out and `line K`", () => {
+    expect([long.length, kept.length]).toEqual([749, 299]);
+    writeFileSync(join(api, "room.jsonl"), line(1, "user", [{ team: "api" }], long));
+
+    expect(watch()).toBe(`room casos #1 from you to @api: ${kept}… (+450 chars; \`fleet room casos line 1 --as api\`)\n`);
+  });
+
+  test("a line the team forwards to its worker stays whole, as the coordinator sends it on verbatim", () => {
+    writeFileSync(join(api, "room.jsonl"), line(1, "user", [{ team: "api", agent: "c208" }], long));
+
+    expect(watch()).toBe(
+      [`room casos #1 from you to @api/c208: ${long}`, "! forward #1 verbatim (SendMessage c208), then `fleet room casos forwarded 1 --to c208 --as api`", ""].join("\n"),
+    );
+  });
+
+  test("a long line in the re chain is cut the same", () => {
+    writeFileSync(join(api, "room.jsonl"), [line(1, "mgr", "everyone", long), line(2, "user", [{ team: "api" }], "go", 1)].join(""));
+
+    expect(watch()).toBe(`room casos #2 from you to @api: go\n  re #1 manager: ${kept}… (+450 chars; \`fleet room casos line 1 --as api\`)\n`);
+  });
+});
+
+describe("fleet room <project> line <k>", () => {
+  test("prints line k whole and moves nothing: no cursor, no seen mark, no pull", () => {
+    const long = "word ".repeat(200).trim();
+    writeFileSync(join(api, "room.jsonl"), [ROOM, line(7, "mgr", [{ team: "api" }], long, 4)].join(""));
+    const ran = fleet(["room", "casos", "line", "7", "--as", "api"], env);
+
+    expect(ran.stderr).toBe("");
+    expect(ran.stdout).toBe(`#7 manager -> @api: ${long} ↳#4\n`);
+    expect(existsSync(join(api, "room.cursor"))).toBe(false);
+    expect(existsSync(join(api, "room.seen"))).toBe(false);
+    expect(existsSync(join(api, "room-events.jsonl"))).toBe(false);
+    expect(fleet(["state", api, "show"], env).stderr).toContain("room: 6 lines since #0 you did not read; `fleet room casos since 0 --as api`\n");
+  });
+
+  test("a line the room does not hold is refused", () => {
+    const ran = fleet(["room", "casos", "line", "99", "--as", "api"], env);
+
+    expect([ran.code, ran.stdout]).toEqual([1, ""]);
+    expect(ran.stderr).toContain(`no line #99 in the room of casos that ${api} holds`);
   });
 });
 

@@ -55,6 +55,12 @@ export const CHAIN_LINES = 5;
 
 export const CHAIN_TOKENS = 600;
 
+/** A line's text a wake shows whole up to this many characters; a longer one is cut to {@link WAKE_CUT}. */
+export const WAKE_WHOLE = 600;
+
+/** What a wake keeps of a longer line: this many characters at most, cut at the last word boundary. */
+export const WAKE_CUT = 300;
+
 /** How long a forward to a worker may stay unacked before the coordinator's watch tells it again. */
 export const FORWARD_S = 10 * 60;
 
@@ -259,13 +265,30 @@ export function forwardLines(line: RoomLine, team: string, project: string): str
   return line.to.flatMap((t) => (t.team === team && t.agent !== undefined ? [`! forward #${line.id} verbatim ${forwardCommand(project, team, line.id, t.agent)}`] : []));
 }
 
-/** What a waking line prints: the line, and its `re` chain on one line. */
+/** Line `id`'s `text` on one line as a wake of `team` shows it: whole up to {@link WAKE_WHOLE} characters, else its
+ * first {@link WAKE_CUT} cut at a word, with how many characters of `whole` (the line's text before any chain cut) it
+ * left out and the `fleet room … line` that prints it whole. The fleet's ledger `roomWakeText` cuts the same. */
+export function wakeText(text: string, id: number, team: string, project: string, whole = text): string {
+  const shown = flat(text);
+
+  if (shown.length <= WAKE_WHOLE) return shown;
+  const head = shown.slice(0, WAKE_CUT + 1);
+  const space = head.lastIndexOf(" ");
+  const kept = (space > 0 ? head.slice(0, space) : head.slice(0, WAKE_CUT)).trimEnd();
+
+  return `${kept}… (+${flat(whole).length - kept.length} chars; \`fleet room ${project} line ${id} --as ${team}\`)`;
+}
+
+/** What a waking line prints: the line, and its `re` chain on one line, each text cut by {@link wakeText}, save a
+ * line the team forwards to its worker, which the coordinator sends on verbatim from this text. */
 export function wakeLines(lines: readonly RoomLine[], line: RoomLine, team: string, members: RoomMembers): string[] {
   const { manager, project } = members;
-  const out = [`room ${project} #${line.id} from ${who(line.from, team, manager)} to ${whom(line.to, manager)}: ${flat(line.text)}`];
+  const text = forwardLines(line, team, project).length > 0 ? flat(line.text) : wakeText(line.text, line.id, team, project);
+  const out = [`room ${project} #${line.id} from ${who(line.from, team, manager)} to ${whom(line.to, manager)}: ${text}`];
   const chain = chainOf(lines, line.id);
+  const whole = new Map(lines.map((l) => [l.id, l.text]));
 
-  if (chain.length > 0) out.push(`  ${chain.map((c) => `re #${c.id} ${who(c.from, team, manager)}: ${flat(c.text)}`).join("   ")}`);
+  if (chain.length > 0) out.push(`  ${chain.map((c) => `re #${c.id} ${who(c.from, team, manager)}: ${wakeText(c.text, c.id, team, project, whole.get(c.id))}`).join("   ")}`);
 
   return out;
 }
