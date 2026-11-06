@@ -40,6 +40,7 @@ function snapshot(rows: readonly Row[], more: Partial<Snapshot> = {}): Snapshot 
     transcriptAt: new Map(),
     gateUnits: new Map(),
     exempt: new Set(),
+    containers: [],
     swapOf: new Map(rows.map((r) => [r.pid, r.swap ?? 0])),
     meminfo: { available: 20 * G, total: 64 * G },
     now: NOW,
@@ -119,6 +120,7 @@ function fakeIo(rows: () => readonly ProcRow[], more: Partial<KillIo> = {}) {
     sleep: () => Promise.resolve(),
     record: (line: AuditLine) => calls.push(`audit ${line.line}`),
     now: () => "2027-01-15T08:00:00Z",
+    docker: { stop: (id) => calls.push(`docker stop ${id}`) > 0, remove: (id) => calls.push(`docker rm ${id}`) > 0 },
     ...more,
   };
 

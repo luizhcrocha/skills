@@ -31,7 +31,10 @@ function auditOf(machine: Machine): AuditLog {
 }
 
 function reportLine(report: Report, at: string) {
-  return { line: "report" as const, at, reapable: report.reapable, held: report.held, groups: report.groups.filter((j) => j.verdict.kind === "reap" || j.verdict.kind === "ask").map((j) => ({ key: j.group.key, verdict: j.verdict.kind, rss: j.group.rss })) };
+  return { line: "report" as const, at, reapable: report.reapable, held: report.held, groups: [
+    ...report.groups.filter((j) => j.verdict.kind === "reap" || j.verdict.kind === "ask").map((j) => ({ key: j.group.key, verdict: j.verdict.kind, rss: j.group.rss })),
+    ...report.containers.filter((j) => j.verdict.kind === "reap" || j.verdict.kind === "ask").map((j) => ({ key: j.key, verdict: j.verdict.kind, rss: j.container.rss })),
+  ] };
 }
 
 /** The first word of `args` that is no flag of `bare` or `valued`, or a `valued` flag's value. */
@@ -113,9 +116,11 @@ function reap(machine: Machine, args: readonly string[]): Effect.Effect<number, 
 
     if (args.includes("--json")) out.out(`${JSON.stringify(outcome, null, 2)}\n`);
     else {
-      if (outcome.reaped.length === 0) out.out("nothing to reap\n");
+      if (outcome.reaped.length === 0 && outcome.removed.length === 0) out.out("nothing to reap\n");
 
       for (const r of outcome.reaped) out.out(`reaped ${r.key}: ${bytesText(r.freed)} freed, ${String(r.stopped.length)} stopped${r.left.length === 0 ? "" : `, ${String(r.left.length)} left (${r.left.join(" ")})`}\n`);
+
+      for (const r of outcome.removed) out.out(`${r.removed ? "removed" : r.stopped ? "stopped, not removed," : "could not stop"} container ${r.name}: ${bytesText(r.freed)} freed, volumes kept  ${r.key}\n`);
     }
 
     return 0;

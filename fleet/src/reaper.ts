@@ -4,12 +4,14 @@
  * a `reap` verdict makes a {@link Killable}. A tree with a dead owner, big, idle and every process of a kind known to
  * rebuild itself or a small helper, is reaped; anything else is reported, for its owner to be asked. No answer, file or
  * flag makes a kill: an agent that wants one stopped asks through the permission path, as a `kill` call of its own.
+ * Containers, whose processes no tree of an agent holds, are judged by their compose folder (reaper-containers.ts).
  * reaper-read.ts reads the machine and signals it; this file only decides.
  */
 import { basename } from "node:path";
 
 import { stampOf } from "./clock.ts";
 import type { Standing } from "./gate.ts";
+import { ContainerKillable, containerOwnerText, containerWhere, judgeContainers, type ContainerIo, type ContainerRow, type JudgedContainer } from "./reaper-containers.ts";
 import { isClaude, isInteractive, isReaper, onATerminal, sessionOf, stopTree, workspaceOf, type ProcRow } from "./orphans.ts";
 
 export const DEFAULT_MIN_RSS = 256 * 1024 ** 2;
@@ -66,6 +68,8 @@ export interface Judged {
 export interface Report {
   readonly at: string;
   readonly groups: readonly Judged[];
+  /** The running containers, judged by where their compose project sits. */
+  readonly containers: readonly JudgedContainer[];
   readonly free: { readonly available: number; readonly total: number; readonly floor: number };
   /** Bytes `reap` would free, and bytes held by groups to ask about: the two numbers a waiter prints. */
   readonly reapable: number;
@@ -92,6 +96,8 @@ export interface Snapshot {
   readonly gateUnits: ReadonlyMap<string, string>;
   /** A served fleet's preview pids, this process and its ancestors, the holds' and the waiters' pids. */
   readonly exempt: ReadonlySet<number>;
+  /** The running containers; none where docker is absent, refused or slow. */
+  readonly containers: readonly ContainerRow[];
   readonly meminfo: { readonly available: number; readonly total: number };
   readonly now: number;
 }
@@ -295,10 +301,13 @@ function runsWhereLive(tree: readonly ProcRow[], snap: Snapshot): boolean {
   return tree.some((r) => {
     const cwd = r.cwd?.replace(/ \(deleted\)$/, "");
 
-    if (cwd === undefined) return false;
-
-    return [...snap.liveWorkspaces].some((w) => cwd === w || cwd.startsWith(`${w}/`)) || cwd.split("/").some((segment) => snap.liveSessions.has(segment));
+    return cwd !== undefined && livesAt(cwd, snap);
   });
+}
+
+/** Whether a live Claude works at `path`: in a live workspace, or in a folder of a live session. */
+function livesAt(path: string, snap: Snapshot): boolean {
+  return [...snap.liveWorkspaces].some((w) => path === w || path.startsWith(`${w}/`)) || path.split("/").some((segment) => snap.liveSessions.has(segment));
 }
 
 /** Pure. Owner of a tree: a held gate unit, else a Claude above it (live), else the session id it carries (live when
@@ -495,9 +504,12 @@ export function judge(snap: Snapshot, t: Thresholds, floor: number): Report {
     return { group, verdict: first.verdict.kind === "reap" ? { kind: "reap", why: { idleS: group.idleS, rss: group.rss } } : first.verdict };
   });
 
-  const sum = (kind: Verdict["kind"]): number => final.reduce((n, j) => n + (j.verdict.kind === kind ? j.group.rss : 0), 0);
+  const containers = judgeContainers(snap.containers, (path) => livesAt(path, snap), t, snap.now);
 
-  return { at: stampOf(new Date(snap.now * 1000)), groups: final, free: { ...snap.meminfo, floor }, reapable: sum("reap"), held: sum("ask") };
+  const sum = (kind: "reap" | "ask"): number =>
+    final.reduce((n, j) => n + (j.verdict.kind === kind ? j.group.rss : 0), 0) + containers.reduce((n, j) => n + (j.verdict.kind === kind ? j.container.rss : 0), 0);
+
+  return { at: stampOf(new Date(snap.now * 1000)), groups: final, containers, free: { ...snap.meminfo, floor }, reapable: sum("reap"), held: sum("ask") };
 }
 
 /** What a kill may touch: a `reap` group. Nothing else makes one. */
@@ -523,7 +535,9 @@ export interface PidStart {
 export type AuditLine =
   | { readonly line: "kill"; readonly at: string; readonly key: string; readonly owner: Owner; readonly what: string; readonly comm: string; readonly cwd: string | undefined; readonly pids: readonly PidStart[]; readonly rss: number }
   | { readonly line: "report"; readonly at: string; readonly reapable: number; readonly held: number; readonly groups: readonly { readonly key: string; readonly verdict: Verdict["kind"]; readonly rss: number }[] }
-  | { readonly line: "reaped"; readonly at: string; readonly key: string; readonly stopped: readonly number[]; readonly left: readonly number[]; readonly reused: readonly number[]; readonly freed: number };
+  | { readonly line: "reaped"; readonly at: string; readonly key: string; readonly stopped: readonly number[]; readonly left: readonly number[]; readonly reused: readonly number[]; readonly freed: number }
+  | { readonly line: "container"; readonly at: string; readonly key: string; readonly id: string; readonly name: string; readonly dir: string | undefined; readonly rss: number }
+  | { readonly line: "removed"; readonly at: string; readonly key: string; readonly id: string; readonly stopped: boolean; readonly removed: boolean; readonly freed: number };
 
 export interface AuditLog {
   readonly append: (line: AuditLine) => void;
@@ -536,6 +550,8 @@ export interface KillIo {
   readonly sleep: (ms: number) => Promise<void>;
   readonly record: (line: AuditLine) => void;
   readonly now: () => string;
+  /** `docker stop` and `docker rm`, volumes kept. */
+  readonly docker: ContainerIo;
 }
 
 export interface Reaped {
@@ -544,6 +560,36 @@ export interface Reaped {
   readonly left: readonly number[];
   readonly reused: readonly number[];
   readonly freed: number;
+}
+
+/** A reaped container: stopped, then removed, its volumes kept. */
+export interface Removed {
+  readonly key: string;
+  readonly name: string;
+  readonly stopped: boolean;
+  readonly removed: boolean;
+  readonly freed: number;
+}
+
+/** Record a container's stop before it is asked for. Throws when it cannot be written. */
+function recordContainer(k: ContainerKillable, io: KillIo): void {
+  const { key, container } = k.judged;
+  const place = container.place;
+
+  io.record({ line: "container", at: io.now(), key, id: container.id, name: container.name, dir: place.kind === "unlabeled" ? undefined : place.dir, rss: container.rss });
+}
+
+/** `docker stop`, then `docker rm` once it stopped: never `-v`, so its volumes, and the data `docker compose up` finds
+ * again, stay. */
+function removeContainer(k: ContainerKillable, io: KillIo): Removed {
+  const { key, container } = k.judged;
+  const stopped = io.docker.stop(container.id);
+  const removed = stopped && io.docker.remove(container.id);
+  const freed = stopped ? container.rss : 0;
+
+  io.record({ line: "removed", at: io.now(), key, id: container.id, stopped, removed, freed });
+
+  return { key, name: container.name, stopped, removed, freed };
 }
 
 /** The processes of a group, as a kill names them. */
@@ -608,6 +654,7 @@ export interface ReapWorld {
 export interface ReapOutcome {
   readonly report: Report;
   readonly reaped: readonly Reaped[];
+  readonly removed: readonly Removed[];
 }
 
 /** `gate reap`: a fresh report, then its kills, all with the gate's lock held: a run admitted between the two would
@@ -617,16 +664,21 @@ export function reapNow(w: ReapWorld): Promise<ReapOutcome> {
   return w.gate.whileLocked(() => new Date(w.io.now()), async (standing) => {
     const report = judge(await w.read(standing), DEFAULTS, w.floor);
     const killable = report.groups.flatMap((j) => Killable.ofReap(j) ?? []);
+    const stoppable = report.containers.flatMap((j) => ContainerKillable.ofReap(j) ?? []);
 
     for (const k of killable) recordKill(k, w.io);
 
-    return { report, reaped: await Promise.all(killable.map((k) => signalGroup(k, w.io, w.graceMs))) };
+    for (const k of stoppable) recordContainer(k, w.io);
+    const reaped = Promise.all(killable.map((k) => signalGroup(k, w.io, w.graceMs)));
+    const removed = stoppable.map((k) => removeContainer(k, w.io));
+
+    return { report, reaped: await reaped, removed };
   });
 }
 
 /** What a waiter short on memory adds to its wait line, from the same report; undefined when nothing helps. */
 export function waiterClause(report: Report): string | undefined {
-  const reap = report.groups.filter((j) => j.verdict.kind === "reap");
+  const reap = [...report.groups.filter((j) => j.verdict.kind === "reap"), ...report.containers.filter((j) => j.verdict.kind === "reap")];
   const asks = report.groups.filter((j) => j.verdict.kind === "ask");
   const size = bytesText(report.reapable);
 
@@ -674,11 +726,23 @@ export function reportText(report: Report, t: Thresholds): string[] {
     }).join("; ");
 
   const never = report.groups.flatMap((j) => (j.verdict.kind === "never" ? [{ word: NEVER_WORDS[j.verdict.why], rss: j.group.rss }] : []));
-  const skip = report.groups.flatMap((j) => (j.verdict.kind === "skip" ? [{ word: j.verdict.why, rss: j.group.rss }] : []));
+
+  const skip = [
+    ...report.groups.flatMap((j) => (j.verdict.kind === "skip" ? [{ word: j.verdict.why, rss: j.group.rss }] : [])),
+    ...report.containers.flatMap((j) => (j.verdict.kind === "skip" ? [{ word: `${j.verdict.why} container`, rss: j.container.rss }] : [])),
+  ];
+
+  const boxed = (j: JudgedContainer, tail: string): string => {
+    const where = containerWhere(j.container);
+
+    return `${j.verdict.kind.padEnd(6)} ${bytesText(j.container.rss).padStart(6)}  up   ${idleText(j.ageS).padEnd(4)} ${containerOwnerText(j).padEnd(36)} container ${j.container.name}${where === undefined ? "" : `  ${where}`}${tail}  ${j.key}`;
+  };
 
   return [
     ...report.groups.filter((j) => j.verdict.kind === "reap").map((j) => row(j, "")),
+    ...report.containers.filter((j) => j.verdict.kind === "reap").map((j) => boxed(j, "  docker stop, then rm; volumes kept")),
     ...report.groups.flatMap((j) => (j.verdict.kind === "ask" ? [row(j, `  ${askText(j.verdict.why)}`)] : [])),
+    ...report.containers.flatMap((j) => (j.verdict.kind === "ask" ? [boxed(j, `  ${j.verdict.why}: ask them`)] : [])),
     ...(never.length === 0 ? [] : [`never  ${tally(never)}`]),
     ...(skip.length === 0 ? [] : [`skip   ${tally(skip)}`]),
     `free   ${bytesText(report.free.available)} of ${bytesText(report.free.total)} available; floor ${bytesText(report.free.floor)}`,
