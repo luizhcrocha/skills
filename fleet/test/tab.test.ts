@@ -17,6 +17,7 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 
 import { tabWith } from "../src/cli/tab.ts";
+import { Registry } from "../src/registry.ts";
 import { recordingOut } from "../src/io.ts";
 import { asArray, asObject, asString, parseObject, type JsonOut } from "../src/json.ts";
 import { rexRunner, type Ran, type RexRunner } from "../src/team/rex.ts";
@@ -240,6 +241,18 @@ describe("fleet tab", () => {
     expect(rex.inTab("ops w1 ui")).toEqual(["deploy", "backfill", "logs"]);
     expect(rex.panes.find((p) => p.id === "block:new-2")?.flags).toEqual(expect.arrayContaining(["--keep-open", "--focus=false", "-b", "block:new-1", "--split=below"]));
     expect(rex.panes.find((p) => p.id === "block:new-3")?.flags).toEqual(expect.arrayContaining(["-b", "block:new-1", "--split=right"]));
+  });
+
+  test("the record outlives the registry forgetting dead fleets, so a second run still splits the tab", () => {
+    const rex = new FakeRex([["window:ui", "ui"]], [{}]);
+    const env = inRex();
+
+    tab(rex, ["run", "--as", "w1", "--tab", "ops", "--label", "deploy", "--", "make", "deploy"], env);
+    new Registry({ home: env.FLEET_HOME, config: env.FLEET_HOME }).live();
+    tab(rex, ["run", "--as", "w1", "--tab", "ops", "--label", "backfill", "--", "make", "backfill"], env);
+
+    expect(rex.windows.map((w) => w.label)).toEqual(["ui", "ops w1 ui"]);
+    expect(rex.inTab("ops w1 ui")).toEqual(["deploy", "backfill"]);
   });
 
   test("a pane of the same label whose command ended is closed before the new one is added; one still running is kept", () => {

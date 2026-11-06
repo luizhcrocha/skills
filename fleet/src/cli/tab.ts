@@ -3,8 +3,9 @@
  * right beside the caller's own, where the user sees it, in place of a background job no one sees. The caller is
  * the pane REX_SESSION and REX_BLOCK name, and `--as` the worker it runs for: Agent-tool workers share their
  * coordinator's pane, so the worker's name keeps their tabs apart. A tab is labelled `<name> <as> <caller's tab>`,
- * its name first, where a narrow tab bar still shows it, and `run` records each tab it opens, with its worker and name, in `tabs.json` in the fleets' state dir: a second
- * run adds a pane to that tab, and close closes only a tab so recorded, never one that only bears the label. A tab
+ * its name first, where a narrow tab bar still shows it, and `run` records each tab it opens, with its worker and name,
+ * in `tabs/tabs.json` in the fleets' state dir (a folder of its own: the registry deletes every `*.json` at the dir's
+ * top that is not a live fleet's entry): a second run adds a pane to that tab, and close closes only a tab so recorded, never one that only bears the label. A tab
  * holds at most {@link MAX_PANES} panes; a pane of the same label whose command ended is closed before the new one
  * splits the tab's largest pane. Each pane starts in the caller's cwd unless told otherwise, and is kept open after
  * its command exits, for the user to read. Outside Rex it refuses, and the caller runs the command as a background
@@ -388,7 +389,7 @@ function program(run: RexRunner, argv: readonly string[], env: (name: string) =>
 export function tabWith(argv: readonly string[], run: RexRunner, here: string): Effect.Effect<number, never, Out | World> {
   return Effect.gen(function* () {
     const machine = yield* World;
-    const state = join(registryPlace(machine.env, machine.config).home, "tabs.json");
+    const state = join(registryPlace(machine.env, machine.config).home, "tabs", "tabs.json");
 
     return yield* program(run, argv, machine.env, here, state).pipe(Effect.catch(exitOf));
   });
