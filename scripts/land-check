@@ -1181,12 +1181,24 @@ def landing_bookmarks(path):
     return names
 
 
-def landing_turn(fleet=None, timeout=60, env=None):
-    """`fleet turn` for the fleet this session serves: (exit code, what it said), or None when the fleet
-    CLI cannot run. Exit 1 means a manager is present and the turn is another fleet's, or nobody's yet. env, when
+REPO_FLEET = Path(__file__).resolve().parent.parent / "fleet" / "bin" / "fleet"
+
+
+def fleet_cli(path=None, repo_cli=None):
+    """The fleet CLI: bare `fleet` on PATH, else the launcher in this repo (until the fleet leaves it), else None."""
+    found = shutil.which("fleet", path=path)
+    if found:
+        return Path(found)
+    repo_cli = REPO_FLEET if repo_cli is None else Path(repo_cli)
+    return repo_cli if repo_cli.exists() and shutil.which("bun") else None
+
+
+def landing_turn(fleet=None, timeout=60, env=None, repo_cli=None):
+    """`fleet turn` for the fleet this session serves: (exit code, what it said), or None when no fleet CLI
+    can run. Exit 1 means a manager is present and the turn is another fleet's, or nobody's yet. env, when
     given, is the command's environment (the push gate names a moved fleet's folder in $FLEET_DIR)."""
-    fleet = Path(fleet) if fleet else Path(__file__).resolve().parent.parent / "fleet" / "bin" / "fleet"
-    if not fleet.exists() or shutil.which("bun") is None:
+    fleet = Path(fleet) if fleet else fleet_cli(repo_cli=repo_cli)
+    if fleet is None or not fleet.exists():
         return None
     try:
         proc = subprocess.Popen([str(fleet), "turn"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
@@ -1211,6 +1223,13 @@ def landing_turn(fleet=None, timeout=60, env=None):
         kill_group()
         raise
     return proc.returncode, (out if proc.returncode == 0 else err).strip()
+
+
+def with_fleet(result, cli):
+    """The JSON says which fleet CLI answered the turn: its path, or null when none was found (the turn and the
+    ledger's reviewed events then went unchecked)."""
+    result["fleet_cli"] = str(cli) if cli else None
+    return result
 
 
 def with_turn(result, turn):
@@ -1371,6 +1390,7 @@ def main(argv=None):
         return 2
     if not args.pre_gate:
         result = with_turn(result, landing_turn())
+    result = with_fleet(result, fleet_cli())
     for reason in result["reasons"]:
         if reason.startswith(("warning: ", "reminder: ")):
             print(f"land-check: {reason}", file=sys.stderr)
