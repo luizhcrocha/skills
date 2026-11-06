@@ -47,7 +47,7 @@ Replace behavior only through a real seam: a constructor-injected dependency, a 
 
 - Clock, randomness, IDs and I/O that affect an outcome sit behind seams the test controls. This is also what makes a later simulation rung possible; code without such seams records that as design debt.
 - A randomized test (property, fuzz, simulation) prints its seed on failure, and a failure counts as reproduced only when its seed replays it.
-- A flaky test is made deterministic or removed, never retried into green. It holds no land while that waits, and the coordinator's [Integrate](../../productivity/coordinator/INTEGRATE.md#integrate) says what proves a test flaky and who takes it.
+- A flaky test is made deterministic or removed, never retried into green. It holds no land while that waits, and the fleet plugin's coordinator skill says in Integrate (INTEGRATE.md) what proves a test flaky and who takes it.
 - In a fleet, you run your own scoped reds and greens, and a red under load gets one rerun alone to tell the CPUs from a bug. A red your change did not cause goes to the tests fleet as news (the Lane section of brief.md).
 
 ## 7. Report the evidence

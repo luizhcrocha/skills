@@ -2,6 +2,8 @@
 
 Status: accepted, 2026-10-08 (Luiz). Tables: [models.md](../models.md). Evidence page: [Agent Lanes](https://claude.ai/artifact/9pC3GzNim2rSou8jNEffBK).
 
+The fleet half of this decision (the fleet's role table and its enforcement) moved to the fleet repo; the model tables stay here.
+
 ## Context
 
 tstack's skills start about 60 kinds of agent: readers, researchers, implementers, reviewers, judges, an advisor. Before this decision each skill named a model in its own words, the rule was restated in eight places that had drifted apart, eight spawns named no model at all, and no spawn set a thinking effort. Claude 5.x models take an effort level per request (low, medium, high, xhigh, max), and Claude Code's Agent tool and agent definitions take it per agent.

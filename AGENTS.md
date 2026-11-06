@@ -15,11 +15,10 @@ Each bucket folder has a `README.md` that lists every skill in the bucket with a
 
 ## The fleet
 
-The TypeScript fleet (`fleet/`, run as `fleet/bin/fleet`) is the only fleet. The Python scripts in `skills/productivity/coordinator/scripts/` are a frozen twin: bug fixes only, no new features, until they are deleted (ADR 0003, docs/adr/0003-typescript-fleet-is-the-only-fleet.md).
+The fleet (CLI, coordinator and manager skills, advisor agent, fleet hook) lives in the fleet repo and its own plugin, `fleet agent install`. tstack keeps `fleet/bin/fleet` and `fleet/bin/fleet-run` as stubs that exec the one on PATH, for sessions started on an older tstack; delete them once none is left. tstack's fleet steps run when `fleet` is on PATH.
 
 ## Testing
 
 - `just test-changed [REVSET]` runs only the suites whose inputs changed in REVSET (default `master@origin..@`, the stack) and prints which it chose and why. The table is `SCOPE` in `scripts/gates`; a path it doesn't name runs everything. A worker runs this before it reports.
 - `just test` runs every suite in parallel, each one's output grouped under its PASS/FAIL line and duration. The lead runs it once per landing, on the stack's head, not after each worker.
-- One suite alone: `just test-fleet-ts`, `just test-page`, and the rest in `just --list`.
-- A page change (fleet/page, rebuilt into `assets/dashboard.html` by `just build-page`) re-records no oracle trace: the traces keep the state a rendered `index.html` carries, not its bytes. Re-record a trace only when the fleet's behaviour changes on purpose (fleet/SPEC.md, "Oracle traces").
+- One suite alone: `just test-scripts`, `just test-lint-ts`, and the rest in `just --list`.

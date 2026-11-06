@@ -34,7 +34,7 @@ The directory the hub serves a fleet's `file://` **Links** from: the fleet's DIR
 A kind of act the user approved once, with a plain yes on the page (K1); acts under it are recorded as notices, not asked.
 
 **Frozen twin**:
-The Python fleet (`skills/productivity/coordinator/scripts/*.py`): bug fixes only, until it is deleted (ADR 0003).
+The Python fleet (`skills/productivity/coordinator/scripts/*.py` in the fleet repo's plugin): bug fixes only, until it is deleted (ADR 0003, now in the fleet repo).
 
 ## Relationships
 

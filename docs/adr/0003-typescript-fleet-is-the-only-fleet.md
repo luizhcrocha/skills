@@ -2,6 +2,8 @@
 
 Status: accepted, 2026-10-09 (Luiz). Steps 1 and 2 of retiring the Python fleet twin.
 
+Moved to the fleet repo with the fleet; tstack keeps only this pointer.
+
 ## Context
 
 The fleet has two implementations. The Python twin is `skills/productivity/coordinator/scripts/*.py`: state, chat, fleets, news, usage, spend, served, the dashboard's render and serve. The TypeScript fleet is `fleet/`, run as `fleet/bin/fleet`. Stage 2 ported the Python scripts to TypeScript and proved the port with the oracle (`fleet/oracle`): golden traces recorded from Python, replayed against TypeScript by `just test-fleet-ts-oracle`, plus the model-based test driving either one.

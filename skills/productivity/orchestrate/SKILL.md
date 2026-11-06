@@ -7,7 +7,7 @@ description: "Run pending or given tasks in parallel across agents (subagents, a
 
 Drive a batch of work across multiple agents without conflicts. You decide what to parallelize, pick the right primitive, partition the work so no two workers edit the same files, and brief every worker on the standards they must follow.
 
-Pick this for a batch of different tasks that change code, partitioned by file ownership. N workers that check, measure, explore or race and come back as one verdict table → `tstack:swarm`. A standing program whose lanes outlive the session's attention → the coordinator (`/tstack:coordinator`).
+Pick this for a batch of different tasks that change code, partitioned by file ownership. N workers that check, measure, explore or race and come back as one verdict table → `tstack:swarm`. A standing program whose lanes outlive the session's attention → the coordinator (`/fleet:coordinator` from the fleet plugin).
 
 ## Process
 

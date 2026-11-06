@@ -12,7 +12,7 @@ Which fan-out:
 - **swarm**: N workers, one verdict table. Coverage, races, gauntlets, exploration; the workers mostly check, measure or explore.
 - **`tstack:orchestrate`**: a batch of different tasks that change code, partitioned by file ownership and integrated into one codebase.
 - **`tstack:arena`**: N attempts at one design or artifact under distinct constraints; a base is picked and the others grafted in by hand.
-- **the coordinator** (`/tstack:coordinator`, user-invoked): a standing program whose lanes outlive the session's attention, with a ledger and a dashboard.
+- **the coordinator** (`/fleet:coordinator` from the fleet plugin, user-invoked): a standing program whose lanes outlive the session's attention, with a ledger and a dashboard.
 
 Open a todo list with the four phases before launching anything: Frame, Fan out, Aggregate, Report.
 

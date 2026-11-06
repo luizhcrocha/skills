@@ -318,7 +318,7 @@ def tuca_mode(hook):
 
 
 def fleet_dirs(hook):
-    """The fleets this session works for (fleet/SPEC.md, Heartbeats): $FLEET_DIR when it names a
+    """The fleets this session works for (the fleet repo's SPEC.md, Heartbeats): $FLEET_DIR when it names a
     ledger (a worker launched as its own process), else each folder of the session's scratchpad that
     holds a state.json (a coordinator's DIR is <scratchpad>/coordinator; its subagents share it).
     Looked up once per hook."""

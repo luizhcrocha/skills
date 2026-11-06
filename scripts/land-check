@@ -1206,8 +1206,7 @@ def landing_turn(fleet=None, timeout=60, env=None, repo_cli=None):
     except OSError:
         return None
     def kill_group():
-        # the whole group: the launcher and a `bun install` it may be running; the next launcher takes over
-        # an install lock whose holder is dead (fleet/bin/fleet)
+        # the whole group: the launcher and whatever it started
         try:
             os.killpg(proc.pid, signal.SIGKILL)
         except OSError:
