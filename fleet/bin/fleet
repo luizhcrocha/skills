@@ -1,75 +1,23 @@
 #!/bin/sh
-# The fleet CLI: `fleet state|chat|room|fleets|news|secrets|ws|preview|brief|turn|advisor|team|waste|serve|render|usage|spend|served|project ...`,
-# run by Bun from the TypeScript sources. A plugin installed from the marketplace has no node_modules:
-# the first run installs the locked dependencies, and so does a run after bun.lock or package.json
-# changed, quietly unless the install fails.
-here=$(dirname "$(readlink -f "$0")")
-root=$(dirname "$here")
-
-# A session keeps the plugin folder it started with, and Claude Code installs each version in its own
-# folder, so a long-lived session would run an old fleet forever. Hand over to the newest tstack on this
-# machine: the checkout in CLAUDE_CODE_PLUGIN_DIRS, the marketplace clone, every cached version. A tie
-# stays here. FLEET_NO_FORWARD=1 (set below, and usable by hand) runs this copy as it is.
-version_of() { sed -n 's/.*"version": *"\([^"]*\)".*/\1/p' "$1/../.claude-plugin/plugin.json" 2>/dev/null | head -n 1; }
-if [ -z "${FLEET_NO_FORWARD:-}" ]; then
-  mine=$(version_of "$root")
-  best=$root
-  best_v=$mine
-  for cand in ${CLAUDE_CODE_PLUGIN_DIRS:+$(printf '%s' "$CLAUDE_CODE_PLUGIN_DIRS" | tr ':' ' ')} \
-    "$HOME/.claude/plugins/marketplaces/tstack" "$HOME"/.claude/plugins/cache/tstack/tstack/*; do
-    [ -x "$cand/fleet/bin/fleet" ] || continue
-    v=$(version_of "$cand/fleet")
-    [ -n "$v" ] || continue
-    if [ -z "$best_v" ] || { [ "$v" != "$best_v" ] && [ "$(printf '%s\n%s\n' "$best_v" "$v" | sort -V | tail -n 1)" = "$v" ]; }; then
-      best=$cand/fleet
-      best_v=$v
-    fi
-  done
-  if [ "$best" != "$root" ]; then
-    export FLEET_NO_FORWARD=1
-    exec "$best/bin/fleet" "$@"
-  fi
-fi
-
-if ! command -v bun >/dev/null 2>&1; then
-  needs=$(sed -n '/"bun": *"/{s/.*"bun": *"\([^"]*\)".*/\1/p;q;}' "$root/package.json")
-  echo "fleet: needs Bun ${needs:-(see $root/package.json)} on PATH, and there is none: install it (https://bun.sh)" >&2
+# Stub: the fleet left tstack. Sessions on older tstack versions hand over to the newest tstack's fleet/bin/fleet,
+# which runs the fleet repo's apps/cli: its plugin's marketplace clone, the office's fleet-live, else the fleet on PATH.
+self=$(readlink -f "$0" 2>/dev/null || echo "$0")
+if [ -n "${FLEET_TSTACK_STUB:-}" ]; then
+  echo 'fleet: the fleet on PATH runs this tstack stub again; point it at the fleet repo'"'"'s apps/cli' >&2
   exit 127
 fi
-
-stamp=$root/node_modules/.fleet-installed
-if [ ! -f "$stamp" ] || [ "$root/bun.lock" -nt "$stamp" ] || [ "$root/package.json" -nt "$stamp" ]; then
-  # One install at a time: a coordinator and its workers may all start on a fresh install. The holder
-  # writes its pid in the lock; a lock whose holder is gone (killed, as a hook's timeout kills its group)
-  # is taken over rather than waited on.
-  lock=$root/.install.lock
-  tries=0
-  until mkdir "$lock" 2>/dev/null; do
-    holder=$(cat "$lock/pid" 2>/dev/null)
-    if [ -n "$holder" ] && ! kill -0 "$holder" 2>/dev/null; then
-      rm -f "$lock/pid"
-      rmdir "$lock" 2>/dev/null
-      continue
-    fi
-    tries=$((tries + 1))
-    if [ "$tries" -gt 600 ]; then
-      echo "fleet: another install has held $lock for 60 s; remove it if no install runs" >&2
-      exit 1
-    fi
-    sleep 0.1
-  done
-  echo $$ >"$lock/pid"
-  if [ ! -f "$stamp" ] || [ "$root/bun.lock" -nt "$stamp" ] || [ "$root/package.json" -nt "$stamp" ]; then
-    if ! log=$(cd "$root" && bun install --frozen-lockfile 2>&1); then
-      rm -f "$lock/pid"
-      rmdir "$lock"
-      printf 'fleet: installing its dependencies failed (bun install --frozen-lockfile in %s):\n%s\n' "$root" "$log" >&2
-      exit 1
-    fi
-    touch "$stamp"
-  fi
-  rm -f "$lock/pid"
-  rmdir "$lock"
-fi
-
-exec bun "$root/src/main.ts" "$@"
+for cand in "$HOME/.claude/plugins/marketplaces/fleet/apps/cli/bin/fleet" "$HOME/repos/luizhcrocha/fleet-live/apps/cli/bin/fleet"; do
+  [ -f "$cand" ] && [ -x "$cand" ] && exec "$cand" "$@"
+done
+oldifs=$IFS
+IFS=:
+for dir in $PATH; do
+  cand=${dir:-.}/fleet
+  [ -f "$cand" ] && [ -x "$cand" ] || continue
+  [ "$(readlink -f "$cand" 2>/dev/null || echo "$cand")" = "$self" ] && continue
+  IFS=$oldifs
+  FLEET_TSTACK_STUB=1 exec "$cand" "$@"
+done
+IFS=$oldifs
+echo 'fleet moved to the fleet plugin: run `fleet agent install`' >&2
+exit 127
