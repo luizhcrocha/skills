@@ -486,11 +486,6 @@ class Deny(str):
     """What a PreToolUse handler returns to refuse the call: the text becomes the denial's reason."""
 
 
-class Allow(str):
-    """What a PreToolUse handler returns to allow the call: only fleet_agent_grant, for an Agent call the office host granted
-    once. Any other PreToolUse text decides nothing."""
-
-
 class Note(str):
     """What a PreToolUse handler returns to tell Claude something beside the call's result (additionalContext): it
     decides nothing, so the permission check runs as it would have."""
@@ -1560,7 +1555,7 @@ def _decide(event, decision, text):
 
 
 EMIT = {
-    "PreToolUse": None,  # dispatch decides: a Deny refuses, an Allow allows, a Note is context, nothing else speaks
+    "PreToolUse": None,  # dispatch decides: a Deny refuses, a Note is context, nothing else speaks; tstack never allows
     "SessionStart": _context,
     "Stop": _context,
     "PreCompact": lambda event, text: text,
@@ -1572,8 +1567,8 @@ EMIT = {
 def dispatch(event, raw, env):
     """The text to print for this event, or "" for nothing. On Stop, a handler's Block turns the whole
     output into the block decision, whose reason (every handler's text) Claude reads as it goes on. On
-    PreToolUse, a handler's Deny refuses the call, with the Deny texts alone as the reason; else an Allow (an Agent
-    call the office host granted) allows it; else a Note is context beside the call's result, with no decision; any other
+    PreToolUse, a handler's Deny refuses the call, with the Deny texts alone as the reason; else a Note is context
+    beside the call's result, with no decision (tstack never allows a call); any other
     text decides nothing. A PreToolUse handler that can deny (GUARDS) and fails, or runs past GUARD_DEADLINE_S counted
     from here, denies the call, naming itself and the error, and no handler runs after a deadline; any other handler
     that fails is logged and decides nothing.
@@ -1585,7 +1580,7 @@ def dispatch(event, raw, env):
     if not isinstance(data, dict):
         raise ValueError("hook input is not a JSON object")
     hook = Hook(event, data, env)
-    parts, denials, allows, notes = [], [], [], []
+    parts, denials, notes = [], [], []
     blocked = False
     started = time.monotonic()
     late = False
@@ -1606,8 +1601,6 @@ def dispatch(event, raw, env):
             blocked = blocked or isinstance(text, Block)
             if isinstance(text, Deny):
                 denials.append(text.strip())
-            if isinstance(text, Allow):
-                allows.append(text.strip())
             if isinstance(text, Note):
                 notes.append(text.strip())
         if late:
@@ -1617,8 +1610,6 @@ def dispatch(event, raw, env):
     if denials and event == "PreToolUse":
         return _decide(event, "deny", "\n\n".join(denials))
     if event == "PreToolUse":
-        if allows:
-            return _decide(event, "allow", "\n\n".join(allows))
         return _context(event, "\n\n".join(notes)) if notes else ""
     if blocked and event == "Stop":
         return json.dumps({"decision": "block", "reason": "\n\n".join(parts)})

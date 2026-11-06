@@ -926,7 +926,7 @@ class AttributionLinesTest(unittest.TestCase):
 
 
 class PreToolUseDecisionTest(unittest.TestCase):
-    """Only an Allow allows a call: a gate's text (push_attribution)
+    """tstack never allows a call: a gate's text (push_attribution)
     denies, notes or says nothing, so auto mode's permission check is never skipped for a Bash command or a spawn."""
 
     def setUp(self):
@@ -943,16 +943,15 @@ class PreToolUseDecisionTest(unittest.TestCase):
     def test_plain_text_decides_nothing(self):
         self.assertIsNone(self.decide(lambda hook: "tstack: a note"))
 
-    def test_a_deny_wins_and_an_allow_comes_only_from_allow(self):
-        self.assertEqual(self.decide(lambda hook: self.mod.Allow("granted")), "allow")
-        self.assertEqual(self.decide(lambda hook: self.mod.Allow("granted"), lambda hook: self.mod.Deny("no")), "deny")
+    def test_a_deny_refuses_and_nothing_allows(self):
+        self.assertEqual(self.decide(lambda hook: self.mod.Deny("no")), "deny")
+        self.assertFalse(hasattr(self.mod, "Allow"))
 
-    def test_a_note_is_context_with_no_decision_and_a_deny_or_an_allow_drops_it(self):
+    def test_a_note_is_context_with_no_decision_and_a_deny_drops_it(self):
         self.mod.HANDLERS["PreToolUse"] = [lambda hook: self.mod.Note("mind this")]
         out = json.loads(self.mod.dispatch("PreToolUse", "{}", {"HOME": tempfile.gettempdir()}))
         self.assertEqual(out, {"hookSpecificOutput": {"hookEventName": "PreToolUse", "additionalContext": "mind this"}})
         self.assertEqual(self.decide(lambda hook: self.mod.Note("mind"), lambda hook: self.mod.Deny("no")), "deny")
-        self.assertEqual(self.decide(lambda hook: self.mod.Note("mind"), lambda hook: self.mod.Allow("yes")), "allow")
 
     def test_a_guard_that_fails_denies_and_names_itself_and_the_error(self):
         """A guard's failure decided nothing, so the call it was there to refuse ran (a lone surrogate in a tree's
@@ -986,7 +985,7 @@ class PreToolUseDecisionTest(unittest.TestCase):
         def broken(hook):
             raise RuntimeError("a note that broke")
         self.assertIsNone(self.decide(broken))
-        self.assertEqual(self.decide(broken, lambda hook: self.mod.Allow("granted")), "allow")
+        self.assertEqual(self.decide(broken, lambda hook: self.mod.Deny("no")), "deny")
         self.assertEqual(set(self.saved) - self.mod.GUARDS, set())
 
     def test_the_gates_return_only_a_deny(self):
