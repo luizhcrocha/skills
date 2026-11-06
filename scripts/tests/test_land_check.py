@@ -884,5 +884,166 @@ class FreezeTest(RepoCase):
         self.assertEqual(self.check(home=self.home)["verdict"], "push")
 
 
+class ReviewRecordTest(RepoCase):
+    """One review per change, never two of the same code: a lane records each fresh review of a change in
+    .tstack/reviews/<change>.tsv (change@commit, when, reviewer, verdict), committed in the change itself, and
+    land-check says per change whether its head commit was reviewed (nothing to do), an older commit was (only the
+    interdiff since needs a review, nothing when it is empty or a rebase), or none was (the full diff)."""
+
+    read, lines = ReviewTest.read, ReviewTest.lines
+    fold, rebase = ReviewedCommitTest.fold, ReviewedCommitTest.rebase
+
+    def stack(self):
+        self.trunk(("feat: a", {"a.ts": "a\n"}))
+        self.change("feat: b", {"b.ts": self.lines(301)})
+        return jj(self.repo, "log", "--no-graph", "-r", "@-", "-T", "change_id.short(12)").strip()
+
+    def record(self, read, into, reviewer="Opus", verdict="clean", patch=None):
+        """The review of `read` (change@commit) recorded and squashed into the change `into`, with the patch
+        fingerprint `patch` in the row's sixth column when given (rows from before it have five)."""
+        path = f".tstack/reviews/{read.split('@')[0]}.tsv"
+        header = "change@commit\tat\treviewer\tverdict\tnote" + ("\tpatch" if patch else "") + "\n"
+        old = (Path(self.repo) / path).read_text() if (Path(self.repo) / path).exists() else header
+        row = f"{read}\t2026-11-05T21:00:00-05:00\t{reviewer}\t{verdict}\tfull diff" + (f"\t{patch}" if patch else "")
+        write(self.repo, path, old + row + "\n")
+        jj(self.repo, "squash", "--into", into)
+
+    def fingerprint(self, change, cwd=None):
+        r = subprocess.run([sys.executable, str(CHECK), "-R", str(cwd or self.repo), "--fingerprint", change],
+                           capture_output=True, text=True, env=ENV)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        return r.stdout.strip()
+
+    def clone(self, change):
+        """The stack pushed as a bookmark and cloned afresh: the clone has the change's commits, not its evolog."""
+        jj(self.repo, "bookmark", "create", "feature", "-r", change)
+        jj(self.repo, "git", "push", "--bookmark", "feature")
+        clone = self.tmp / "clone"
+        jj(self.tmp, "git", "clone", str(self.tmp / "remote.git"), str(clone))
+        return clone
+
+    def test_a_record_reads_current_in_a_fresh_clone_by_its_patch_fingerprint(self):
+        change = self.stack()
+        [read] = self.read()
+        patch = self.fingerprint(change)
+        self.assertRegex(patch, r"^[0-9a-f]{16}$")
+        self.record(read, change, patch=patch)
+        self.assertEqual(self.fingerprint(change), patch)  # the record is not part of the patch
+        clone = self.clone(change)
+        self.assertEqual(self.fingerprint(change, cwd=clone), patch)
+        [review] = self.check("--head", "feature@origin", cwd=clone)["reviews"]
+        self.assertEqual((review["change"], review["state"], review["since"]), (change, "current", read.split("@")[1]))
+
+    def test_a_binary_file_changed_after_the_review_changes_the_fingerprint(self):
+        change = self.stack()
+        write(self.repo, "logo.bin", "a\x00b")
+        jj(self.repo, "squash", "--into", change)
+        patch = self.fingerprint(change)
+        write(self.repo, "logo.bin", "a\x00c")
+        jj(self.repo, "squash", "--into", change)
+        self.assertNotEqual(self.fingerprint(change), patch)
+
+    def test_without_a_fingerprint_a_fresh_clone_cannot_tie_the_record_to_the_change(self):
+        change = self.stack()
+        [read] = self.read()
+        self.record(read, change)
+        [review] = self.check("--head", "feature@origin", cwd=self.clone(change))["reviews"]
+        self.assertEqual(review["state"], "missing")
+
+    def test_a_fingerprint_survives_a_rebase_and_a_fold_changes_it(self):
+        change = self.stack()
+        [read] = self.read()
+        patch = self.fingerprint(change)
+        self.record(read, change, patch=patch)
+        self.rebase(change, None)
+        self.assertEqual(self.fingerprint(change), patch)
+        self.fold(change, None)
+        self.assertNotEqual(self.fingerprint(change), patch)
+        [review] = self.check()["reviews"]
+        self.assertEqual(review["state"], "interdiff")
+        [review] = self.check("--head", "feature@origin", cwd=self.clone(change))["reviews"]
+        self.assertEqual(review["state"], "missing")
+        self.assertIn("its patch fingerprint", review["why"])
+
+    def test_from_a_subdirectory_records_and_memo_only_changes_read_from_the_workspace_root(self):
+        self.trunk(("feat: a", {"a.ts": "a\n", "sub/x.ts": "x\n"}))
+        self.change("feat: b", {"b.ts": self.lines(301)})
+        change = jj(self.repo, "log", "--no-graph", "-r", "@-", "-T", "change_id.short(12)").strip()
+        [read] = self.read()
+        self.record(read, change)
+        self.change("docs: a memo note", {".tstack/memo/notes/01M6.md": "n\n"})
+        result = self.check("--require-reviews", cwd=self.repo / "sub")
+        self.assertEqual([(r["change"], r["state"]) for r in result["reviews"]], [(change, "current")])
+        self.assertEqual(result["verdict"], "push")
+
+    def test_only_the_stacks_records_are_read(self):
+        self.trunk(("feat: a", {"a.ts": "a\n", ".tstack/reviews/zzzzzzzzzzzz.tsv": "zzzzzzzzzzzz@0123abcd\tx\n"}))
+        self.change("feat: b", {"b.ts": self.lines(301)})
+        change = jj(self.repo, "log", "--no-graph", "-r", "@-", "-T", "change_id.short(12)").strip()
+        [read] = self.read()
+        self.record(read, change)
+        self.assertEqual(self.check()["review"]["records"], 1)
+
+    def test_a_change_no_record_names_needs_its_full_review_reported_only(self):
+        change = self.stack()
+        result = self.check()
+        self.assertEqual(result["reviews"], [{"change": change, "state": "missing"}])
+        self.assertEqual(result["verdict"], "push")
+        result = self.check("--require-reviews")
+        self.assertEqual(result["verdict"], "stop")
+        self.said(result, f"{change}: no review records it: review its full diff")
+
+    def test_a_record_at_the_head_commit_needs_nothing(self):
+        change = self.stack()
+        [read] = self.read()
+        self.record(read, change)
+        [review] = self.check()["reviews"]
+        self.assertEqual((review["change"], review["state"], review["since"], review["reviewer"]),
+                         (change, "current", read.split("@")[1], "Opus"))
+        result = self.check("--require-reviews")
+        self.assertEqual(result["verdict"], "push")
+        self.assertEqual(result["review"]["reviewed"], [change])
+
+    def test_a_fold_after_the_record_leaves_only_its_interdiff(self):
+        change = self.stack()
+        [read] = self.read()
+        self.record(read, change)
+        self.fold(change, None)
+        [review] = self.check()["reviews"]
+        self.assertEqual((review["state"], review["since"], review["interdiff"]), ("interdiff", read.split("@")[1], "1 file, +1/-1"))
+        result = self.check("--require-reviews")
+        self.assertEqual(result["verdict"], "stop")
+        self.said(result, f"{change} changed since its review of {read.split('@')[1]} (1 file, +1/-1): review only "
+                          f"the interdiff (`land-check --interdiff {read}`)")
+        [again] = self.read()
+        self.record(again, change, verdict="interdiff clean")
+        self.assertEqual(self.check("--require-reviews")["reviews"][0]["state"], "current")
+
+    def test_a_rebase_after_the_record_needs_nothing(self):
+        change = self.stack()
+        [read] = self.read()
+        self.record(read, change)
+        self.rebase(change, None)
+        self.assertNotEqual(self.read(), [read])
+        self.assertEqual(self.check("--require-reviews")["verdict"], "push")
+
+    def test_a_record_in_its_own_change_is_no_change_to_review(self):
+        change = self.stack()
+        [read] = self.read()
+        write(self.repo, f".tstack/reviews/{change}.tsv", f"{read}\t2026-11-05T21:00:00-05:00\tOpus\tclean\t\n")
+        jj(self.repo, "commit", "-m", "chore: record the review of b")
+        result = self.check("--require-reviews")
+        self.assertEqual([(r["change"], r["state"]) for r in result["reviews"]], [(change, "current")])
+        self.assertEqual(result["verdict"], "push")
+
+    def test_a_record_naming_another_changes_commit_counts_for_nothing(self):
+        change = self.stack()
+        trunk = jj(self.repo, "log", "--no-graph", "-r", "master", "-T", "commit_id.short(12)").strip()
+        self.record(f"{change}@{trunk}", change)
+        [review] = self.check()["reviews"]
+        self.assertEqual(review["state"], "missing")
+        self.assertIn("jj evolog does not show", review["why"])
+
+
 if __name__ == "__main__":
     unittest.main()
