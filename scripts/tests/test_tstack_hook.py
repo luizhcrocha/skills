@@ -7,8 +7,6 @@ The rule under test above all: a hook never breaks a session. Whatever goes
 wrong, the dispatcher exits 0 with nothing on stdout and logs to hook.log.
 """
 
-import contextlib
-import hashlib
 import json
 import os
 import re
@@ -17,7 +15,6 @@ import select
 import shlex
 import shutil
 import signal
-import statistics
 import subprocess
 import sys
 import tempfile
@@ -28,11 +25,9 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 HOOK = ROOT / "hooks" / "tstack-hook"
 SOURCE = HOOK.with_name("tstack-hook.py")  # the dispatcher's code, which the launcher HOOK loads
-FLEET_SOURCE = HOOK.with_name("fleet-hook.py")  # the fleet half, which the dispatcher executes into itself
 HOOKS_JSON = ROOT / "hooks" / "hooks.json"
 MEMO = ROOT / "scripts" / "memo"
 TUCA = ROOT / "bin" / "tuca-mode"
-HEARTBEAT_ONLY = ("PostToolUseFailure", "SubagentStart", "SubagentStop")
 # A hook run's CPU budget (assertCheap): its best of 7 runs, at most HOOK_CPU_RATIO times START's, a bare start with the
 # dispatcher's imports, run in turn with it. The wall clock it replaced (150 ms) failed whenever the machine was loaded;
 # CPU time moves less, but it moves (the hook's best 34 ms at load 25, up to 91 at load 60 to 110), and START moves
@@ -41,6 +36,16 @@ HEARTBEAT_ONLY = ("PostToolUseFailure", "SubagentStart", "SubagentStop")
 # START runs the python3 the hook's own `#!/usr/bin/env python3` finds on the test env's PATH.
 START = ["-c", "import collections, json, os, pathlib, re, sys, time, traceback"]
 HOOK_CPU_RATIO = 2.1
+
+
+def _real_fleet_cli():
+    checkout = Path(os.environ.get("TSTACK_FLEET_CHECKOUT") or Path.home() / "repos/luizhcrocha/fleet-live")
+    cli = checkout / "apps" / "cli" / "bin" / "fleet"
+    return cli if cli.is_file() else None
+
+
+REAL_FLEET_CLI = _real_fleet_cli()
+needs_fleet_cli = unittest.skipUnless(REAL_FLEET_CLI, "needs the fleet repo's CLI: $TSTACK_FLEET_CHECKOUT, else ~/repos/luizhcrocha/fleet-live")
 
 
 def tool_use(name, **tool_input):
@@ -658,16 +663,13 @@ class NeverBreakTest(HookCase):
         self.assertIn("# memo", json.loads(r.stdout)["hookSpecificOutput"]["additionalContext"])
 
 
-def load_hook(onepw=True):
-    """hooks/tstack-hook.py as a module, to time a handler without the interpreter's start-up; with its 1Password part
-    (hooks/fleet-hook-onepw.py, which the hook reads only for a call that needs it) unless `onepw` is False."""
+def load_hook():
+    """hooks/tstack-hook.py as a module, to time a handler without the interpreter's start-up."""
     from importlib.machinery import SourceFileLoader
     from importlib.util import module_from_spec, spec_from_loader
     loader = SourceFileLoader("tstack_hook_under_test", str(SOURCE))
     module = module_from_spec(spec_from_loader("tstack_hook_under_test", loader))
     loader.exec_module(module)
-    if onepw:
-        module._onepw()
     return module
 
 
@@ -728,7 +730,7 @@ class FleetCase(HookCase):
 
 class TapeRoleTest(FleetCase):
     """TSTACK_ROLE=tape, a tape builder's own `claude -p` call: every handler of every event stays silent and
-    writes nothing (no wake in the compaction prompt, no heartbeat, no state, no spawn)."""
+    writes nothing (no wake in the compaction prompt, no state)."""
 
     def files(self):
         return sorted(str(p.relative_to(self.tmp)) for p in self.tmp.rglob("*") if p.is_file())
@@ -751,12 +753,10 @@ class TapeRoleTest(FleetCase):
         for event, r in results.items():
             self.assertSilent(r)
         self.assertEqual(self.files(), before, "a tape call's hooks wrote a file")
-        self.assertFalse((self.fleet / "heartbeats").exists())
 
     def test_the_same_events_speak_without_the_role(self):
         before, results = self.every_event({})
         self.assertIn("a wake would carry this", results["SessionStart"].stdout)
-        self.assertTrue((self.fleet / "heartbeats").is_dir(), "the control run beats")
         self.assertNotEqual(self.files(), before)
 
 
@@ -870,6 +870,8 @@ class LandTurnGateTest(FleetCase):
     def setUp(self):
         super().setUp()
         self.env.update(self.JJ, XDG_CONFIG_HOME=str(self.tmp / "config"))  # where jj keeps a repo's config
+        if REAL_FLEET_CLI:
+            self.env["TSTACK_FLEET_CLI"] = str(REAL_FLEET_CLI)
         remote = self.tmp / "remote.git"
         fork = self.tmp / "fork.git"
         for bare in (remote, fork):
@@ -1012,6 +1014,7 @@ for fd in 0 1 2; do readlink /proc/$PPID/fd/$fd >>{seen}; done
         self.denied(self.push("jj git push --bookmark master", env={"TSTACK_FLEET_CLI": str(cli)}))
         self.assertEqual(seen.read_text().split(), ["/dev/null", "/dev/null", "/dev/null"])
 
+    @needs_fleet_cli
     def test_a_fleet_found_only_by_the_sessions_process_gets_its_denial_logged(self):
         """Once the hook exits, the detached write has no session among its parents: the ledger is found before."""
         self.env["XDG_STATE_HOME"] = str(self.tmp / "state")
@@ -1026,6 +1029,7 @@ for fd in 0 1 2; do readlink /proc/$PPID/fd/$fd >>{seen}; done
         [event] = self.events()
         self.assertIn("Push gate: refused `jj git push --bookmark master`", event["text"])
 
+    @needs_fleet_cli
     def test_a_push_without_the_turn_is_denied_and_logged(self):
         self.manager(("l1", "current", "infra"), ("l2", "pending", "p"))
         reason = self.denied(self.push("jj git push --bookmark master"))
@@ -1037,6 +1041,7 @@ for fd in 0 1 2; do readlink /proc/$PPID/fd/$fd >>{seen}; done
         self.assertTrue(event.get("important"))
         self.assertIn("Push gate: refused `jj git push --bookmark master`", event["text"])
 
+    @needs_fleet_cli
     def test_a_moved_fleets_push_denial_is_logged_through_fleet_run(self):
         MovedFleet.move(self)
         self.manager(("l1", "current", "infra"), ("l2", "pending", "p"))
@@ -1047,6 +1052,7 @@ for fd in 0 1 2; do readlink /proc/$PPID/fd/$fd >>{seen}; done
         self.assertEqual((op["record"], op["set"]["kind"], op["set"]["important"]), ({"kind": "event"}, "blocked", True))
         self.assertIn("Push gate: refused `jj git push --bookmark master`", op["set"]["text"])
 
+    @needs_fleet_cli
     def test_a_moved_fleet_whose_registry_entry_is_gone_still_waits_for_the_turn(self):
         """The cut-over's `fleet serve --stop` removes the fleet's registry entry, so `fleet turn` cannot find it by the
         session's process: the gate names the moved folder the session served in $FLEET_DIR."""
@@ -1079,7 +1085,7 @@ for fd in 0 1 2; do readlink /proc/$PPID/fd/$fd >>{seen}; done
                          "steps": [{"id": "l1", "title": "p: push", "status": status, "agent": "p"}]}]}))
         (d / "cloud.json").write_text(json.dumps({"fleet": "manager", "cloud": "https://fleet.example.dev",
                                                   "since": "2026-01-05T08:00:00Z", "host": "box"}))
-        started = subprocess.run(["bun", "-e", f'import {{ startedOf }} from "{ROOT / "fleet" / "src" / "procs.ts"}"; '
+        started = subprocess.run(["bun", "-e", f'import {{ startedOf }} from "{REAL_FLEET_CLI.parents[1] / "src" / "procs.ts"}"; '
                                                f'console.log(startedOf({os.getpid()}))'],
                                  capture_output=True, text=True, check=True).stdout.strip()
         (d / "wakes.json").write_text(json.dumps({"wakes": [], "owner": {"session": os.getpid(), "started": started}}))
@@ -1091,6 +1097,7 @@ for fd in 0 1 2; do readlink /proc/$PPID/fd/$fd >>{seen}; done
         run.chmod(0o755)
         self.env["TSTACK_FLEET_RUN"] = str(run)
 
+    @needs_fleet_cli
     def test_a_failed_cloud_read_denies_a_push_the_folder_would_allow_and_says_why(self):
         """The manager took the turn back, and the folder that says p holds it can be behind the cloud."""
         self.moved_manager("current")
@@ -1113,12 +1120,14 @@ for fd in 0 1 2; do readlink /proc/$PPID/fd/$fd >>{seen}; done
                               "turn onto master", self.events()[-1]["text"])
         self.assertEqual(len(self.events()), 4)
 
+    @needs_fleet_cli
     def test_a_failed_cloud_read_leaves_the_folders_no_standing(self):
         self.moved_manager("pending")
         self.fleet_run("exit 4")
         self.assertIn("p doesn't hold the landing turn (fleet turn: p does not hold the landing turn (no landing has "
                       "the turn; yours, l1, waits in the queue)", self.denied(self.push("jj git push --bookmark master")))
 
+    @needs_fleet_cli
     def test_the_clouds_word_is_enough_when_the_read_works(self):
         self.moved_manager("pending")
         steps = '[{"id":"l1","title":"p: push","status":"current","agent":"p"}]'
@@ -1204,6 +1213,7 @@ exec {shutil.which('jj')} "$@"
         self.assertIn("could not be checked", r.stderr)
         self.assertEqual(self.calls.read_text().split(), ["turn"])
 
+    @needs_fleet_cli
     def test_every_way_onto_the_landing_bookmark_is_gated(self):
         self.manager(("l1", "current", "infra"))
         elsewhere = self.tmp
@@ -1226,6 +1236,7 @@ exec {shutil.which('jj')} "$@"
                 self.assertIn("landing bookmark master", self.denied(self.push(command, cwd=cwd)))
         self.assertEqual(len(self.events()), 15)
 
+    @needs_fleet_cli
     def test_a_push_the_hook_cannot_read_is_denied_without_the_turn(self):
         self.manager(("l1", "current", "infra"))
         for command in ("for b in master; do jj git push -b $b; done", "echo master | xargs jj git push -b",
@@ -1354,7 +1365,7 @@ class AttributionLinesTest(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
-        cls.lines = staticmethod(load_hook(onepw=False).attribution_lines)
+        cls.lines = staticmethod(load_hook().attribution_lines)
 
     def test_trailers_naming_claude(self):
         self.assertEqual(self.lines("a", [("Claude-Session", "https://x"), ("Co-Authored-By", "Claude <n@a.com>"),
@@ -2102,7 +2113,7 @@ class SuiteGateTest(FleetCase):
 
 
 class PreToolUseDecisionTest(unittest.TestCase):
-    """Only fleet_agent_grant's Allow allows a call: a gate's text (land_turn_gate, suite_gate, fleet_spawn_effort)
+    """Only an Allow allows a call: a gate's text (land_turn_gate, suite_gate, push_attribution)
     denies, notes or says nothing, so auto mode's permission check is never skipped for a Bash command or a spawn."""
 
     def setUp(self):
@@ -2136,13 +2147,13 @@ class PreToolUseDecisionTest(unittest.TestCase):
         def broken(hook):
             raise UnicodeEncodeError("utf-8", "\ud800", 0, 1, "surrogates not allowed")
         self.mod._shell_command = broken
-        self.mod.HANDLERS["PreToolUse"] = [self.mod.fleet_grant_alone]
+        self.mod.HANDLERS["PreToolUse"] = [self.mod.rm_guard]
         out = self.mod.dispatch("PreToolUse", json.dumps({"tool_name": "Bash", "tool_input": {"command": "x"}}),
                                 {"HOME": tempfile.gettempdir()})
         decided = json.loads(out)["hookSpecificOutput"]
         self.assertEqual(decided["permissionDecision"], "deny")
         self.assertTrue(decided["permissionDecisionReason"].startswith(
-            "tstack guard fleet_grant_alone failed (UnicodeEncodeError): denied"), decided)
+            "tstack guard rm_guard failed (UnicodeEncodeError): denied"), decided)
 
     def test_a_guard_whose_error_carries_a_lone_surrogate_still_denies(self):
         """The failure's trace went to the log before the deny was made, and the log write itself raised on a lone
@@ -2150,21 +2161,20 @@ class PreToolUseDecisionTest(unittest.TestCase):
         def broken(hook):
             raise ValueError("\ud800")
         self.mod._shell_command = broken
-        self.mod.HANDLERS["PreToolUse"] = [self.mod.fleet_grant_alone]
+        self.mod.HANDLERS["PreToolUse"] = [self.mod.rm_guard]
         out = self.mod.dispatch("PreToolUse", json.dumps({"tool_name": "Bash", "tool_input": {"command": "x"}}),
                                 {"HOME": tempfile.mkdtemp()})
         decided = json.loads(out)["hookSpecificOutput"]
         self.assertEqual(decided["permissionDecision"], "deny")
         self.assertTrue(decided["permissionDecisionReason"].startswith(
-            "tstack guard fleet_grant_alone failed (ValueError): denied"), decided)
+            "tstack guard rm_guard failed (ValueError): denied"), decided)
 
     def test_a_handler_that_never_denies_passes_when_it_fails(self):
         def broken(hook):
             raise RuntimeError("a note that broke")
         self.assertIsNone(self.decide(broken))
         self.assertEqual(self.decide(broken, lambda hook: self.mod.Allow("granted")), "allow")
-        self.assertEqual(set(self.saved) - self.mod.GUARDS,
-                         {self.mod.fleet_agent_grant, self.mod.fleet_moved_card, self.mod.fleet_deploy_gate})
+        self.assertEqual(set(self.saved) - self.mod.GUARDS, set())
 
     def test_the_gates_return_only_a_deny(self):
         import inspect
@@ -2187,16 +2197,10 @@ class HooksJsonTest(unittest.TestCase):
                 for h in group["hooks"]:
                     self.assertEqual(h["type"], "command")
                     self.assertEqual(h["command"], f'"${{CLAUDE_PLUGIN_ROOT}}/hooks/tstack-hook" {event}')
-                    # the refusal's handler and the push gate start the fleet CLI (Bun): they get the time a start takes
-                    slow = event == "PermissionDenied" or group.get("matcher") == "Bash|Monitor"
-                    self.assertLessEqual(h.get("timeout", 60), 30 if slow else 10)
-                    # what nobody reads runs in the background: a tool call never waits on a heartbeat
-                    self.assertEqual(h.get("async", False), event in (*HEARTBEAT_ONLY, "PermissionDenied"), event)
+                    self.assertLessEqual(h.get("timeout", 60), 30 if group.get("matcher") == "Bash|Monitor" else 10)
+                    self.assertFalse(h.get("async", False), event)
         self.assertEqual(config["hooks"]["SessionStart"][0]["matcher"], "startup|resume|clear|compact")
-        for event in (*HEARTBEAT_ONLY, "PostToolUse"):
-            self.assertNotIn("matcher", config["hooks"][event][0])  # every tool
-        # a grant's spawn, and the push gate's Bash calls
-        self.assertEqual([g["matcher"] for g in config["hooks"]["PreToolUse"]], ["Agent", "Bash|Monitor"])
+        self.assertEqual([g["matcher"] for g in config["hooks"]["PreToolUse"]], ["Bash|Monitor"])
         self.assertTrue(os.access(HOOK, os.X_OK))
         self.assertTrue(os.access(MEMO, os.X_OK))
         self.assertEqual((ROOT / "bin" / "memo").resolve(), MEMO.resolve())
@@ -2224,7 +2228,6 @@ class LauncherTest(HookCase):
         shutil.copy(HOOK, root / "hooks" / "tstack-hook")
         if code:
             shutil.copy(SOURCE, root / "hooks" / "tstack-hook.py")
-            shutil.copy(FLEET_SOURCE, root / "hooks" / "fleet-hook.py")
         return root
 
     def wake(self, root):
@@ -2235,7 +2238,7 @@ class LauncherTest(HookCase):
     def test_the_bytecode_is_kept_next_to_the_code(self):
         root = self.plugin()
         self.assertIn("the launcher ran it", self.wake(root).stdout)
-        self.assertEqual(sorted(p.name.split(".")[0] for p in (root / "hooks" / "__pycache__").iterdir()), ["fleet-hook", "tstack-hook"])
+        self.assertEqual(sorted(p.name.split(".")[0] for p in (root / "hooks" / "__pycache__").iterdir()), ["tstack-hook"])
 
     @unittest.skipIf(os.geteuid() == 0, "root writes through a read-only folder")
     def test_a_read_only_plugin_compiles_as_before(self):

@@ -11,10 +11,6 @@ one, write the function and list it; a new event also goes in hooks.json
 The rule that outranks the rest: a hook never breaks a session. Any error, in
 a handler or in the dispatcher, is logged to ${CLAUDE_PLUGIN_DATA}/hook.log and
 the process exits 0 having written nothing to stdout.
-
-The fleet's handlers and everything only they use are in hooks/fleet-hook.py, which this file executes into its own
-namespace ahead of HANDLERS, so the two halves are one process and one dispatch: a Deny from either joins the other's,
-and fleet_grant_alone, the last, sees whether an earlier handler denied. What both halves use stays here.
 """
 
 import json
@@ -2263,23 +2259,6 @@ def shutil_which(name):
     return shutil.which(name)
 
 
-def _part_code(path):
-    """A part's code from the bytecode Python keeps in hooks/__pycache__, as the launcher keeps this module's. A cache Python
-    cannot read is removed, and the part is compiled from source this once; where the folder cannot be written, each read
-    compiles it."""
-    from importlib.machinery import SourceFileLoader
-    from importlib.util import cache_from_source
-    loader = SourceFileLoader(path.stem, str(path))
-    try:
-        return loader.get_code(loader.name)
-    except Exception:  # noqa: BLE001 - whatever the cache did, the source decides
-        try:
-            os.remove(cache_from_source(str(path)))
-        except OSError:
-            pass
-        return compile(path.read_bytes(), str(path), "exec")
-
-
 # The rm guard. On 10-22 a fleet reviewer ran `rm -rf ~/.config/jj/repos/$(cat …)`: the `cat` failed, the operand came
 # to ~/.config/jj/repos/, and every repo's jj config (about 720) was deleted; auto mode let it through. A recursive rm,
 # find's -delete, or any rm find runs (find recurses even when its rm does not), is refused when an operand can expand
@@ -2810,30 +2789,14 @@ def _rm_shown(path, home):
     return "~" + path[len(home):] if home and (path == home or path.startswith(home + "/")) else path
 
 
-exec(_part_code(Path(__file__).resolve().with_name("fleet-hook.py")), globals())
-
-
 HANDLERS = {
-    "SessionStart": [memo_wake, jj_hints, tuca_mode, fleet_news, fleet_room, memo_dream_pending, fleet_heartbeat, grant_records_tracked, tape_build],
-    "Stop": [memo_nudge, fleet_listen_guard, fleet_idle_guard, fleet_said_once, fleet_news, fleet_room, fleet_heartbeat],
+    "SessionStart": [memo_wake, jj_hints, tuca_mode, memo_dream_pending, tape_build],
+    "Stop": [memo_nudge],
     "PreCompact": [memo_precompact],
-    "PreToolUse": [fleet_agent_grant, fleet_spawn_effort, fleet_moved_writes, land_turn_gate, push_attribution, suite_gate,
-                   onepw_hold, rm_guard, fleet_moved_card, fleet_deploy_gate, fleet_monitor_watch, fleet_grant_alone],
-    "PostToolUse": [fleet_heartbeat, fleet_grant_sweep, fleet_refusal_forgotten, fleet_refusal_note, fleet_context_warning,
-                    fleet_chat_nudge, onepw_watch],
-    "PostToolUseFailure": [fleet_heartbeat, fleet_grant_sweep, onepw_watch],
-    "PermissionDenied": [fleet_permission_denied],
-    "UserPromptSubmit": [fleet_refusal_note],
-    "SubagentStart": [fleet_heartbeat],
-    "SubagentStop": [fleet_heartbeat],
+    "PreToolUse": [land_turn_gate, push_attribution, suite_gate, rm_guard],
 }
 
-# The PreToolUse handlers that can deny, each of which denies the call when it fails (dispatch); fleet_agent_grant
-# only allows, and its failure allows nothing; fleet_moved_card denies only a call a card names, so its failure past
-# that match denies by itself, and any other failure of it denies no call; fleet_deploy_gate does the same for a call that
-# names a deploy.
-GUARDS = frozenset({fleet_spawn_effort, fleet_moved_writes, land_turn_gate, push_attribution, suite_gate, onepw_hold,
-                    fleet_monitor_watch, rm_guard, fleet_grant_alone})
+GUARDS = frozenset({land_turn_gate, push_attribution, suite_gate, rm_guard})
 
 # Past the 30 s hooks.json gives a Bash PreToolUse hook, Claude Code discards its output and runs the call, so a deny
 # must be out before them. Each guard's calls have their own limits, which can add up to more (two pushes in a command).
