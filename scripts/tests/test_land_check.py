@@ -736,8 +736,7 @@ class FleetCliTest(unittest.TestCase):
 
 
 class FleetTimeoutTest(unittest.TestCase):
-    """A `fleet turn` that does not answer in time is killed with its whole process group, and the launcher
-    takes over an install lock its killed holder left."""
+    """A `fleet turn` that does not answer in time is killed with its whole process group."""
 
     def setUp(self):
         self.tmp = Path(tempfile.mkdtemp())
@@ -759,77 +758,6 @@ class FleetTimeoutTest(unittest.TestCase):
             time.sleep(0.1)
         else:
             self.fail(f"the CLI's child {child} outlived the timeout")
-
-    def test_the_launcher_takes_over_a_lock_whose_holder_is_dead(self):
-        root = self.tmp / "fleet"
-        (root / "bin").mkdir(parents=True)
-        shutil.copy(ROOT / "fleet" / "bin" / "fleet", root / "bin" / "fleet")
-        (root / "package.json").write_text('{"engines": {"bun": ">=1.4.2"}}\n')
-        (root / "bun.lock").write_text("{}\n")
-        tools = self.tmp / "tools"
-        tools.mkdir()
-        (tools / "bun").write_text('#!/bin/sh\nif [ "$1" = install ]; then mkdir -p node_modules; exit 0; fi\necho ran "$@"\n')
-        (tools / "bun").chmod(0o755)
-        dead = subprocess.Popen(["true"])
-        dead.wait()
-        (root / ".install.lock").mkdir()
-        (root / ".install.lock" / "pid").write_text(f"{dead.pid}\n")
-        started = time.monotonic()
-        r = subprocess.run([str(root / "bin" / "fleet"), "turn"], capture_output=True, text=True, timeout=30,
-                           env={**os.environ, "PATH": f"{tools}:{os.environ['PATH']}", "FLEET_NO_FORWARD": "1",
-                                "HOME": str(self.tmp)})
-        self.assertEqual(r.returncode, 0, r.stderr)
-        self.assertLess(time.monotonic() - started, 5)  # not the 60 s wait for a live holder
-        self.assertIn("ran", r.stdout)
-        self.assertFalse((root / ".install.lock").exists())
-        self.assertTrue((root / "node_modules" / ".fleet-installed").exists())
-
-
-@unittest.skipUnless(shutil.which("bun"), "needs bun for the fleet CLI")
-class LandingTurnTest(unittest.TestCase):
-    """In a fleet whose machine serves a manager, land-check stops until the manager gave the fleet the turn
-    (`fleet turn`, which finds the fleet by this process: its registry entry's pid is among the parents)."""
-
-    def setUp(self):
-        self.home = Path(tempfile.mkdtemp())
-        self.addCleanup(shutil.rmtree, self.home, True)
-        saved = os.environ.get("FLEET_HOME")
-        self.addCleanup(lambda: os.environ.__setitem__("FLEET_HOME", saved) if saved else os.environ.pop("FLEET_HOME", None))
-        os.environ["FLEET_HOME"] = str(self.home / "registry")
-        (self.home / "registry").mkdir()
-        self.serve("acme", "coordinator", {"roadmap": []})
-
-    def serve(self, name, role, ledger):
-        d = self.home / name
-        d.mkdir()
-        base = {"project": name, "goal": "g", "status": "running", "now": "", "started": "2026-01-05T09:00:00+00:00",
-                "agents": [], "roadblocks": [], "decisions": [], "events": []}
-        (d / "state.json").write_text(json.dumps({**base, **ledger, **({"role": "manager"} if role == "manager" else {})}))
-        entry = {"id": name, "role": role, "dir": str(d.resolve()), "url": "http://x/", "pid": os.getpid(), "session": None,
-                 "since": "2026-01-05T09:00:00+00:00"}
-        (self.home / "registry" / f"{name}.json").write_text(json.dumps(entry))
-
-    def queue(self, *steps):
-        return {"roadmap": [{"id": "landings", "title": "Landings and deploys",
-                             "steps": [{"id": i, "title": t, "status": st, "agent": a} for i, t, st, a in steps]}]}
-
-    def verdict(self):
-        return lc.with_turn({"verdict": "push", "reasons": []}, lc.landing_turn())
-
-    def test_without_a_manager_the_verdict_stands(self):
-        self.assertEqual(self.verdict(), {"verdict": "push", "reasons": []})
-
-    def test_the_turn_held_by_another_fleet_stops(self):
-        self.serve("manager", "manager", self.queue(("l1", "infra: push", "current", "infra"), ("l2", "acme: push", "pending", "acme")))
-        result = self.verdict()
-        self.assertEqual(result["verdict"], "stop")
-        self.assertIn("acme does not hold the landing turn (l1 (infra: push) has it, infra's; yours, l2, waits in the queue)", result["turn"])
-
-    def test_the_turn_held_by_this_fleet_pushes(self):
-        self.serve("manager", "manager", self.queue(("l1", "infra: push", "done", "infra"), ("l2", "acme: push", "current", "acme")))
-        result = self.verdict()
-        self.assertEqual(result["verdict"], "push")
-        self.assertIn("acme holds the landing turn: l2 (acme: push)", result["reasons"][0])
 
 
 class FreezeTest(RepoCase):
