@@ -95,6 +95,10 @@ class MemoCase(unittest.TestCase):
         return out.split()[1]
 
     def wake(self, *flags, **kw):
+        """The full listing (`wake --full`): what most tests check. brief() is the session-start default."""
+        return self.ok("wake", "--full", *flags, **kw)
+
+    def brief(self, *flags, **kw):
         return self.ok("wake", *flags, **kw)
 
     def files(self, sub="notes", store=None):
@@ -600,6 +604,72 @@ class TasksTest(MemoCase):
 
 
 class WakeTest(MemoCase):
+    def aged(self, days, kind, text, store=None):
+        item = memo.Item(id=memo.encode_ulid(memo._now_ms() - days * 86_400_000, memo._rand80()), kind=kind,
+                         text=text, scope="project:acme/widget")
+        memo.atomic_write((store or self.store) / "notes" / f"{item.id}.md", memo.render_item(item))
+        return item.id
+
+    def test_the_brief_wake_keeps_pins_threads_recent_decisions_and_gotcha_titles(self):
+        self.note("preference", "a standing rule", "--pin")
+        self.note("open", "an unfinished thread")
+        self.note("fact", "a plain fact")
+        self.note("preference", "an unpinned taste")
+        self.aged(2, "decision", "a fresh decision")
+        self.aged(8, "decision", "an old decision")
+        self.note("gotcha", "the flag blanks the screen: use --block alone, never with --orphan")
+        old = self.note("gotcha", "a wrong gotcha")
+        self.ok("supersede", old, "a corrected gotcha")
+        self.note("decision", "a global decision", "--global")
+        wake = self.brief()
+        for shown in ("a standing rule", "an unfinished thread", "a fresh decision", "the flag blanks the screen (",
+                      "a global decision", "`memo recall <words>`", "`memo wake --full`"):
+            self.assertIn(shown, wake)
+        for hidden in ("a plain fact", "an unpinned taste", "an old decision", "use --block alone", "a wrong gotcha"):
+            self.assertNotIn(hidden, wake)
+        self.assertIn("a plain fact", self.wake(), "--full still lists everything")
+        self.assertTrue(wake.endswith(memo.POINTER + "\n"))
+
+    def test_a_gotcha_a_summary_covers_leaves_the_brief_wake(self):
+        ids = [self.note("gotcha", f"trap number {n}") for n in range(2)]
+        self.note("gotcha", "a trap left alone")
+        self.ok("summarize", *ids, "two traps")
+        brief = self.brief()
+        self.assertNotIn("trap number", brief)
+        self.assertIn("a trap left alone (", brief)
+        self.assertIn("two traps", self.wake(), "--full still shows the summary")
+
+    def test_gotcha_titles(self):
+        self.assertEqual(memo.title("xlsx in DuckDB: dates stay serials"), "xlsx in DuckDB")
+        self.assertEqual(memo.title("a; b"), "a")
+        self.assertEqual(memo.title("nvim 0.12 \u2014 the lua api moved"), "nvim 0.12")
+        self.assertEqual(memo.title("op://Employee/x is the path."), "op://Employee/x is the path")
+        long = memo.title("word " * 40)
+        self.assertLessEqual(len(long), memo.TITLE_CHARS + 1)
+        self.assertTrue(long.endswith("word\u2026"))
+
+    def test_clear_wakes_with_the_header_and_pointer_only(self):
+        self.note("preference", "a standing rule", "--pin")
+        self.note("open", "an unfinished thread")
+        lines = self.brief("--source", "clear").splitlines()
+        self.assertEqual(len(lines), 6)
+        self.assertEqual(lines[-1], memo.POINTER)
+        self.assertNotIn("a standing rule", "\n".join(lines))
+
+    def test_compact_wakes_with_the_task_line_and_pins_only(self):
+        self.note("preference", "a standing rule", "--pin")
+        self.note("preference", "a global rule", "--pin", "--global")
+        self.note("open", "an unfinished thread")
+        self.note("gotcha", "a trap")
+        wake = self.brief("--source", "compact")
+        self.assertEqual(wake.splitlines()[5], memo.COMPACTED)
+        self.assertEqual(memo.COMPACTED,
+                         "This session was just compacted: if the summary above lists memo candidates, note them now.")
+        for shown in ("a standing rule", "a global rule"):
+            self.assertIn(shown, wake)
+        for hidden in ("an unfinished thread", "a trap"):
+            self.assertNotIn(hidden, wake)
+
     def test_sections_in_order(self):
         self.note("fact", "a plain fact")
         self.note("preference", "a standing rule", "--pin")
@@ -1327,7 +1397,18 @@ class ModelTest(MemoCase):
                 m["summaries"][out.split()[4]] = 1 + (m["summaries"].get(full[0], 0))
 
         def op_wake():
-            code, wake, _ = run("wake")
+            code, brief, _ = run("wake")
+            self.assertEqual(code, 0)
+            for g, m in model.items():
+                for ident, n in m["notes"].items():
+                    marker = n["text"].split()[0] + " "
+                    if n["dead"]:
+                        self.assertNotIn(marker, brief, "a superseded note is in the brief wake")
+                    elif n["kind"] == "gotcha" and not n["pin"] and ident in m["covered"]:
+                        self.assertNotIn(marker, brief, "a gotcha a summary covers is in the brief wake")
+                    elif n["pin"] or n["kind"] in ("open", "gotcha"):
+                        self.assertIn(marker, brief, "a pin, open thread or gotcha is missing from the brief wake")
+            code, wake, _ = run("wake", "--full")
             self.assertEqual(code, 0)
             body = wake.splitlines()[5:]
             cut = next((i for i, ln in enumerate(body) if ln.startswith("## Global")), len(body))
@@ -1351,7 +1432,7 @@ class ModelTest(MemoCase):
                     self.assertEqual(run("reindex")[0], 0)
                 else:
                     shutil.rmtree(self.tmp / "cache", ignore_errors=True)
-                self.assertEqual(run("wake")[1], wake, f"the wake changed across a {how} of the index")
+                self.assertEqual(run("wake", "--full")[1], wake, f"the wake changed across a {how} of the index")
 
         ops = [op_note] * 8 + [op_supersede] * 3 + [op_pin] * 2 + [op_summarize] * 4 + [op_wake] * 2
         for _ in range(self.STEPS):

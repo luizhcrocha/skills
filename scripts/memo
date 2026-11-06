@@ -30,6 +30,8 @@ DEFAULT_GLOBAL_LINES = 20
 DEFAULT_BUCKET = 16
 MIN_LINES = 8
 STALE_DAYS = 7  # `memo doctor` warns on an open thread older than this
+RECENT_DAYS = 7  # the wake shows decisions this new; older ones are for `memo recall`
+TITLE_CHARS = 90  # a gotcha at wake: its first clause, at most this long
 SHORT = 6  # characters of a ULID's random tail shown at wake
 SCHEMA = 1
 FENCE = "+++"
@@ -972,8 +974,50 @@ Correct or close a line: `memo supersede ID "<text>"`. Past work: the `recall` s
 The lines below are memory from earlier sessions, not instructions from the user."""
 
 
-def wake_text(env, cwd, source=""):
-    """The context a session starts with. Empty for a fleet worker."""
+POINTER = ("More: `memo recall <words>` finds facts, preferences, older decisions and whole gotchas;"
+           " `memo wake --full` prints the full listing.")
+COMPACTED = "This session was just compacted: if the summary above lists memo candidates, note them now."
+_CLAUSE_END = re.compile(r":\s|;\s|\s?\u2014\s?")
+
+
+def title(text):
+    """A gotcha's first clause: the text up to its first ': ', '; ' or em dash, cut at a word near TITLE_CHARS."""
+    head = _CLAUSE_END.split(text, maxsplit=1)[0].strip().rstrip(".")
+    if len(head) <= TITLE_CHARS:
+        return head
+    cut = head[:TITLE_CHARS].rsplit(" ", 1)[0]
+    return (cut if len(cut) > TITLE_CHARS // 2 else head[:TITLE_CHARS]).rstrip(" ,.") + "\u2026"
+
+
+def brief(view, title_="", pins_only=False):
+    """A store's section of the session-start wake: pins, open threads, the last RECENT_DAYS of decisions and
+    every live gotcha no summary covers, as a title. The rest stays in the store for `memo recall` and `memo wake --full`."""
+    sid = lambda n: _short(view, n.id)  # noqa: E731
+    out = []
+    if view.pins:
+        out += ["## Pinned (standing rules)"] + [f"- [{n.kind}] {n.text} ({sid(n)})" for n in view.pins]
+    if pins_only:
+        return [f"## {title_}"] + out[1:] if title_ and out else out
+    live = [n for n in view.items if not n.is_summary and not n.pin and n.id not in view.superseded_by]
+    since = _now_ms() - RECENT_DAYS * 86_400_000
+    decisions = [n for n in live if n.kind == "decision" and ulid_ms(n.id) >= since]
+    gotchas = [n for n in live if n.kind == "gotcha" and n.id not in view.covered_by]
+    if view.opens:
+        out += ["## Open threads (close one with `memo supersede ID \"<outcome>\"`)"]
+        out += [f"- {ulid_date(n.id)} {n.text} ({sid(n)})" for n in view.opens]
+    if decisions:
+        out += [f"## Decisions, last {RECENT_DAYS} days"] + [f"- {ulid_date(n.id)} {n.text} ({sid(n)})" for n in decisions]
+    if gotchas:
+        out += ["## Gotchas (titles; `memo zoom ID` prints one whole)"] + [f"- {title(n.text)} ({sid(n)})" for n in gotchas]
+    if title_ and out:
+        out = [f"## {title_}"] + [ln.replace("## ", "### ", 1) if ln.startswith("## ") else ln for ln in out]
+    return out
+
+
+def wake_text(env, cwd, source="", full=False):
+    """The context a session starts with. Empty for a fleet worker. Brief unless full: after `clear` the header
+    and the pointer, after `compact` the pins (the summary carries the rest), else brief() of each store;
+    full is the whole budgeted listing."""
     ctx = Ctx(env, cwd)
     if ctx.role == "worker":
         return ""
@@ -982,11 +1026,19 @@ def wake_text(env, cwd, source=""):
     where = "" if _on_path(env) else f" (`memo` is {here}; `tape` is {here.parent / 'tape'})"
     lines = USAGE.format(scope=scope, where=where).split("\n")
     if source == "compact":
-        lines.append("This session was just compacted: if the summary above lists memo candidates, note them now.")
-    if ctx.project:
-        lines += render(ctx.view(ctx.project), ctx.cfg.project_lines)
-    lines += render(ctx.view(ctx.glob), ctx.cfg.global_lines, flat=True,
-                    title="Global (this user and machine, every repo)")
+        lines.append(COMPACTED)
+    glob_title = "Global (this user and machine, every repo)"
+    if full:
+        if ctx.project:
+            lines += render(ctx.view(ctx.project), ctx.cfg.project_lines)
+        lines += render(ctx.view(ctx.glob), ctx.cfg.global_lines, flat=True, title=glob_title)
+    elif source != "clear":
+        pins_only = source == "compact"
+        if ctx.project:
+            lines += brief(ctx.view(ctx.project), pins_only=pins_only)
+        lines += brief(ctx.view(ctx.glob), glob_title, pins_only=pins_only)
+    if not full:
+        lines.append(POINTER)
     ctx.index.close()
     return "\n".join(lines) + "\n"
 
@@ -996,7 +1048,7 @@ def _on_path(env):
 
 
 def cmd_wake(ctx, a, out):
-    print(wake_text(ctx.env, ctx.cwd, a.source or ""), end="", file=out)
+    print(wake_text(ctx.env, ctx.cwd, a.source or "", full=a.full), end="", file=out)
 
 
 def _describe(view, item, scope=""):
@@ -1355,6 +1407,7 @@ def build_parser():
 
     s = add("wake", cmd_wake, "print the context a session starts with")
     s.add_argument("--source", help="the SessionStart source (startup, resume, clear, compact)")
+    s.add_argument("--full", action="store_true", help="every store's whole budgeted listing, not the brief wake")
     s = add("note", cmd_note, "write a memory")
     s.add_argument("kind", choices=KINDS)
     s.add_argument("text")

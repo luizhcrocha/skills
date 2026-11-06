@@ -135,7 +135,8 @@ class SessionStartTest(HookCase):
             context = out["hookSpecificOutput"]["additionalContext"]
             self.assertTrue(context.startswith("# memo"))
             self.assertIn("project:acme/hooked", context)
-            self.assertIn("hooks are one Python dispatcher", context)
+            self.assertEqual("hooks are one Python dispatcher" in context, source in ("startup", "resume"),
+                             "a recent decision is in the brief wake, not after clear or compact")
             self.assertEqual("just compacted" in context, source == "compact")
 
     def test_a_worker_gets_no_wake(self):
@@ -145,7 +146,7 @@ class SessionStartTest(HookCase):
                                     env={"TSTACK_ROLE": "worker"}))
 
     def test_cwd_falls_back_to_the_project_dir(self):
-        self.memo("note", "fact", "found through CLAUDE_PROJECT_DIR")
+        self.memo("note", "gotcha", "found through CLAUDE_PROJECT_DIR")
         payload = self.base("SessionStart", source="startup")
         del payload["cwd"]
         r = self.hook("SessionStart", payload, env={"CLAUDE_PROJECT_DIR": str(self.repo)})
@@ -7881,7 +7882,7 @@ class LauncherTest(HookCase):
         return root
 
     def wake(self, root):
-        self.memo("note", "fact", "the launcher ran it")
+        self.memo("note", "gotcha", "the launcher ran it")
         return subprocess.run([str(root / "hooks" / "tstack-hook"), "SessionStart"], capture_output=True, text=True,
                               input=json.dumps(self.base("SessionStart", source="startup")), env=self.env, timeout=30)
 

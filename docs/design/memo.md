@@ -111,13 +111,18 @@ A SessionStart hook (startup, resume, clear, compact) prints, as injected
 context:
 
 1. A five-line usage block (how to note, when to note, how to recall).
-2. Pinned notes.
-3. Open threads (`open` notes not yet superseded).
-4. The project's summary spine and recent notes, newest last, within the budget.
-5. Global notes, within their budget.
+2. Per store, project then global: pinned notes, open threads (`open` notes
+   not yet superseded), decisions of the last 7 days, and every live gotcha no
+   summary covers, as a title (its first clause, up to ~90 chars, and its ID).
+3. One pointer line to `memo recall <words>` and `memo wake --full`.
 
-Typical cost 2-4k tokens, capped near 6k. A compaction re-wakes, so memory
-survives it. Fleet workers do not wake (their coordinator puts what matters in
+Facts, preferences, older decisions and whole gotchas stay out of the wake and
+reachable through recall. `memo wake --full` prints the budgeted listing (the
+summary spine and recent notes, newest last, within each store's budget);
+the budget and the compaction tasks are measured on that listing. On `clear`
+the wake is the usage block and the pointer; on `compact`, the compaction-task
+line and the pinned notes, since the summary carries the session's context.
+A compaction re-wakes, so memory survives it. Fleet workers do not wake (their coordinator puts what matters in
 the brief); a coordinator wakes like any session.
 
 ## Writing, and the nudges
