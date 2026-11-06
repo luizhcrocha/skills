@@ -64,7 +64,7 @@ DEFAULT_REVSET = "master@origin..@"
 # checks and the oracle against it, so they overlap instead of queueing.
 FLEET_TS = ("test-fleet-ts-own", "test-fleet-ts-oracle")
 SUITES = {
-    "test-scripts": (),
+    "test-scripts": ("_deps-fleet",),  # test_prelude_types.py runs the fleet's pinned tsc
     "test-coordinator": (),
     "test-fleet-ts-own": ("_deps-fleet", "_deps-lint"),
     "test-fleet-ts-oracle": ("_deps-fleet",),

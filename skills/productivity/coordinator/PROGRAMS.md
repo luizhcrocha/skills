@@ -64,12 +64,13 @@ stays.
 ## What a program calls
 
 `FLEET_DIR=<dir> fleet-run --types` prints the declarations of every intent, with each one's rules in its comment.
-Read them before your first program of a session: they are the API, and the calls below follow them. A program is
-JavaScript, not TypeScript: a type annotation does not parse.
+[`prelude.d.ts`](prelude.d.ts) beside this file is the same text, generated from the fleet repo (`python3
+scripts/prelude_types.py`), for when no host service runs; a test fails when it is stale, and typechecks every worked
+call below against it. Read them before your first program of a session: they are the API, and this file lists none
+of their fields or values. A program is JavaScript, not TypeScript: a type annotation does not parse.
 
-A new worker needs `task`, `milestone`, `model` and `effort` (MODELS.md); the fleet refuses one without them, as the
-CLI did. Its `status` is optional: a new worker starts `running`, as the CLI's `agent` did. The CLI's verbs map to
-these:
+A new worker's fields are `worker`'s (model and effort from MODELS.md); with no `status`, it starts `running`, as the
+CLI's `agent` did. The CLI's verbs map to these:
 
 | CLI | Program |
 | :-- | :-- |

@@ -26,10 +26,10 @@ _deps-fleet:
 _deps-page:
     cd fleet/page && bun install --frozen-lockfile --silent
 
-# The repo scripts (sync-upstream) against throwaway git repos, sharded across $TSTACK_TEST_JOBS processes (scripts/unittest_shards.py)
+# The repo scripts (sync-upstream) against throwaway git repos, and PROGRAMS.md's worked calls typechecked on the fleet's pinned tsc, sharded across $TSTACK_TEST_JOBS processes (scripts/unittest_shards.py)
 [env("GIT_CONFIG_GLOBAL", "/dev/null")]
 [env("GIT_CONFIG_NOSYSTEM", "1")]
-test-scripts:
+test-scripts: _deps-fleet
     python3 scripts/unittest_shards.py -s scripts/tests -v
 
 # The TypeScript lint pack's RuleTester suites (anti-slop fork, tstack rules), on the pinned Oxlint
