@@ -164,7 +164,7 @@ describe("a grilling with every question answered is recorded before other work"
     answered();
     expect(ok("show").stdout).toContain("  G1 decision g1 OPEN, answered, waiting to be recorded [grill] Search\n");
     ok("decision", "G1", "--decide", "one seam", "--resolution", "grilling finished");
-    expect(ok("show").stdout).toContain("  G1 decision g1 decided [grill] Search: one seam\n");
+    expect(ok("show", "--full").stdout).toContain("  G1 decision g1 decided [grill] Search: one seam\n");
   });
 
   test("the coordinator's watch names it once, and a watch after that stays quiet", async () => {

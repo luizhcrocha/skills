@@ -1,5 +1,7 @@
 /**
- * `show`: the ledger as text, then the command cheat sheet. It writes nothing (open-10).
+ * `show`: what an agent acts on in the ledger (the Now line, live workers, open roadblocks, decisions and refusal
+ * drafts, kept notes); `--full`, the whole ledger. The command cheat sheet is the CLI's `--help`. It writes no
+ * ledger (open-10).
  */
 import type { Message } from "../chat/store.ts";
 import { answeredGrill, failedAnswer, failureWords } from "../health.ts";
@@ -8,10 +10,11 @@ import { approvalLine, EVENT_KINDS, MODELS, NEEDS, SEVERITIES, SKILLS } from "./
 import { linkKind } from "./links.ts";
 import { callerOf, openDrafts, shown } from "./refusal-draft.ts";
 import type { Ledger } from "./model.ts";
+import { isLive } from "./warnings.ts";
 import { EFFORTS } from "./roles.ts";
 import { AGENT_STATUSES, ASKS, SHARED_KINDS, STATUSES, STEP_STATUSES, WORKSPACE_MODES } from "./validate.ts";
 
-/** The command cheat sheet `show` ends with: each command with the values its flags take. */
+/** The command cheat sheet `fleet state --help` ends with: each command with the values its flags take. */
 export const CHEATSHEET = `
 commands (fleet state DIR <command>; an unknown ID creates the row, a known ID changes the fields given):
   set [--status ${STATUSES.join("|")}] [--now TEXT] [--goal G] [--workspaces ${WORKSPACE_MODES.join("|")}]
@@ -42,7 +45,7 @@ commands (fleet state DIR <command>; an unknown ID creates the row, a known ID c
         [--title T] [--why W] [--log TEXT] on an open grilling: its title, why or context revised, --log saying what changed
         [--answer "Q3: ..."] [--drop "Q4: why"] [--revise "Q3: T | Q | R | W"] [--reason "Q3: why"] [--done SUMMARY]
   step next --milestone M --title T   the next free step id, printed
-  show
+  show [--full]                       what is open and live; --full, the whole ledger
   --no-render on any command writes state.json without rendering; -q renders without saying so`;
 
 function width(text: string, n: number): string {
@@ -57,12 +60,81 @@ function right(text: string, n: number): string {
   return length >= n ? text : " ".repeat(n - length) + text;
 }
 
-/** The lines `show` prints; `said`, the chat, tells an action the user answered as failed. */
-export function showLines(ledger: Ledger, said: readonly Message[] = []): string[] {
-  const lines: string[] = [];
+/** `show`'s first line: the project, its status and the Now line. */
+function nowLine(ledger: Ledger): string {
   const role = ledger.role === "manager" ? ", manager" : "";
   const shared = ledger.workspace_mode === "shared" ? ", shared working copy" : "";
-  lines.push(`${ledger.project} [${ledger.status}${role}${shared}] ${ledger.now}`);
+
+  return `${ledger.project} [${ledger.status}${role}${shared}] ${ledger.now}`;
+}
+
+function agentLine(a: Ledger["agents"][number]): string {
+  const rounds = (a.rounds ?? 1) > 1 ? `  round ${pyRepr(a.rounds ?? 1)}` : "";
+  const lane = a.lane.join(",");
+
+  return (
+    `  agent ${width(a.id, 16)} ${width(a.status, 8)} ${width(a.skill ?? "none", 15)} ${width(a.model ?? "opus", 6)} ${width(a.effort === undefined || a.effort === "" ? "-" : a.effort, 6)} ` +
+    `${right(pyRepr(a.tokens ?? 0), 8)} tok  lane=${lane === "" ? "-" : lane}${rounds}`
+  );
+}
+
+function roadblockLine(r: Ledger["roadblocks"][number]): string {
+  return `  ${r.ref ?? ""} roadblock ${r.id} ${r.resolved ? "resolved" : "OPEN"} [${r.severity}, needs ${r.needs}] ${r.title}`;
+}
+
+function decisionLine(d: NonNullable<Ledger["decisions"]>[number], said: readonly Message[]): string {
+  let status = d.status === "open" ? (d.blocking === true ? "OPEN, blocking" : "OPEN") : d.status;
+
+  if (d.status === "open" && d.asks === "manager") status += ", with the manager";
+
+  if (d.status === "open" && d.held !== undefined && d.held !== null && d.held !== "") status += `, held by the fleet (${d.held})`;
+
+  if (answeredGrill(d)) status += ", answered, waiting to be recorded";
+  const failed = failedAnswer(d, said);
+
+  if (failed !== undefined) status += `, failed for the user (#${failed.id}: ${failureWords(failed)})`;
+  const answer = d.answer ?? "";
+  const outcome = answer !== "" ? answer : (d.resolution ?? "");
+
+  return `  ${d.ref ?? ""} decision ${d.id} ${status} [${d.kind}] ${d.title ?? "None"}${outcome === "" ? "" : `: ${outcome}`}`;
+}
+
+// The calls auto mode refused that the host has yet to word or drop: no decision, so no decision line lists them.
+function draftLines(ledger: Ledger): string[] {
+  return openDrafts(ledger).map((r) => `  refusal draft ${r.id} OPEN, for the ${ledger.role === "manager" ? "manager" : "coordinator"} [${r.tool}] ${callerOf(ledger, r)}: ${shown(r.call, 120)} (${shown(r.cause, 80)})`);
+}
+
+/** The lines plain `show` prints: the Now line, the live workers, the open roadblocks, decisions and refusal drafts,
+ * and the kept notes, then one line counting what only `--full` lists. `said`, the chat, tells an action the user
+ * answered as failed. */
+export function showShort(ledger: Ledger, said: readonly Message[] = []): string[] {
+  const live = ledger.agents.filter((a) => isLive(a.status));
+  const blocks = ledger.roadblocks.filter((r) => !r.resolved);
+  const open = (ledger.decisions ?? []).filter((d) => d.status === "open");
+  const kept = ledger.kept ?? [];
+  const steps = ledger.roadmap.reduce((n, m) => n + m.steps.length, 0);
+  const done = ledger.roadmap.reduce((n, m) => n + m.steps.filter((s) => s.status === "done").length, 0);
+  const lines = [nowLine(ledger), ...live.map(agentLine), ...blocks.map(roadblockLine), ...open.map((d) => decisionLine(d, said)), ...draftLines(ledger), ...kept.map((k) => `  kept ${k.id}: ${k.text}`)];
+
+  if (lines.length === 1) lines.push("  nothing open: no live worker, open roadblock, open decision or refusal draft");
+
+  const rest = [
+    `${String(done)}/${String(steps)} steps done`,
+    `${String(ledger.agents.length - live.length)} other workers`,
+    `${String((ledger.decisions ?? []).length - open.length)} closed decisions`,
+    `${String((ledger.links ?? []).length)} links`,
+    `${String(ledger.events.length)} events`,
+  ];
+
+  lines.push(`  ${rest.join(", ")}: \`show --full\`; the commands: \`fleet state --help\``);
+
+  return lines;
+}
+
+/** The lines `show --full` prints: the whole ledger. `said`, the chat, tells an action the user answered as failed. */
+export function showLines(ledger: Ledger, said: readonly Message[] = []): string[] {
+  const lines: string[] = [];
+  lines.push(nowLine(ledger));
 
   for (const m of ledger.roadmap) {
     const done = m.steps.filter((s) => s.status === "done").length;
@@ -74,41 +146,13 @@ export function showLines(ledger: Ledger, said: readonly Message[] = []): string
     }
   }
 
-  for (const a of ledger.agents) {
-    const rounds = (a.rounds ?? 1) > 1 ? `  round ${pyRepr(a.rounds ?? 1)}` : "";
-    const lane = a.lane.join(",");
-    lines.push(
-      `  agent ${width(a.id, 16)} ${width(a.status, 8)} ${width(a.skill ?? "none", 15)} ${width(a.model ?? "opus", 6)} ${width(a.effort === undefined || a.effort === "" ? "-" : a.effort, 6)} ` +
-        `${right(pyRepr(a.tokens ?? 0), 8)} tok  lane=${lane === "" ? "-" : lane}${rounds}`,
-    );
-  }
+  for (const a of ledger.agents) lines.push(agentLine(a));
 
-  for (const r of ledger.roadblocks) {
-    lines.push(
-      `  ${r.ref ?? ""} roadblock ${r.id} ${r.resolved ? "resolved" : "OPEN"} [${r.severity}, needs ${r.needs}] ${r.title}`,
-    );
-  }
+  for (const r of ledger.roadblocks) lines.push(roadblockLine(r));
 
-  for (const d of ledger.decisions ?? []) {
-    let status = d.status === "open" ? (d.blocking === true ? "OPEN, blocking" : "OPEN") : d.status;
+  for (const d of ledger.decisions ?? []) lines.push(decisionLine(d, said));
 
-    if (d.status === "open" && d.asks === "manager") status += ", with the manager";
-
-    if (d.status === "open" && d.held !== undefined && d.held !== null && d.held !== "") status += `, held by the fleet (${d.held})`;
-
-    if (answeredGrill(d)) status += ", answered, waiting to be recorded";
-    const failed = failedAnswer(d, said);
-
-    if (failed !== undefined) status += `, failed for the user (#${failed.id}: ${failureWords(failed)})`;
-    const answer = d.answer ?? "";
-    const outcome = answer !== "" ? answer : (d.resolution ?? "");
-    lines.push(`  ${d.ref ?? ""} decision ${d.id} ${status} [${d.kind}] ${d.title ?? "None"}${outcome === "" ? "" : `: ${outcome}`}`);
-  }
-
-  // The calls auto mode refused that the host has yet to word or drop: no decision, so nothing above lists them.
-  for (const r of openDrafts(ledger)) {
-    lines.push(`  refusal draft ${r.id} OPEN, for the ${ledger.role === "manager" ? "manager" : "coordinator"} [${r.tool}] ${callerOf(ledger, r)}: ${shown(r.call, 120)} (${shown(r.cause, 80)})`);
-  }
+  lines.push(...draftLines(ledger));
 
   for (const l of ledger.links ?? []) {
     const kind = linkKind(l.kind, l.url ?? "", l.title);
@@ -119,7 +163,6 @@ export function showLines(ledger: Ledger, said: readonly Message[] = []): string
 
   for (const k of ledger.kept ?? []) lines.push(`  kept ${k.id}: ${k.text}`);
   lines.push(`  ${ledger.events.length} events, updated ${ledger.updated ?? ""}`);
-  lines.push(CHEATSHEET);
 
   return lines;
 }

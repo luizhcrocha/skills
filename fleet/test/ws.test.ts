@@ -636,18 +636,19 @@ describe("idle workspaces are pruned at the end of a fleet", () => {
     for (let i = 1; i <= n; i += 1) state("agent", `a${String(i)}`, "--status", i === n ? "stopped" : "done");
   }
 
-  test("every state command warns past four idle workspaces, naming prune --apply; four, or live ones, do not", () => {
+  test("a state command warns once past four idle workspaces, naming prune --apply; four, or live ones, do not", () => {
     finished(4);
     const four = fleet(["state", dir, "event", "x", "--no-render"], env);
     expect(four.stderr).not.toContain("idle workspaces");
     state("agent", "a5", "--task", "t", "--milestone", "m1");
     ws("add", "a5", "--repo", repo);
     expect(fleet(["state", dir, "event", "x", "--no-render"], env).stderr).not.toContain("idle workspaces");
-    state("agent", "a5", "--status", "stopped");
-    const five = fleet(["state", dir, "event", "x", "--no-render"], env);
+    const five = fleet(["state", dir, "agent", "a5", "--status", "stopped", "--no-render"], env);
     expect(five.stderr).toContain(
       "state: 5 idle workspaces (a1, a2, a3, a4, a5), more than 4: their workers are no longer at work. `fleet ws <dir> prune --apply` removes each whose changes are in the stack",
     );
+    // it informs, so it is said once: the next command leaves it out
+    expect(fleet(["state", dir, "event", "x", "--no-render"], env).stderr).not.toContain("idle workspaces");
     // one handed to a running worker is that worker's, not idle
     state("agent", "b1", "--task", "t", "--milestone", "m1");
     expect(ws("add", "b1", "--reuse", "a5").code).toBe(0);

@@ -86,7 +86,7 @@ describe("a folder holding cloud.json", () => {
   });
 
   test("still reads: `state DIR show` and `chat DIR log`", () => {
-    const shown = fleet(["state", root, "show"], env);
+    const shown = fleet(["state", root, "show", "--full"], env);
     const log = fleet(["chat", root, "log"], env);
 
     expect(shown.code, shown.stderr).toBe(0);

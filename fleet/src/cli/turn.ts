@@ -65,7 +65,7 @@ function fleetAt(machine: Machine, dir: string): Entry | undefined {
 
 /** The fleet a command serves: DIR's ({@link fleetAt}), else the entry of the session among the command's parents,
  * else $FLEET_DIR's when it is no manager's. */
-function fleetOf(machine: Machine, dir: string | undefined): Entry | undefined {
+export function fleetOf(machine: Machine, dir: string | undefined): Entry | undefined {
   if (dir !== undefined) return fleetAt(machine, dir);
   const chain = new Set(ancestry(process.pid));
   const mine = machine.registry.live().find((e) => e.role !== "manager" && chain.has(asNumber(e.raw["pid"]) ?? -1));

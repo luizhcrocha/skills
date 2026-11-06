@@ -25,7 +25,8 @@ import { ledgerText, parseLedger, type Ledger } from "../ledger/model.ts";
 import { cardNumberOf, readsAsAddress } from "../ledger/card-address.ts";
 import { nextStepId, numberedIds } from "../ledger/numbers.ts";
 import { Misnumbered, numberOnMachine, refusedFor, Unreachable } from "../ledger/shared-numbers.ts";
-import { showLines } from "../ledger/show.ts";
+import { acting, informing, sayOnce } from "../ledger/said-once.ts";
+import { CHEATSHEET, showLines, showShort } from "../ledger/show.ts";
 import { lockLedger } from "../ledger/store.ts";
 import { AGENT_STATUSES, ASKS, DRAFT_KIND, SHARED_KINDS, STATUSES, STEP_STATUSES, validate, WORKSPACE_MODES } from "../ledger/validate.ts";
 import { readChat } from "../chat/store.ts";
@@ -34,6 +35,7 @@ import { activeWorkspaces, draftsLeft, idleWorkspaces, leftOpen, overlapping, st
 import { draftLine } from "../ledger/refusal-draft.ts";
 import { readObject } from "../registry.ts";
 import { asksOnMoved, movedAsk } from "./moved-ask.ts";
+import { dueWarning } from "./work.ts";
 import { pruneOutlook } from "./ws.ts";
 import { World, type Machine } from "../world.ts";
 import { opt, parseCommand, usageWidth, type Args, type CommandSpec } from "./args.ts";
@@ -219,7 +221,7 @@ export const STATE_COMMANDS: readonly CommandSpec[] = [
   },
   { name: "keep", positionals: [{ dest: "id" }, { dest: "text", nargs: "?" }], options: [opt.value("--drop", { metavar: "REASON" })] },
   { name: "park", positionals: [{ dest: "reason" }], options: [opt.append("--agent")] },
-  { name: "show", positionals: [], options: [] },
+  { name: "show", positionals: [], options: [opt.flag("--full")] },
 ];
 
 const PROG = "fleet state";
@@ -227,9 +229,11 @@ const PROG = "fleet state";
 const HELP = `usage: ${PROG} DIR COMMAND [ARGS] [--no-render] [-q]
 
 Record fleet events in the dashboard state (DIR/state.json) and re-render, one command per event.
-Commands: ${STATE_COMMANDS.map((c) => c.name).join(", ")}. \`${PROG} DIR show\` prints the ledger and every
-command with the values its flags take. Add --no-render anywhere to write state.json without
-rendering, -q to render without saying so.`;
+Commands: ${STATE_COMMANDS.map((c) => c.name).join(", ")}. \`${PROG} DIR show\` prints what is open and live
+(\`--full\`, the whole ledger). Add --no-render anywhere to write state.json without rendering, -q to
+render without saying so. A warning that asks for an act repeats on every command until it is done;
+one that only informs is said once, again when it changes or 30 minutes on ($FLEET_WARN_AGAIN_S).
+${CHEATSHEET}`;
 
 type Handler = (ledger: Ledger, run: commands.Run) => Effect.Effect<Ledger, Refusal>;
 
@@ -401,25 +405,32 @@ function ledgerCommand(machine: Machine, request: LedgerRequest): Effect.Effect<
     const hooks = cmd === "decision" && commands.hooksRecord(args);
     const untold = seen === undefined || result === undefined || cmd === "init" || hooks ? [] : untoldDrafts(seen);
 
-    const warnings = [
-      cmd === "init" ? undefined : deafWarning(machine, root),
-      seen === undefined ? undefined : staleRows(seen),
-      seen === undefined || cmd === "init" || (cmd === "set" && args.str("now") !== undefined) ? undefined : staleNow(machine, seen),
-      ...(seen === undefined || cmd === "init" ? [] : unrecorded(seen, readChat(root), isMoved(root))),
-      ...(seen === undefined ? [] : untold.map((draft) => `state: you were not told this when it happened. ${draftLine("fleet", root, seen, draft)}`)),
-      seen === undefined || cmd === "init" ? undefined : draftsLeft(machine, seen, root),
-      seen === undefined ? undefined : leftOpen(seen, settingDone),
-      seen === undefined || !running ? undefined : overlapping(seen, args.str("id") ?? ""),
-      seen === undefined || cmd !== "agent" ? undefined : gaveRole(seen, args.str("id") ?? "", args.str("model"), args.str("effort")),
-      ...(seen === undefined ? [] : unpruned(seen, activeWorkspaces(readObject(path)), settingDone)),
-      seen === undefined ? undefined : idleWorkspaces(seen, activeWorkspaces(readObject(path))),
-      ...(settingDone ? pruneOutlook(root, readObject(path) ?? {}) : []),
-      cmd === "init" ? undefined : unreadLine(machine, root),
-      cmd === "init" ? undefined : roomPointer(root),
-      addressLike ? `state: decision ${given}'s id reads as a card's address: #decision/${given} opens it, not card ${String(cardNumberOf(given))}. Recorded; a plainer id leaves that address to its card.` : undefined,
-    ];
+    // A warning that asks for an act repeats until it is done; one that only informs is said once per mark.
+    const workspaces = seen === undefined ? [] : activeWorkspaces(readObject(path));
+    const doneWorkers = seen === undefined ? [] : unpruned(seen, workspaces, false);
+    const work = cmd === "show" ? dueWarning(machine, root) : undefined;
 
-    for (const warning of warnings) if (warning !== undefined) run.warn(warning);
+    const warnings = sayOnce(machine, root, [
+      cmd === "init" ? undefined : acting(deafWarning(machine, root)),
+      seen === undefined ? undefined : acting(staleRows(seen)),
+      seen === undefined || cmd === "init" || (cmd === "set" && args.str("now") !== undefined) ? undefined : informing("now", staleNow(machine, seen), `${seen.now_at ?? "never"} ${seen.now}`),
+      ...(seen === undefined || cmd === "init" ? [] : unrecorded(seen, readChat(root), isMoved(root)).map(acting)),
+      acting(work),
+      ...(seen === undefined ? [] : untold.map((draft) => acting(`state: you were not told this when it happened. ${draftLine("fleet", root, seen, draft)}`))),
+      seen === undefined || cmd === "init" ? undefined : acting(draftsLeft(machine, seen, root)),
+      seen === undefined ? undefined : acting(leftOpen(seen, settingDone)),
+      seen === undefined || !running ? undefined : acting(overlapping(seen, args.str("id") ?? "")),
+      seen === undefined || cmd !== "agent" ? undefined : acting(gaveRole(seen, args.str("id") ?? "", args.str("model"), args.str("effort"))),
+      ...doneWorkers.map((line) => informing("unpruned", line)),
+      ...(seen === undefined || !settingDone ? [] : unpruned(seen, workspaces, true).slice(doneWorkers.length).map(acting)),
+      seen === undefined ? undefined : informing("idle", idleWorkspaces(seen, workspaces)),
+      ...(settingDone ? pruneOutlook(root, readObject(path) ?? {}).map(acting) : []),
+      cmd === "init" ? undefined : informing("news", unreadLine(machine, root)),
+      cmd === "init" ? undefined : informing("room", roomPointer(root)),
+      acting(addressLike ? `state: decision ${given}'s id reads as a card's address: #decision/${given} opens it, not card ${String(cardNumberOf(given))}. Recorded; a plainer id leaves that address to its card.` : undefined),
+    ]);
+
+    for (const warning of warnings) run.warn(warning);
 
     for (const draft of untold) delete draft.told;
 
@@ -428,7 +439,7 @@ function ledgerCommand(machine: Machine, request: LedgerRequest): Effect.Effect<
     };
 
     if (cmd === "show") {
-      if (ledger !== undefined) for (const line of showLines(ledger, readChat(root))) out.out(`${line}\n`);
+      if (ledger !== undefined) for (const line of (args.flag("full") ? showLines : showShort)(ledger, readChat(root))) out.out(`${line}\n`);
 
       return 0;
     }

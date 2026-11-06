@@ -74,8 +74,12 @@ describe("show", () => {
     f = new Fleet().setUp();
   });
 
-  test("show ends with the commands and the values they take", () => {
-    const out = f.ok("show");
+  test("--help ends with the commands and the values they take; show leaves them out", () => {
+    const help = fleet(["state", "--help"], f.env);
+    expect(help.code, help.stderr).toBe(0);
+    const out = help.stdout;
+    expect(f.ok("show")).not.toContain("decision ID");
+    expect(f.ok("show", "--full")).not.toContain("decision ID");
 
     for (const word of [
       "decision ID",
@@ -93,8 +97,38 @@ describe("show", () => {
     }
   });
 
-  test("show lists the milestones by id", () => {
-    const out = f.ok("show");
+  test("show prints the Now line and what is open and live, and counts the rest on its last line", () => {
+    f.ok("step", "s1", "--milestone", "m1", "--title", "Parse", "--status", "done");
+    f.ok("agent", "a1", "--task", "t", "--milestone", "m1");
+    f.ok("agent", "a2", "--task", "t", "--milestone", "m1");
+    f.ok("agent", "a2", "--status", "stopped");
+    f.ok("roadblock", "r1", "--title", "Disk full", "--detail", "d", "--severity", "warning", "--needs", "coordinator");
+    f.ok("roadblock", "r2", "--title", "Token gone", "--detail", "d", "--severity", "warning", "--needs", "coordinator");
+    f.ok("roadblock", "r2", "--resolved");
+    f.ok("decision", "d1", "--kind", "input", "--title", "Schema", "--question", "q", "--why", "w");
+    f.ok("decision", "d2", "--kind", "input", "--title", "Rate limit", "--question", "q", "--why", "w");
+    f.ok("decision", "d2", "--decide", "200", "--resolution", "said in the chat");
+    f.ok("keep", "hunk", "pglite.worker.ts");
+    const events = f.rows("events").length;
+    const lines = f.ok("show").trimEnd().split("\n");
+
+    expect(lines[0]).toBe("p [running] Intake in progress.");
+    expect(lines.filter((l) => l.startsWith("  agent ")).map((l) => l.split(/ +/)[2])).toEqual(["a1"]);
+    expect(lines.some((l) => l.includes("Disk full"))).toBe(true);
+    expect(lines.some((l) => l.includes("Token gone"))).toBe(false);
+    expect(lines.some((l) => l.includes("decision d1 OPEN"))).toBe(true);
+    expect(lines.some((l) => l.includes("decision d2"))).toBe(false);
+    expect(lines).toContain("  kept hunk: pglite.worker.ts");
+    expect(lines.some((l) => l.includes("m1 Usage records"))).toBe(false);
+    expect(lines.at(-1)).toBe(`  1/1 steps done, 1 other workers, 1 closed decisions, 0 links, ${String(events)} events: \`show --full\`; the commands: \`fleet state --help\``);
+  });
+
+  test("show says when nothing is open", () => {
+    expect(f.ok("show").split("\n")[1]).toBe("  nothing open: no live worker, open roadblock, open decision or refusal draft");
+  });
+
+  test("show --full lists the milestones by id", () => {
+    const out = f.ok("show", "--full");
     expect(out).toContain("m1 Usage records (0/0)");
     expect(out).toContain("m2 Verify and ship (0/0)");
   });
@@ -431,7 +465,7 @@ describe("links", () => {
     expect([link["kind"], link["for"], link["done"]]).toEqual(["prototype", "review and mark", undefined]);
     f.ok("link", "map", "--done");
     expect(f.rows("links")[0]?.["done"]).toBeTruthy();
-    expect(f.ok("show")).toContain("[prototype, done] Map, round 14");
+    expect(f.ok("show", "--full")).toContain("[prototype, done] Map, round 14");
     expect(asObject((asArray(f.state()["events"]) ?? []).at(-1))?.["text"]).toContain("Link map (Map, round 14) done");
     f.ok("link", "map", "--reopen");
     link = f.rows("links")[0] ?? {};

@@ -230,7 +230,7 @@ class Session:
         env = {"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "HOME": str(self.home), "TZ": "UTC", "LANG": "C.UTF-8",
                "FLEET_HOME": str(self.registry), "FLEET_DISCOVER": "0", "CLAUDE_CONFIG_DIR": str(self.home / ".claude"),
                "XDG_STATE_HOME": str(self.home / ".local" / "state"), "PYTHONDONTWRITEBYTECODE": "1",
-               "FLEET_NOW": self.clock, "FLEET_MEMINFO": str(self.home / "no-meminfo")}
+               "FLEET_NOW": self.clock, "FLEET_MEMINFO": str(self.home / "no-meminfo"), "FLEET_WARN_AGAIN_S": "0"}
         for key, value in (step.get("env") or {}).items():
             if value is None:
                 env.pop(key, None)
@@ -402,10 +402,23 @@ def _changes_usage_hidden(result):
     return {**result, **{k: result[k].replace(*CHANGES_USAGE) for k in ("stdout", "stderr") if isinstance(result.get(k), str)}}
 
 
+# `state show`'s last line: TypeScript's short form ends on the pointer to `--full` and `--help`; the
+# twin's ledger, on its cheat sheet.
+SHOW_ENDS = ("`show --full`; the commands: `fleet state --help`\n", "--no-render on any command writes state.json without rendering; -q renders without saying so\n")
+
+
+def _show_hidden(result):
+    """A step's result with `state show`'s stdout hidden: TypeScript prints what is open and live (`--full`, the
+    ledger), the frozen Python twin the whole ledger and the cheat sheet."""
+    if isinstance(result, dict) and isinstance(result.get("stdout"), str) and result["stdout"].endswith(SHOW_ENDS):
+        return {**result, "stdout": "(show)\n"}
+    return result
+
+
 # What a trace's header `twin.normalise` may name: a difference the frozen Python twin keeps on purpose (ADR 0003),
 # hidden on both sides before a replay on the twin is compared.
 TWIN_NORMALISERS = {"numbers": _numbers_hidden, "spawn-hint": _spawn_hint_hidden, "card-address": _card_address_hidden,
-                    "gate-usage": _gate_usage_hidden, "changes-usage": _changes_usage_hidden}
+                    "gate-usage": _gate_usage_hidden, "changes-usage": _changes_usage_hidden, "show": _show_hidden}
 
 
 def twin_view(results: list[dict], normalise: list[str]) -> list[dict]:

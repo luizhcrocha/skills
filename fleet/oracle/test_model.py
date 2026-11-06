@@ -1044,15 +1044,29 @@ def check_step(c: dict, step: dict, expected: tuple[int, dict], got: dict, befor
         out = got["stdout"].splitlines()
         shared = ", shared working copy" if new.get("workspace_mode") == "shared" else ""
         need(out[0] == f"{new['project']} [{new['status']}{shared}] {new['now']}", f"show's first line: {out[0]!r}")
-        for x in new["roadmap"]:
-            done = sum(s["status"] == "done" for s in x["steps"])
-            need(f"  {x['id']} {x['title']} ({done}/{len(x['steps'])})" in out, f"show leaves out milestone {x['id']}")
+        # The TypeScript fleet's plain show prints what is open and live (`--full`, the ledger); the twin, the ledger.
+        short = bool(os.environ.get("FLEET_ORACLE_IMPL"))
+        if not short:
+            for x in new["roadmap"]:
+                done = sum(s["status"] == "done" for s in x["steps"])
+                need(f"  {x['id']} {x['title']} ({done}/{len(x['steps'])})" in out, f"show leaves out milestone {x['id']}")
         for a in new["agents"]:
             row = f"  agent {a['id']:<16} {a['status']:<8} {a['skill']:<15} {a['model']:<6} {a.get('effort') or '-':<6} "
-            need(any(line.startswith(row) for line in out), f"show leaves out agent {a['id']}, or its model and effort")
+            shown = any(line.startswith(row) for line in out)
+            if not short or a["status"] in LIVE:
+                need(shown, f"show leaves out agent {a['id']}, or its model and effort")
+            else:
+                need(not shown, f"the short show prints agent {a['id']}, {a['status']}")
         for d in new["decisions"]:
-            need(any(f"{d['ref']} decision {d['id']} " in line for line in out), f"show leaves out decision {d['id']}")
-        need(f"  {len(new['events'])} events, updated {new['updated']}" in out, "show's event count")
+            shown = any(f"{d['ref']} decision {d['id']} " in line for line in out)
+            if not short or d["status"] == "open":
+                need(shown, f"show leaves out decision {d['id']}")
+            else:
+                need(not shown, f"the short show prints decision {d['id']}, {d['status']}")
+        if short:
+            need(out[-1].endswith(f", {len(new['events'])} events: `show --full`; the commands: `fleet state --help`"), f"show's closing line: {out[-1]!r}")
+        else:
+            need(f"  {len(new['events'])} events, updated {new['updated']}" in out, "show's event count")
     if c.get("printed") and got["exit"] == 0:
         need(c["printed"] in got["stdout"], f"expected {c['printed']!r} in stdout: {got['stdout']!r}")
     if step.get("cli") == "state" and got["exit"] == 1:

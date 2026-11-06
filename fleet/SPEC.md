@@ -29,7 +29,7 @@ Contents: [Environment](#environment) · [state.py](#statepy-the-ledger-cli) ·
 [Listening hooks](#listening-hooks) · [The wake](#the-wake) · [The news](#the-news-fleet-news) ·
 [The project room](#the-project-room-fleet-room) · [Projects](#projects-fleet-project) · [1Password locked](#1password-locked-fleet-secrets) ·
 [Workspaces](#workspaces-fleet-ws) · [The preview](#the-preview-fleet-preview) · [The advisor](#the-advisor-fleet-advisor) · [The team](#the-team-fleet-team) ·
-[Waste](#waste-fleet-waste) · [Files by writer](#files-by-writer) ·
+[Waste](#waste-fleet-waste) · [The work page's answers](#the-work-pages-answers-fleet-work) · [Files by writer](#files-by-writer) ·
 [Oracle traces](#oracle-traces) · [The model](#the-model-based-test) · [Open](#open)
 
 ## Environment
@@ -64,6 +64,9 @@ Contents: [Environment](#environment) · [state.py](#statepy-the-ledger-cli) ·
 | `FLEET_REAPER_SNAPSHOT` | `fleet fleets gate hogs --read-only` | a JSON file read as the whole machine snapshot in place of `/proc`; for tests. `gate reap` and a writing `gate hogs` refuse it (exit 75), and a waiter never reads it: a table handed for a test must not reach a kill |
 | `FLEET_GATE_SCOPE_PROBE_MS` | `fleet fleets gate run` | how long the systemd user manager has to answer the probe for a scope (default 5000 ms; the tests set it) |
 | `FLEET_GATE_STOP_GRACE_S` | `fleet fleets gate run` | the seconds a stopped command has between SIGTERM and SIGKILL, and the scope's TimeoutStopSec and its margin in RuntimeMaxSec (default 5 s; the tests set it) |
+| `FLEET_WARN_AGAIN_S` | `fleet state` (TypeScript only) | how long an informational state warning stays unsaid when its mark has not changed (default 1800 s; 0 or less says every warning on every command and keeps no `state-warnings.told`; the oracle sets 0). See [Warnings](#warnings) |
+| `FLEET_WORK_WAIT_S` | `fleet work due` | how long its read through fleet-run may take (default 10 s); `show`'s `work:` warning waits 2 s whatever it says. See [`fleet work`](#the-work-pages-answers-fleet-work) |
+| `TSTACK_FLEET_RUN` | `fleet turn`, `fleet room`, `fleet work`, `show`'s `work:` warning | the program a moved team's programs go to (default `fleet/bin/fleet-run`); the tests point it at a file that is not there or at a stub, so no test reaches the real host |
 | `FLEET_REFUSAL_REMIND_S` | the plugin's hook (`fleet_listen_guard`) | how long the Stop guard stays quiet about a refused chat watch after it said so, before it blocks with the command again (default 1800 s). See [Listening hooks](#listening-hooks) |
 | `FLEET_NUDGE_MIN` | the plugin's hook (`fleet_chat_nudge`) | how long the user's message waits unread, or an answer unrecorded, before the session is told mid-turn (default 3 minutes). See [Listening hooks](#listening-hooks) |
 | `FLEET_CC_SOCKS` | src/wake.ts `deliverTo` (the 1Password notice, the `[hub]` line to a host) | the folder of Claude Code's session sockets, `<pid>.sock` each, that a line to a session is written to (default `$XDG_RUNTIME_DIR/cc-socks`; the tests set a folder of their own, so no test reaches a real session). See [The wake](#the-wake) |
@@ -696,7 +699,16 @@ the link has no `checked`, no `state_since` and no unknown `up` here. The page c
 done, its decision is decided or withdrawn, a `machine` link is down, or a `file` link's file is gone. One
 that serves an open decision or says `for` waits on the user.
 
-**show**: prints the ledger and the command cheat sheet; writes nothing. Pinned lines:
+**show** (`[--full]`): writes nothing but the warnings' files (below). *TypeScript:* plain `show` prints what is
+open and live, so an agent reading it pays for what it can act on and no more: the first line (as below), the
+worker lines of the live rows (running, queued, blocked), the open roadblocks, the open decisions, the open
+refusal drafts and the kept notes, each line as `--full` prints it; `  nothing open: no live worker, open
+roadblock, open decision or refusal draft` when none is; then one line counting what it hides, `  <done>/<steps>
+steps done, <N> other workers, <N> closed decisions, <N> links, <N> events: \`show --full\`; the commands:
+\`fleet state --help\``. `show --full` prints the whole ledger, as below without the cheat sheet, which
+`fleet state --help` ends with. On a moved team `show` also gives the `work:` warning (see
+[Warnings](#warnings)). The frozen Python twin prints the ledger and the cheat sheet (twin normaliser `show`).
+`--full` pinned lines:
 `<project> [<status>(, manager)(, shared working copy)] <now>`; per milestone `  <id> <title> (<done>/<steps>)` and
 per step `    <id:<6> <status:<8> <title>( @agent)`; per worker
 `  agent <id:<16> <status:<8> <skill:<15> <model:<6> <effort or -:<6> <tokens:>8> tok  lane=<a,b or ->( round N)`;
@@ -704,7 +716,7 @@ per roadblock, decision, link, approval (`  approval <id> <active | revoked <whe
 (from <the decision's number> #<message>, by <by>, <added>)`) and kept note a line, with its number where
 it has one (TypeScript only: after the decisions, a line per open refusal draft, `  refusal draft <id> OPEN,
 for the <host> [<tool>] <who>: <call> (<reason>)`); then
-`  <N> events, updated <updated>` and the cheat sheet. The cheat sheet lists each command with
+`  <N> events, updated <updated>` (the twin: and the cheat sheet). The cheat sheet lists each command with
 the values its flags take.
 
 ### The role table
@@ -981,6 +993,26 @@ manual of the old hook's): `state: you were not told this when it happened. [hub
 refused ...`, and the command clears `told` ([Permission grants](#permission-grants), A refusal is a
 draft first). With 5 (`set --status done`), the open drafts are named after the open decisions: `state: the
 fleet is done with D1, refusal draft <id> still open: withdraw each with its reason ...`.
+
+*TypeScript only*, **said once.** A warning that asks for an act repeats on every command until the act is done:
+1, 2, 4, 5, 6, 7, the refusal drafts' lines, the work warning below, the workspaces left on `set --status done`
+with what prune would do, and a decision id read as a card's address. A warning that only informs, which leaves
+nothing wrong when it goes unheeded, is said once per mark (`src/ledger/said-once.ts`): 3 (its mark the Now
+line's stamp and words, so its age alone never says it again), a done worker's workspace not pruned (8, outside
+`set --status done`), more than 4 idle workspaces, 9 and 10 (each its text). It is said again when its mark
+changes, or `FLEET_WARN_AGAIN_S` (1800) seconds after it was last said; a kind that no longer warns is forgotten,
+so the same line coming back is said again. What was said is `DIR/state-warnings.told`, `{kind: {mark, at}}`.
+`FLEET_WARN_AGAIN_S=0` says every warning on every command and keeps no file (the oracle sets it: a replay
+prints each warning as the twin does). An agent paid for each repeated line in its context on every state
+command, though nothing in it had changed.
+
+*TypeScript only*, on `show` of a moved team (its folder holds `cloud.json`): **answers due on the work page**
+(`work: 1 answer due; fleet work due`, `work: N answers due; fleet work due` for any other N), an acting line,
+when the work page holds answers no event of the team names yet, as `fleet work due` reads them (see
+[`fleet work`](#the-work-pages-answers-fleet-work)). The count is read through fleet-run with a 2-second wait
+and kept in `DIR/work-due.cache` (`{at, due}`, `due` null when the read failed) for 60 seconds, which `show` and
+`fleet work due` reuse or refresh. A read that fails or gives no answer in time says nothing: `show` is never
+held by the host, and no other command reads it.
 
 every question is answered and the grilling is still open. Record it now: \`fleet state <dir> decision
 G6 --decide "..." --resolution "grilling finished"\`, or withdraw it with its reason.` (once per round:
@@ -4838,6 +4870,19 @@ page panel that comes later read that record.
     no heartbeat or registry entry names it, its workers are not found. Its `procStart` is /proc's start
     time on Linux; where it differs from what the watch recorded (another platform), the owner is not followed.
 
+## The work page's answers (`fleet work`)
+
+`fleet work due [DIR]` (TypeScript only, read-only but for `DIR/work-due.cache`; pinned by `test/work.test.ts`)
+prints the work page's answers a moved team has not acted on yet, as the coordinator's per-turn read in the
+coordinator skill's PROGRAMS.md ("The work page's answers") returns them: that program, run once through
+fleet-run (`TSTACK_FLEET_RUN`) with `FLEET_DIR` the team's folder, as `fleet turn` reaches the host. Its output
+is JSON, one row per line in a list (`tag`, `wait`, `by`, `note`, `to`, `decision`, `repo`, `title`,
+`workspace`, `worker`, `changedSince`), `[]` when none is due. The team is DIR's (a folder holding
+`cloud.json`), else the fleet the session running the command serves, else `$FLEET_DIR`'s. Refused (exit 1):
+no fleet to name, a folder with no `cloud.json`, a read that fails or takes longer than `FLEET_WORK_WAIT_S`
+(10 s). It writes the count it read to `DIR/work-due.cache`, which `show`'s `work:` warning reuses for a minute
+([Warnings](#warnings)). Usage errors exit 2.
+
 ## Files by writer
 
 | Writer | Files |
@@ -4870,6 +4915,8 @@ page panel that comes later read that record.
 | `fleet ws split` | `DIR/state.json` (`events`, `updated`), `DIR/index.html`; the default workspace's `@` split in two |
 | `fleet preview start` / `stop` / `set` | `DIR/state.json` (`workspaces` with the preview's row on its first start, `preview` by `set`, `events`, `updated`), `DIR/index.html`; `DIR/preview.json` (under `DIR/preview.lock`); `DIR/preview/*.log`; the `<repo>-preview` workspace (made once); a node_modules install in a workspace that has none |
 | `fleet preview include` / `exclude` | `DIR/preview.json` |
+| a `state` command that says an informational warning (TypeScript only, `FLEET_WARN_AGAIN_S` above 0) | `DIR/state-warnings.told` when what was said changed |
+| `state show` of a moved team, `fleet work due` (TypeScript only) | `DIR/work-due.cache` when the count was read anew |
 | `fleet preview`'s updater | `DIR/preview.json` when the merge changed; the preview workspace's @ (rebased, also for each trial of a worker that may conflict) and its files (`update-stale`, a clean merge only); jj's operation log (each worker snapshot that records an edit); `DIR/chat.jsonl` (one `[hub]` line when a worker is left out, the same worker and reason not again within 10 minutes) |
 | `fleet ws prune --apply` of the preview | its directory moved to the trash, its merge commit abandoned, `DIR/preview.json` removed |
 
@@ -4897,7 +4944,8 @@ a header, then one step per line.
 - Environment of every step: `TZ=UTC`, `LANG=C.UTF-8`, a throwaway `HOME`, `CLAUDE_CONFIG_DIR`
   and `XDG_STATE_HOME`, `FLEET_DISCOVER=0`, `FLEET_HOME=$REGISTRY`, and `FLEET_MEMINFO` a file that is not
   there, so the gate counts its budget alone whatever the machine has free (the traces take the whole budget
-  by hand, which a machine with less available than one run's cap and the floor would refuse).
+  by hand, which a machine with less available than one run's cap and the floor would refuse), and
+  `FLEET_WARN_AGAIN_S=0`, so every state warning is said on every command, as the twin says it.
 - While a replay runs, the runner listens on 127.0.0.1:47843 itself (`LISTENING` in run.py), so a
   link there reads as up on any machine; a link on any other port probes the host as it is.
 - The header's `twin` (optional), `{"why": ..., "normalise": [...]}`, says why the frozen Python twin differs
@@ -4906,7 +4954,8 @@ a header, then one step per line.
   difference still fails. `until` (optional, a step number) compares the twin only on the steps before
   it, for a step where TypeScript refuses what the twin takes, after which the two ledgers part. `numbers`
   reads every item number (D12, K3, L1) as its letter and `#`
-  (`render-page`: the machine's numbers).
+  (`render-page`: the machine's numbers); `show` hides `state show`'s stdout (the short form against the twin's
+  ledger and cheat sheet).
 
 A result file has a header line (`{"results": NAME, "trace": 1}`), then one line per step:
 
@@ -4982,7 +5031,9 @@ every step:
   or a (model, effort) pair outside the role table, a third choice of the day asked with no advisor's view; on a
   validation refusal, those plus the reason, and nothing on stdout;
 - `show`'s first line, milestone lines, worker lines, decision lines and event count, against
-  `state.json`;
+  `state.json`; against the TypeScript fleet (`FLEET_ORACLE_IMPL`), the short form: the first line, the live
+  workers' lines and no other worker's, the open decisions' and no closed one's, and the closing line's event
+  count;
 - `inbox`'s messages against the model's open messages; `chat.jsonl` against the model's;
 - with no model: events and chat are append-only; a number once given never changes; a closed
   decision never changes but for its step and milestone; decisions go only from open to decided or

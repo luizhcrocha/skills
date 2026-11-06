@@ -872,7 +872,7 @@ describe("ledger", () => {
     ok("decision", ...SCHEMA, "--blocking");
     ok("decision", "d2", "--kind", "input", "--title", "Rate limit", "--question", "q", "--why", "w");
     ok("decision", "d2", "--decide", "200 per minute", "--resolution", "said in the chat (#3)");
-    const out = fleet(["state", root, "show"], env).stdout;
+    const out = fleet(["state", root, "show", "--full"], env).stdout;
     expect(out).toContain("decision d1 OPEN, blocking [decision] Invoice schema");
     expect(out).toContain("decision d2 decided [input] Rate limit: 200 per minute");
   });
