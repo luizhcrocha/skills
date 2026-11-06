@@ -283,3 +283,30 @@ map = [
   # notes moved to Swift 6.4.
   { from = "skills/write-swift/SKILL.md", to = "skills/engineering/lang-swift/references/modern-swift.md" },
 ]
+
+# nickhealthy's prompt-jump (MIT): the /jump mod, a panel listing the session's
+# prompts that scrolls the transcript to the one picked. Its own plugin in our
+# marketplace (mods/prompt-jump), not part of tstack's: its state is keyed by
+# the plugin name, so inside tstack every atom would need renaming (Luiz,
+# 2026-11-06). The panel's Korean strings are English here, in register.tsx and
+# the test that asserts the title; the Korean comments stay, so an upstream edit
+# conflicts only where it touches a translated line.
+[upstream.prompt-jump]
+url = "https://github.com/nickhealthy/claude-code-prompt-jump.git"
+base = "db1ca4b5767462b8463307626a9ea56e88a1b5eb"
+# Decided, not copied: the upstream's own marketplace (ours lists the plugin),
+# the Korean README, the development diary (Korean) and demo GIF, and the
+# listing icon (a binary the 3-way merge cannot take).
+ignore = [
+  ".gitignore", ".claude-plugin/marketplace.json", ".claude-plugin/icon.png",
+  "README.ko.md", "docs",
+]
+map = [
+  { from = ".claude-plugin/plugin.json", to = "mods/prompt-jump/.claude-plugin/plugin.json" },
+  { from = "hooks", to = "mods/prompt-jump/hooks" },
+  { from = "types", to = "mods/prompt-jump/types" },
+  { from = "tests", to = "mods/prompt-jump/tests" },
+  { from = "LICENSE", to = "mods/prompt-jump/LICENSE" },
+  { from = "README.md", to = "mods/prompt-jump/README.md" },
+  { from = "CHANGELOG.md", to = "mods/prompt-jump/CHANGELOG.md" },
+]

@@ -59,6 +59,7 @@ DEFAULT_REVSET = "master@origin..@"
 SUITES = {
     "test-scripts": (),
     "test-lint-ts": ("_deps-lint",),
+    "test-mods": (),
     "validate": (),
 }
 # Wall-clock limit per suite in seconds: about 3x its normal time under the parallel gate's load.
@@ -66,6 +67,7 @@ DEFAULT_LIMIT = 900
 LIMITS = {
     "test-scripts": 240,
     "test-lint-ts": 120,             # 8-14 s
+    "test-mods": 300,               # 1.2 s (2026-11-06, one mod)
     "validate": 300,
     "_deps-lint": 600,
 }
@@ -75,6 +77,7 @@ LIMITS = {
 MEM_MB = {
     "test-scripts": 500,             # measured 323
     "test-lint-ts": 200,             # 76
+    "test-mods": 500,                # guess, not measured
     "validate": 500,
 }
 RESERVE_MB = 2048
@@ -89,6 +92,7 @@ EVERYTHING = FULL + ("validate",)
 # Path pattern -> suites, and why. The first pattern a path matches decides; `*` crosses `/`.
 # A path no pattern matches runs EVERYTHING.
 SCOPE = (
+    ("mods/*", ("test-mods", "validate"), "a vendored mod: its own plugin tests, and its manifest"),
     ("skills/*", ("test-scripts", "validate"),
      "skill content: test-scripts checks skill links, sources tables, model and effort pairs and the skills' own scripts"),
     ("agents/*", ("test-scripts", "validate"), "the agent definitions: test-scripts checks their model and effort"),

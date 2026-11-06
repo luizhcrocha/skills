@@ -13,6 +13,12 @@
       "source": "./",
       "description": "Luiz Rocha's engineering stack for Claude Code: skills, agents and hooks for rigorous, jj-based work.",
       "category": "development"
+    },
+    {
+      "name": "prompt-jump",
+      "source": "./mods/prompt-jump",
+      "description": "/jump: pick any prompt you typed in this session and scroll the transcript to it. nickhealthy's mod (MIT), synced through upstreams.toml.",
+      "category": "productivity"
     }
   ]
 }

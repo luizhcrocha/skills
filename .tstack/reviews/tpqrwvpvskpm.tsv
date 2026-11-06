@@ -1,0 +1,3 @@
+change@commit	at	reviewer	verdict	note	patch
+tpqrwvpvskpm@1ff91191fa2c211ad2b26265d434d0b9a977c9dc	2026-11-06T10:05:23-05:00	Opus	fix first	1 Important (vendored README linked 3 files the map ignores), 1 nit (test-mods limits unmeasured)	b87322ecce4c03ce
+tpqrwvpvskpm@c04433ef997540a0203921e1e271eabd608cf3ab	2026-11-06T10:05:23-05:00	Opus	land	re-check of the interdiff: README links pinned to upstream db1ca4b, test-mods time measured	5909b4b5446d8d46

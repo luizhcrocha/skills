@@ -33,6 +33,9 @@ def suites(*paths):
 
 
 class Scope(unittest.TestCase):
+    def test_a_mod_runs_its_own_tests_and_validate_even_for_its_readme(self):
+        self.assertEqual(suites("mods/prompt-jump/README.md"), ["test-mods", "validate"])
+
     def test_lint_runs_the_lint_suite_and_the_registry_check(self):
         self.assertEqual(suites("lint/ts/tstack/rules/x.ts"), ["test-scripts", "test-lint-ts"])
 

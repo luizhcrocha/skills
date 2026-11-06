@@ -48,6 +48,11 @@ lint-vendor *args:
 validate:
     claude plugin validate .claude-plugin/plugin.json
     claude plugin validate .claude-plugin/marketplace.json
+    for m in mods/*/; do claude plugin validate "$m" || exit 1; done
+
+# The vendored mods' own `claude plugin test` suites (mods/, synced from upstreams.toml)
+test-mods:
+    for m in mods/*/; do claude plugin test "$m" || exit 1; done
 
 # Load the checkout into the installed plugin: bump the patch version, then update
 reinstall:

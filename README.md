@@ -31,6 +31,9 @@ Trial and error to see what really useful.
 
 4. Bam - you're ready to go.
 
+5. Optional mods, each its own plugin in this marketplace, synced from upstream through `upstreams.toml`:
+   - **[prompt-jump](./mods/prompt-jump/README.md)** (`/plugin install prompt-jump@tstack`): `/jump` lists the prompts you typed this session, newest first, and scrolls the transcript to the one you pick. nickhealthy's mod (MIT), panel text in English.
+
 ## Why These Skills Exist
 
 I built these skills as a way to fix common failure modes I see with Claude Code, Codex, and other coding agents.
