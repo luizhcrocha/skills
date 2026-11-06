@@ -1,4 +1,4 @@
-"""A deploy that never asked: the part of hooks/tstack-hook.py that reads a Bash command for a production deploy and refuses
+"""A deploy that never asked: the part of hooks/fleet-hook.py that reads a Bash command for a production deploy and refuses
 one with no approval (fleet/SPEC.md, "A deploy that never asked").
 
 It is no module of its own. The hook executes this file into its own namespace (`_deploys`), and only for a Bash call in a

@@ -12,6 +12,7 @@ import unittest
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import test_fleet_hook as fleet_tests  # noqa: E402
 import test_tstack_hook as base  # noqa: E402
 
 # The shape of the script auto mode let through on 10-31, cut to its lines that count: the deploy stands in a `sh -c` word
@@ -35,7 +36,7 @@ NOW = "2026-01-05T09:05:00+00:00"
 ASK_ID = "deploy-03900"  # the hook's clock at NOW, 1767603900 seconds, modulo 100000
 
 
-class DeployGateCase(base.GrantCase):
+class DeployGateCase(fleet_tests.GrantCase):
     def setUp(self):
         super().setUp()
         self.project = self.settings.parent.parent
@@ -659,9 +660,9 @@ class FailureTest(DeployGateCase):
 
 
 class PartTest(DeployGateCase):
-    """hooks/tstack-hook-deploy.py, the launcher and its bytecode, on a copy of the plugin's hooks."""
+    """hooks/fleet-hook-deploy.py, the launcher and its bytecode, on a copy of the plugin's hooks."""
 
-    PART = "tstack-hook-deploy.py"
+    PART = "fleet-hook-deploy.py"
 
     def plugin(self, *leave_out):
         hooks = self.tmp / "plugin" / "hooks"
@@ -686,14 +687,14 @@ class PartTest(DeployGateCase):
         self.assertEqual(self.run_hook(hooks, "PreToolUse", alone).stdout, "")
         write = self.payload("PreToolUse", tool_name="Write", tool_input={"command": "wrangler deploy", "file_path": "/x"})
         self.assertEqual(self.run_hook(hooks, "PreToolUse", write).stdout, "")
-        self.assertEqual(self.kept(hooks), ["tstack-hook"])
+        self.assertEqual(self.kept(hooks), ["fleet-hook", "tstack-hook"])
         self.assertEqual(self.bash(hooks, "ls").stdout, "")
-        self.assertEqual(self.kept(hooks), ["tstack-hook", "tstack-hook-deploy"])
+        self.assertEqual(self.kept(hooks), ["fleet-hook", "fleet-hook-deploy", "tstack-hook"])
 
     def test_the_kept_bytecode_is_what_runs_the_part(self):
         hooks = self.plugin()
         self.assertIn("(`wrangler deploy`)", self.bash(hooks, "wrangler deploy").stdout)
-        (pyc,) = (hooks / "__pycache__").glob("tstack-hook-deploy.*")
+        (pyc,) = (hooks / "__pycache__").glob("fleet-hook-deploy.*")
         kept = pyc.stat().st_mtime_ns
         self.assertIn("(`wrangler deploy`)", self.bash(hooks, "wrangler deploy").stdout)
         self.assertEqual(pyc.stat().st_mtime_ns, kept)
@@ -701,7 +702,7 @@ class PartTest(DeployGateCase):
     def test_a_cut_short_bytecode_runs_from_source_and_is_rewritten(self):
         hooks = self.plugin()
         self.bash(hooks, "ls")
-        (pyc,) = (hooks / "__pycache__").glob("tstack-hook-deploy.*")
+        (pyc,) = (hooks / "__pycache__").glob("fleet-hook-deploy.*")
         pyc.write_bytes(pyc.read_bytes()[:40])  # its header holds, its code is cut: marshal's EOFError
         for _ in range(2):
             r = self.bash(hooks, "wrangler deploy")

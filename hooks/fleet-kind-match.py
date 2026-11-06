@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""The kind of a call, for a grant that lasts 24 hours. Stdlib only, run as `python3 -I hooks/tstack-kind-match.py`.
+"""The kind of a call, for a grant that lasts 24 hours. Stdlib only, run as `python3 -I hooks/fleet-kind-match.py`.
 
 Stdin: {command, cwd, env}. Stdout, one JSON line, exit 0:
   {kind: {action, repo: {main, origin|null}, task, sha256, text[, oneoff: true]}, workspace, scripts: [{path, sha256}]} or {refused: reason}.
@@ -27,7 +27,7 @@ file, no symlink on the way, whose bytes are the bytes at that path in `@-`, wit
 and a kind's fields do not depend on the workspace, so one kind holds from every workspace of its repo.
 
 Cards go to the cloud and the owner reads them, so a script has no kind when its text is over 8 KiB, is not UTF-8, holds a
-character the page would not show as itself (rule-card.ts's INVISIBLE), or reads as a credential (tstack-hook.py's
+character the page would not show as itself (rule-card.ts's INVISIBLE), or reads as a credential (fleet-hook.py's
 SECRET_IN_CALL and OP_REFERENCE, kept equal by test_kind_match, read after NAME=$UPPER_CASE loses its NAME=). Such a call gets a plain card.
 
 A use of a live committed kind needs the same action, repo, task and sha256; a one-off's use names its copy, whose bytes must hash

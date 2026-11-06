@@ -1,5 +1,5 @@
 /**
- * The kind of a call, read by hooks/tstack-kind-match.py (`python3 -I`; its head holds the contract and the threat model). The host runs the same matcher again before it grants anything, so this reading only words the card and carries the script's text to the owner (`refusal.kind.text`).
+ * The kind of a call, read by hooks/fleet-kind-match.py (`python3 -I`; its head holds the contract and the threat model). The host runs the same matcher again before it grants anything, so this reading only words the card and carries the script's text to the owner (`refusal.kind.text`).
  * What the matcher refuses, or a matcher that fails, is no kind, which hides the option; `why` says so to the opener.
  * `root` goes as CLAUDE_PROJECT_DIR, as the host's answer sends it, and it is the one workspace a one-off script may sit in.
  */
@@ -14,7 +14,7 @@ import type { Machine } from "../world.ts";
 import { callKindOf, type CallKind } from "./allow-kind.ts";
 
 
-const MATCHER = join(resolve(SKILL_DIR, "..", "..", ".."), "hooks", "tstack-kind-match.py");
+const MATCHER = join(resolve(SKILL_DIR, "..", "..", ".."), "hooks", "fleet-kind-match.py");
 
 const MATCH_MS = 10_000;
 

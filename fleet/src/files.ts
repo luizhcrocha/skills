@@ -30,7 +30,7 @@ export const FLEET_BIN = join(resolve(SKILL_DIR, "..", "..", ".."), "fleet", "bi
  * Every path the fleet CLI has on this machine, resolved: this plugin's ({@link FLEET_BIN}), and the ones
  * fleet/bin/fleet hands over to (the checkouts in $CLAUDE_CODE_PLUGIN_DIRS, the marketplace clone, each cached
  * version). A session keeps the plugin folder it started with, and the CLI prints the newest one's path, so a session
- * names more than one. The hook's `_fleet_clis` (hooks/tstack-hook-monitor.py) is the same set.
+ * names more than one. The hook's `_fleet_clis` (hooks/fleet-hook-monitor.py) is the same set.
  */
 export function fleetClis(env: (name: string) => string | undefined): ReadonlySet<string> {
   const home = env("HOME") ?? "";

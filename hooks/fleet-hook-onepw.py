@@ -1,4 +1,4 @@
-"""1Password locked: the part of hooks/tstack-hook.py that reads a command for its use of 1Password, and detects, holds
+"""1Password locked: the part of hooks/fleet-hook.py that reads a command for its use of 1Password, and detects, holds
 and clears a lock (fleet/SPEC.md, "1Password locked").
 
 It is no module of its own. The hook executes this file into its own namespace (`_onepw`), and only for a Bash call

@@ -2,7 +2,7 @@
  * What a permission offers beyond its one call, in a module of its own so the page reads the same words and the same
  * rule as the CLI.
  *
- * Allow for 24 hours (allow-24h) grants the call and the kind hooks/tstack-kind-match.py read from it, one task script's text, for 24 hours from the owner's
+ * Allow for 24 hours (allow-24h) grants the call and the kind hooks/fleet-kind-match.py read from it, one task script's text, for 24 hours from the owner's
  * tap; the end time comes from that tap, so no card can name it. Each later call of the kind goes through `fleet grant
  * use` (cli/grant.ts).
  *
@@ -15,7 +15,7 @@ import { asObject, asString, type Json } from "../json.ts";
 export { ALLOW_24H, ALLOW_KIND, offersKind } from "./allow-option.ts";
 
 /**
- * A kind as hooks/tstack-kind-match.py derives it: one task script's text, in a repo, across its workspaces. `text` is what the owner reads on a card, absent where a row needs only the hash (kinds.json).
+ * A kind as hooks/fleet-kind-match.py derives it: one task script's text, in a repo, across its workspaces. `text` is what the owner reads on a card, absent where a row needs only the hash (kinds.json).
  * With `oneoff` the script is no committed task but a file under a root the caller trusts: `action` is its name without its run number (`deploy-window`) and `task` its path under that root.
  */
 export type CallKind = {

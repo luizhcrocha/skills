@@ -1823,7 +1823,7 @@ other path is 404 `the preview server serves only /f/<fleet>/preview/; the pages
 
 ## Permission grants
 
-**Allow for 24 hours** (`allow-24h`). A kind is a committed task script, `tasks/grant/deploy-*.sh` or `push-*.sh`, run from any workspace of its repo. The card offers the option only when its one call is exactly `bash <absolute workspace>/tasks/grant/<name>.sh`, with at most one 40-hex argument, that `hooks/tstack-kind-match.py` reads as `{action, repo: {main, origin}, task, sha256, text}`; its head holds the contract and the threat model. No shell is parsed. The script's bytes on disk must be its bytes in `@-`, and its text, which the card carries, at most 8 KiB of UTF-8 with no invisible character and nothing that reads as a credential; else the card is plain. The page shows `text` under the option, and hides the option and says why when `text` is absent or does not hash to `sha256`. A use needs the same action, repo, task and sha256, so a changed script is a new card. A later call goes through `fleet grant use DIR --call CALL` (the deploy gate's refusal proposes it for a deploy; a push kind gets no proposal, and its call still waits for the landing turn), which asks the host for a one-time grant; `fleet grants DIR` lists kinds and uses. `--once` holds a card to one call, for a one-off or an irreversible step. A one-off script gets a kind too: exactly `bash <absolute path>/<deploy-|push-name>.sh`, with at most one 40-hex argument, a regular file with no symlink on the way, under the fleet's state dir or the card's `--root` workspace, committed or not. The kind says `oneoff: true`, its `action` is the name without a trailing `-<digits>` run number (`deploy-window-4` is `deploy-window`), and its `task` is the path under that root. Its text uses no `$0`, `${0`, `${@:0`, `${*:0`, `BASH_ARGV0` or `BASH_SOURCE`, as the host runs a copy of it in a folder an agent can write; the refusal says to write absolute paths instead. The deploy gate's refusal proposes `fleet grant use` of `bash <copy>` for a call of a live kind's `copy`, and for a one-off with that kind's `action` and `sha256`; a one-off of other bytes goes to a card. A Bash card with no kind whose call or `--then` names deploy or push, as a word or in a script's name, says on stderr which rule kept the option off, under `--once` too; any other card says nothing. "Allow once and save this kind" is on no new card; an answer on a card that holds the option stays valid, and `--decide allow-kind` is refused on one that does not.
+**Allow for 24 hours** (`allow-24h`). A kind is a committed task script, `tasks/grant/deploy-*.sh` or `push-*.sh`, run from any workspace of its repo. The card offers the option only when its one call is exactly `bash <absolute workspace>/tasks/grant/<name>.sh`, with at most one 40-hex argument, that `hooks/fleet-kind-match.py` reads as `{action, repo: {main, origin}, task, sha256, text}`; its head holds the contract and the threat model. No shell is parsed. The script's bytes on disk must be its bytes in `@-`, and its text, which the card carries, at most 8 KiB of UTF-8 with no invisible character and nothing that reads as a credential; else the card is plain. The page shows `text` under the option, and hides the option and says why when `text` is absent or does not hash to `sha256`. A use needs the same action, repo, task and sha256, so a changed script is a new card. A later call goes through `fleet grant use DIR --call CALL` (the deploy gate's refusal proposes it for a deploy; a push kind gets no proposal, and its call still waits for the landing turn), which asks the host for a one-time grant; `fleet grants DIR` lists kinds and uses. `--once` holds a card to one call, for a one-off or an irreversible step. A one-off script gets a kind too: exactly `bash <absolute path>/<deploy-|push-name>.sh`, with at most one 40-hex argument, a regular file with no symlink on the way, under the fleet's state dir or the card's `--root` workspace, committed or not. The kind says `oneoff: true`, its `action` is the name without a trailing `-<digits>` run number (`deploy-window-4` is `deploy-window`), and its `task` is the path under that root. Its text uses no `$0`, `${0`, `${@:0`, `${*:0`, `BASH_ARGV0` or `BASH_SOURCE`, as the host runs a copy of it in a folder an agent can write; the refusal says to write absolute paths instead. The deploy gate's refusal proposes `fleet grant use` of `bash <copy>` for a call of a live kind's `copy`, and for a one-off with that kind's `action` and `sha256`; a one-off of other bytes goes to a card. A Bash card with no kind whose call or `--then` names deploy or push, as a word or in a script's name, says on stderr which rule kept the option off, under `--once` too; any other card says nothing. "Allow once and save this kind" is on no new card; an answer on a card that holds the option stays valid, and `--decide allow-kind` is refused on one that does not.
 
 TypeScript only: `state.py` has no `permission` kind, no trace has one, and the oracle's usage texts
 stay Python's (below). Auto mode refuses a tool call; the plugin's hook records it as a **refusal draft**
@@ -2145,7 +2145,7 @@ run of each exact command shown; the next run of the same command asks again.
   ends a denial. A used, lapsed or withdrawn card denies nothing, nor does a yes the owner's own rule already holds,
   where the host writes no grant. `cd x && <call>` is no match, and stays a matter of discipline. A ledger that cannot
   be read or is past 32 MiB denies nothing; past a hit, a failure denies.
-- **A deploy that never asked** (the hook's `fleet_deploy_gate`; its code is `hooks/tstack-hook-deploy.py`, which the hook
+- **A deploy that never asked** (the hook's `fleet_deploy_gate`; its code is `hooks/fleet-hook-deploy.py`, which the hook
   executes into itself for every Bash call of a fleet's session and for nothing else, as a script's text is what names a
   deploy; a part that does not load is logged and refuses nothing). In a session of a fleet, coordinator or worker, moved or
   not, the hook refuses a Bash call that reaches a production deploy (`DEPLOYS` in that file is the whole list) and prints
@@ -2719,7 +2719,7 @@ run of each exact command shown; the next run of the same command asks again.
 ## Monitor only watches
 
 The plugin's hook, `fleet_monitor_watch` (PreToolUse, matcher `Bash|Monitor`, the handler before
-`fleet_grant_alone`); its code is `hooks/tstack-hook-monitor.py`, which the hook executes into itself only
+`fleet_grant_alone`); its code is `hooks/fleet-hook-monitor.py`, which the hook executes into itself only
 for a Monitor call in a fleet's session, as it does the 1Password part. No ledger field, no CLI command, no
 trace: the twin has nothing of it.
 
@@ -3542,7 +3542,7 @@ that is over holds nothing; it stays in the file until it is pruned
 Two handlers of the plugin's dispatcher (`hooks/tstack-hook.py`), on Bash only: `onepw_watch` on PostToolUse
 and PostToolUseFailure (detect, clear), `onepw_hold` on PreToolUse (hold; it runs after the land turn's gate
 and the suite gate, and before the grant's). Their code is a file beside the hook,
-`hooks/tstack-hook-onepw.py`, which the hook executes into itself only for a call that can matter
+`hooks/fleet-hook-onepw.py`, which the hook executes into itself only for a call that can matter
 ([Cost](#cost)). Every write of the state runs under `onepw.lock` and is atomic (`_onepw_update`), and
 re-checks under the lock what it read before it. The hook never allows a call, and any error of its own
 lets the call through. A use that finds the state broken sets it aside, then acts as with no file.
@@ -3855,7 +3855,7 @@ ms on every hook call, of every event and every tool: 58.6 ms to 67.7 ms. Most o
 work: the hook is a script, compiled from source on each call, and 770 more lines took its compile from
 22.6 ms to 30.8 ms.
 
-So the code is a file of its own, `hooks/tstack-hook-onepw.py`, which the hook executes into its own
+So the code is a file of its own, `hooks/fleet-hook-onepw.py`, which the hook executes into its own
 namespace (`_onepw`) only for a call that can matter:
 
 | The call | What it pays for the feature |

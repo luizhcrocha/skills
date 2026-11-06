@@ -10,7 +10,7 @@ import unittest
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
-MATCHER = ROOT / "hooks" / "tstack-kind-match.py"
+MATCHER = ROOT / "hooks" / "fleet-kind-match.py"
 COMMIT = "0123456789abcdef0123456789abcdef01234567"
 SCRIPT = b"#!/bin/sh\nwrangler deploy --force\n"
 
@@ -351,7 +351,7 @@ class ScriptTextCase(KindMatchCase):
             return re.sub(r"\s+", " ", found.group(1))
         for name in ("SECRET_IN_CALL", "OP_REFERENCE"):
             with self.subTest(name=name):
-                self.assertEqual(pattern(MATCHER, name), pattern(ROOT / "hooks" / "tstack-hook.py", name))
+                self.assertEqual(pattern(MATCHER, name), pattern(ROOT / "hooks" / "fleet-hook.py", name))
 
 
 class OneOffCase(KindMatchCase):
