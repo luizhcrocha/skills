@@ -32,7 +32,7 @@ import { workspaceRoot } from "../ws/jj.ts";
 import { World } from "../world.ts";
 import { exitOf } from "./exit.ts";
 
-const USAGE = "usage: fleet brief DIR WORKER";
+export const USAGE = "usage: fleet brief DIR WORKER";
 
 /** The plugin's root: the coordinator skill is `skills/productivity/coordinator` under it. */
 const PLUGIN_DIR = resolve(SKILL_DIR, "..", "..", "..");

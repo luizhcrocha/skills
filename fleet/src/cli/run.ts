@@ -18,6 +18,7 @@ import type { Entry } from "../registry.ts";
 import { World, worldLayer, type Machine } from "../world.ts";
 import { briefCli } from "./brief.ts";
 import { chatCli } from "./chat.ts";
+import { COMMAND_NAMES, fleetCommands, summaryOf } from "./commands.ts";
 import { fleetsCli } from "./fleets.ts";
 import { newsCli } from "./news.ts";
 import { onepwCli } from "./onepw.ts";
@@ -27,6 +28,7 @@ import { previewServerCli, SERVER_VERBS } from "./preview-serve.ts";
 import { grantCli, grantsWith } from "./grant.ts";
 import { projectCli } from "./project.ts";
 import { roomCli } from "./room.ts";
+import { searchCli } from "./search.ts";
 import { stateCli } from "./state.ts";
 import { tabCli } from "./tab.ts";
 import { teamCli } from "./team.ts";
@@ -35,7 +37,20 @@ import { TRASH_COMMANDS, wsCli } from "./ws.ts";
 import { wasteCli } from "./waste.ts";
 import { workCli } from "./work.ts";
 
-const USAGE = "usage: fleet {version,ls,state,chat,fleets,news,secrets,ws,preview,brief,turn,advisor,team,tab,waste,work,serve,render,usage,spend,served,room,project,grant,grants} ...\n";
+const USAGE = `usage: fleet {${COMMAND_NAMES.join(",")}} ...\n`;
+
+/** The line that points at `fleet search`, said once: in `fleet --help` and first in an unknown command's error. */
+const FIND = "`fleet search <words>` finds a command";
+
+/** `fleet --help`: the usage, each command's line, and how to find one. */
+function topHelp(): Effect.Effect<string, never, World> {
+  return Effect.gen(function* () {
+    const commands = yield* fleetCommands();
+    const width = Math.max(...commands.map((c) => c.name.length));
+
+    return `${USAGE}\n${commands.map((c) => `  ${c.name.padEnd(width)}  ${summaryOf(c)}\n`).join("")}\n${FIND}; \`fleet COMMAND --help\` details one.\n`;
+  });
+}
 
 /** This copy of tstack: its version (from the plugin's manifest) and where it is, for `fleet version`. */
 function versionLine(): string {
@@ -103,7 +118,27 @@ function dispatch(argv: readonly string[]): Effect.Effect<number, never, Out | W
       return 0;
     }
 
+    if (cli === "-h" || cli === "--help") {
+      out.out(yield* topHelp());
+
+      return 0;
+    }
+
+    // `fleet COMMAND --help`: the help the command table holds, the same for every command, including one
+    // whose own parser reads `--help` as an argument.
+    if (rest.length === 1 && (rest[0] === "-h" || rest[0] === "--help")) {
+      const command = (yield* fleetCommands()).find((c) => c.name === cli);
+
+      if (command !== undefined) {
+        out.out(`${command.help}\n`);
+
+        return 0;
+      }
+    }
+
     if (cli === "ls" || cli === "list") return yield* fleetsCli(["list", ...rest]);
+
+    if (cli === "search") return yield* searchCli(rest);
 
     if (cli === "preview" && SERVER_VERBS.has(rest[0] ?? "")) return yield* previewServerCli(rest);
     const resolved = withFleetDir(argv, machine);
@@ -165,7 +200,9 @@ function route(argv: readonly string[]): Effect.Effect<number, never, Out | Worl
   return Effect.gen(function* () {
     const out = yield* Out;
 
-    out.err(`${USAGE}fleet: error: the first argument is state, chat, fleets, news, secrets, ws, preview, brief, turn, advisor, team, tab, waste, work, serve, render, usage, spend, served, room, project, grant or grants\n`);
+    const named = COMMAND_NAMES.filter((n) => n !== "version" && n !== "ls");
+
+    out.err(`fleet: no command ${cli === undefined ? "given" : `'${cli}'`}: ${FIND}\n${USAGE}fleet: error: the first argument is ${named.slice(0, -1).join(", ")} or ${named.at(-1) ?? ""}\n`);
 
     return 2;
   });

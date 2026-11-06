@@ -24,6 +24,9 @@ import { failedRun, fleetOf, fleetRunBin } from "./turn.ts";
 
 const USAGE = "usage: fleet work due [DIR]";
 
+/** What `fleet work --help` prints. */
+export const HELP = `${USAGE}\n\nThe work page's answers no event of the team names yet, as the program in the coordinator skill's PROGRAMS.md\n("The work page's answers") returns them; [] when none is due.`;
+
 /** How long the read may take, by default ($FLEET_WORK_WAIT_S). */
 const WAIT_S = 10;
 
@@ -134,7 +137,7 @@ function run(machine: Machine, argv: readonly string[]): Effect.Effect<number, R
     const [verb, dir, ...more] = argv;
 
     if (verb === "-h" || verb === "--help") {
-      out.out(`${USAGE}\n\nThe work page's answers no event of the team names yet, as the program in the coordinator skill's PROGRAMS.md\n("The work page's answers") returns them; [] when none is due.\n`);
+      out.out(`${HELP}\n`);
 
       return 0;
     }

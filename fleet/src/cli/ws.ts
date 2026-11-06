@@ -93,7 +93,7 @@ import { readObject } from "../registry.ts";
 import { World, type Machine } from "../world.ts";
 import { exitOf } from "./exit.ts";
 
-const USAGE =
+export const USAGE =
   "usage: fleet ws DIR add NAME [-r BASE] [--agent ID] [--repo PATH] [--no-preview] [--hook-timeout S] | add WORKER --reuse WORKSPACE|WORKER [-r BASE] [--no-preview] [--hook-timeout S] | " +
   "split WORKER -m MESSAGE [--repo PATH] | list | prune [--apply | --dry-run] [--hook-timeout S] | trash NAME --card ID; " +
   "fleet ws trash [--adopt ENTRY --repo REPO [--name NAME]] | restore ENTRY | gc [--older-than DAYS] [--dry-run]";

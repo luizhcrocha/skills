@@ -20,7 +20,7 @@ import { exitOf, printUsage } from "./exit.ts";
 
 const USAGE = "usage: fleet waste DIR [WORKER] [--json]\n";
 
-const HELP = `${USAGE}
+export const HELP = `${USAGE}
 What each worker with a task id wasted, from its transcript: calls, peak context, calls past 150k and
 their share of cache read + input, cache hit ratio and misses, re-read files, poll-like Bash waits,
 runs of 3+ probe or screenshot calls, and the calls before the first write. Worst first. WORKER (a

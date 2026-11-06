@@ -40,7 +40,7 @@ const COMMANDS: readonly CommandSpec[] = [
   { name: "list", positionals: [], options: [] },
 ];
 
-const HELP = `usage: ${PROG} {new,join,manage,archive,list} ...
+export const HELP = `usage: ${PROG} {new,join,manage,archive,list} ...
 
 The cloud's projects, through this machine's fleet-host (FLEET_RUN_URL, else http://127.0.0.1:7633).
 

@@ -27,7 +27,7 @@ const PROG = "fleet secrets";
 
 const UNLOCKED: CommandSpec = { name: "unlocked", positionals: [], options: [opt.value("--note", { metavar: "TEXT" })] };
 
-const HELP = `usage: ${PROG} [-h] [unlocked [--note TEXT]]
+export const HELP = `usage: ${PROG} [-h] [unlocked [--note TEXT]]
 
 The machine's 1Password lock: a command of a fleet that needs 1Password failed because the app is locked, the
 user is asked once (the card "Unlock 1Password" on every fleet's page), and the plugin's hook holds every

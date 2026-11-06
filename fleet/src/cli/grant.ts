@@ -49,11 +49,11 @@ const USE: CommandSpec = { name: "use", positionals: [{ dest: "dir" }], options:
 
 const LIST: CommandSpec = { name: "grants", positionals: [{ dest: "dir" }], options: [] };
 
-const GRANT_HELP = `usage: fleet grant use DIR --call CALL [--root ROOT] [--agent-id ID]
+export const GRANT_HELP = `usage: fleet grant use DIR --call CALL [--root ROOT] [--agent-id ID]
 
 Ask this machine's fleet-host for today's one-time grant of CALL, under a kind the owner allowed for 24 hours. It issues the exact rule or refuses; no host, no grant. Then run CALL, unchanged, once, as a Bash call of its own.`;
 
-const LIST_HELP = `usage: fleet grants DIR
+export const LIST_HELP = `usage: fleet grants DIR
 
 Every kind granted on this machine, what holds it now, and each use. A kind is of a repo, not of a fleet, so DIR names who asks and filters nothing.`;
 

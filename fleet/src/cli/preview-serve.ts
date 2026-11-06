@@ -24,7 +24,7 @@ import { exitOf } from "./exit.ts";
 /** The verbs of `fleet preview` that take no fleet's directory. */
 export const SERVER_VERBS: ReadonlySet<string> = new Set(["serve", "share", "unshare", "shares"]);
 
-const USAGE = "usage: fleet preview serve [--port N] [--https PORT] [--share-port N] | share FLEET [WORKER] [--for 24h] [--password-file F] | unshare FLEET [WORKER] | shares";
+export const USAGE = "usage: fleet preview serve [--port N] [--https PORT] [--share-port N] | share FLEET [WORKER] [--for 24h] [--password-file F] | unshare FLEET [WORKER] | shares";
 
 function refuse(reason: string): Effect.Effect<never, Refusal> {
   return Effect.fail(new Refusal({ speaker: "preview", reason }));

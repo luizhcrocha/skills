@@ -30,7 +30,7 @@ export const NEWS_COMMANDS: readonly CommandSpec[] = [
   { name: "list", positionals: [], options: [] },
 ];
 
-const HELP = `usage: ${PROG} [-h] {post,read,list} ...
+export const HELP = `usage: ${PROG} [-h] {post,read,list} ...
 
 The machine's news: what a session tells the fleets that wakes nobody (release notes, FYIs, rules).
 

@@ -38,7 +38,7 @@ import { movedTeam, readObject, type Entry } from "../registry.ts";
 import { World, type Machine } from "../world.ts";
 import { exitOf } from "./exit.ts";
 
-const USAGE = "usage: fleet turn [DIR]";
+export const USAGE = "usage: fleet turn [DIR]";
 
 function refuse(reason: string): Effect.Effect<never, Refusal> {
   return Effect.fail(new Refusal({ speaker: "turn", reason }));

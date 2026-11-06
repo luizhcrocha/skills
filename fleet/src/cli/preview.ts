@@ -61,7 +61,7 @@ import { World, type Machine } from "../world.ts";
 import { exitOf } from "./exit.ts";
 import { belongs, event, load, save } from "./ws.ts";
 
-const USAGE =
+export const USAGE =
   "usage: fleet preview DIR start [--cmd C] [--port N] [--setup C] [--repo PATH] [--root] [--stack REVSET] | start --per-worker WORKER [--cmd C] [--port N] [--setup C] [--root] | " +
   "status | include WORKER | exclude WORKER | stop [--per-worker WORKER | --all] | set [--cmd C] [--setup C] [--root | --no-root] [--stack REVSET | --no-stack]";
 

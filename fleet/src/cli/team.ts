@@ -32,7 +32,7 @@ import { awaitMoved, joinProject, JOIN_WAIT_MS, repoAt, type Repo } from "./proj
 
 const USAGE = "usage: fleet team [-h] {start,stop,attach,list,add} [--force] [--trust] [NAME ...|all]\n";
 
-const HELP = `${USAGE}
+export const HELP = `${USAGE}
 A repo's standing agents (.fleet/agents/<name>.json) as tabs of one rex session, named after the repo's
 folder or .fleet/team.json's "session". Run it in the repo or below it.
     start [NAME ...] [--trust]

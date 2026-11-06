@@ -4887,6 +4887,32 @@ no fleet to name, a folder with no `cloud.json`, a read that fails or takes long
 (10 s). It writes the count it read to `DIR/work-due.cache`, which `show`'s `work:` warning reuses for a minute
 ([Warnings](#warnings)). Usage errors exit 2.
 
+## Finding a command (`fleet search`)
+
+TypeScript only; pinned by `test/search.test.ts`. One table, `src/cli/commands.ts`, holds every top-level
+command (in usage order, `search` last) and its help: the text the command's own module prints, imported, never
+copied (`room`'s is read by running `fleet room --help`), plus a one-line `about` for a command whose help is a
+bare usage line. The top-level usage, the unknown-command error, `fleet --help`, `fleet COMMAND --help` and the
+search all read it.
+
+- `fleet COMMAND -h|--help` (that one argument) prints the table's help for COMMAND, exit 0, for every command,
+  including one whose parser reads `--help` as an argument (`turn`, `serve`, `spend`, `served`).
+- `fleet --help` (or `-h`) prints the usage, one line per command (its `about`, else its help's first sentence,
+  cut at its first clause and to 100 characters), and once: `` `fleet search <words>` finds a command; `fleet
+  COMMAND --help` details one. ``
+- An unknown command (or none) exits 2, its stderr's first line `` fleet: no command 'X': `fleet search
+  <words>` finds a command `` (`no command given` for none), then the usage and `the first argument is …`.
+- `fleet search WORDS...` indexes one entry per command (its usage lines and summary) and one per subcommand
+  its help names (the `{a,b}` group or the `|`/`;` alternatives of a usage line, or a `Commands:` list), from the
+  subcommand's own indented help line when there is one (its arguments, options and the text after a 3-space
+  gap or on deeper lines, cut to one line), else from its usage alternative with the command's summary. A
+  query word (lowercased, stop words such as `the`, `a`, `how` dropped) fits a word that is the same, that it
+  begins (4 letters or more), or that it is plus a 1- or 2-letter suffix (`workspaces` fits `workspace`). An
+  entry scores 3 per word that fits its name (the command or the subcommand), else 1 per word that fits its
+  summary or options. The best 5, ties in table order, print as `fleet COMMAND [DIR] SUB ARGS — SUMMARY` and
+  under each `  fleet COMMAND --help`, exit 0. No hit: `no fleet command matches 'WORDS'; the commands: …`
+  (every top-level name on one line), exit 1. No words that count: a usage error, exit 2.
+
 ## Files by writer
 
 | Writer | Files |

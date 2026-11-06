@@ -29,7 +29,7 @@ import { exitOf, printUsage } from "./exit.ts";
 
 const USAGE = "usage: fleet tab [-h] {run,wait,read,close} ...\n";
 
-const HELP = `${USAGE}
+export const HELP = `${USAGE}
 A long command in a Rex tab beside yours, where the user sees it: a dev server, a watcher, a deploy, a
 backfill, any run longer than about a minute. Your tab is the one REX_SESSION and REX_BLOCK name; outside
 Rex every command refuses (exit 1), and you run the command as a background Bash call instead.

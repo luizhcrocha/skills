@@ -158,34 +158,13 @@ A moved team (its folder holds `cloud.json`) skips this section and records thro
 
 ## Fleets and the manager
 
-`fleet serve` records the fleet in a registry on this machine and forgets it on `--stop`. A fleet is known there by a name made from its project (`acme-billing`; a second fleet of the same project is `acme-billing-2`), a team moved to the cloud by the name its `cloud.json` gives. `fleet fleets`:
-
-| Command | What it does |
-| :-- | :-- |
-| `list` | every fleet being served: its name, role, status, session, page, directory and what it is doing, then its queued, running and blocked agents (each with its first lane and `+N`), its links, its open decisions and what it spent |
-| `show FLEET` | what one fleet is doing, from its ledger: its now-line, live workers and their last reports, every lane in flight (`lane <glob>  <agents>`, one per line), open decisions and roadblocks, the latest events |
-| `manager` | how to reach the manager (its session, its page, `standing.md`); exits 1 when there is none |
-| `decision FLEET ID` | what a fleet asks, in full, with where its evidence and its page are |
-| `name DIR SESSION` | gives the fleet its one name, the session's (`ListAgents` gives it): the registry, the manager's page and chat, and `SendMessage` all use it. Run it again after the session is renamed, and call the fleet by that name in what you write |
+`fleet serve` records the fleet in a registry on this machine and forgets it on `--stop`. A fleet is known there by a name made from its project (`acme-billing`; a second fleet of the same project is `acme-billing-2`), a team moved to the cloud by the name its `cloud.json` gives. `fleet fleets` reads that registry (find the command: `fleet search <words>`). Give the fleet its one name, the session's (`ListAgents` gives it), with `fleet fleets name DIR SESSION`: the registry, the manager's page and chat, and `SendMessage` all use it. Run it again after the session is renamed, and call the fleet by that name in what you write.
 
 A ledger made with `init --role manager` is a manager's. Its page is sent every coordinator being served, its chat is hosted by `manager` and mentions the coordinators by their fleet's name (their workers stay in their own fleet's chat), its steps name the coordinator whose turn it is, and its directory holds `standing.md`. A coordinator's page shows the way to the manager while one is being served. The user's message on the manager's page to a coordinator being served (`@<fleet>`) is delivered into that fleet's own chat, as the user's to `coordinator`, tagged `[via manager #N]` (`via` in the message); the manager's message records it (`[delivered to <fleet> #id]`) and the manager's watch leaves it out. The coordinator answers it in its own chat with `--re`, and that answer shows on the manager's page as the reply to #N. A fleet not served is not addressed: the message goes to the manager, which forwards it. What a coordinator does with a manager is in [SKILL.md](SKILL.md#with-a-manager).
 
-**The team.** A repo's standing coordinators and its manager are files, `.fleet/agents/<name>.json`: the Agents SDK's fields (`name`, `description`, `model: {id, effort}`, `system`, `tools`, `multiagent`, `metadata`) and a `fleet` block (`role`, `opening`, `remote_control`, `machine`, `ledger`). The role gives the rest, so `{"fleet": {"role": "coordinator"}}` is a whole file. `fleet team`, run in the repo, starts them as tabs of one rex session (Superlogical rex; the repo's folder, or `.fleet/team.json`'s `session`):
+**The team.** A repo's standing coordinators and its manager are files, `.fleet/agents/<name>.json`: the Agents SDK's fields (`name`, `description`, `model: {id, effort}`, `system`, `tools`, `multiagent`, `metadata`) and a `fleet` block (`role`, `opening`, `remote_control`, `machine`, `ledger`). The role gives the rest, so `{"fleet": {"role": "coordinator"}}` is a whole file. `fleet team`, run in the repo, starts and stops them as tabs of one rex session (Superlogical rex; the repo's folder, or `.fleet/team.json`'s `session`); `fleet team --help` has its commands.
 
-| Command | What it does |
-| :-- | :-- |
-| `start [NAME ...]` | a tab per agent running a new `claude --name <agent>`, a shell tab `<agent> cmd` beside it in the repo, then `/tstack:tuca-mode <opening>` naming its ledger (its file's `fleet.ledger`, else the registry's for its name where it is, else `~/.local/state/fleet/<name>`); an agent already running here is left, one running elsewhere is refused, saying where |
-| `stop NAME ...\|all [--force]` | closes the agent's tab and its cmd tab once it is ready, waiting at most 10 minutes (`--force`: at once); only tabs `fleet team` started that still run their agent |
-| `list [NAME ...]` | each agent: running here, elsewhere (where), or not running |
-| `attach` | shows the team's session in the Rex app (`rex do session.select`) |
-
-**The news.** What a session tells the fleets that needs nobody to act now (a release note, an FYI, a rule change) is posted, never sent as a message: a message wakes the session it reaches, and each wake re-reads its whole context. `fleet news`:
-
-| Command | What it does |
-| :-- | :-- |
-| `post --from NAME [--to all\|FLEET[,FLEET...]] [--kind release\|fyi\|rule] [--keep] TEXT` | appends a numbered item to the machine's `news.jsonl` (in the registry); `--to` names only the fleets it concerns; `--keep` marks a durable rule the reader saves, and the default is "do not save"; at most 1000 characters, a long part goes in a file named by path |
-| `read --as FLEET` | prints what FLEET has not read (to all or to it, never its own) and moves its cursor |
-| `list` | every item |
+**The news.** What a session tells the fleets that needs nobody to act now (a release note, an FYI, a rule change) is posted, never sent as a message: a message wakes the session it reaches, and each wake re-reads its whole context. Post it with `fleet news post` (`fleet news --help`): `--to` names only the fleets it concerns, `--keep` marks a durable rule the reader saves (the default is "do not save"), and an item is at most 1000 characters, a long part in a file named by path.
 
 Nothing wakes on news. A fleet learns of its unread items from one line on stderr of every `fleet state` command, from the line its chat watch adds when it wakes for a real message, and from the plugin's SessionStart and Stop hooks. Read them with `read --as <your fleet>` between other work. An item marked `keep` goes where your fleet keeps rules (brief.md's "This fleet", or memo); `do not save` is read and dropped.
 

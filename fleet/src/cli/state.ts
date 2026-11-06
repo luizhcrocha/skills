@@ -226,7 +226,7 @@ export const STATE_COMMANDS: readonly CommandSpec[] = [
 
 const PROG = "fleet state";
 
-const HELP = `usage: ${PROG} DIR COMMAND [ARGS] [--no-render] [-q]
+export const HELP = `usage: ${PROG} DIR COMMAND [ARGS] [--no-render] [-q]
 
 Record fleet events in the dashboard state (DIR/state.json) and re-render, one command per event.
 Commands: ${STATE_COMMANDS.map((c) => c.name).join(", ")}. \`${PROG} DIR show\` prints what is open and live

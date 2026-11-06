@@ -784,8 +784,8 @@ describe("fleet secrets", () => {
     expect(help).toContain("Every 15 min the hook lets one held command of a locked kind through");
     const nope = fleet(["nope"], env).stderr;
     expect(nope).toContain("usage: fleet {version,ls,state,chat,fleets,news,secrets,ws,");
-    expect(nope).toContain(",room,project,grant,grants} ...");
-    expect(nope).toContain("served, room, project, grant or grants");
+    expect(nope).toContain(",room,project,grant,grants,search} ...");
+    expect(nope).toContain("served, room, project, grant, grants or search");
     expect(nope).toContain("the first argument is state, chat, fleets, news, secrets, ws,");
     expect([nope.includes("onepw"), help.includes("onepw")]).toEqual([false, false]);
   });

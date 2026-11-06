@@ -25,7 +25,7 @@ export const ADVISOR = "advisor";
 
 const MODELS = ["fable", "opus"] as const;
 
-const USAGE = "usage: fleet advisor DIR [--model fable|opus] [--task-id ID] [--log TEXT]";
+export const USAGE = "usage: fleet advisor DIR [--model fable|opus] [--task-id ID] [--log TEXT]";
 
 const TASK = "Answers the fleet's judgement questions before they reach the user";
 

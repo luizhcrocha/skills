@@ -49,7 +49,7 @@ export const CHAT_COMMANDS: readonly CommandSpec[] = [
 
 const PROG = "fleet chat";
 
-const HELP = `usage: ${PROG} DIR {say,inbox,wait,watch,log} ...
+export const HELP = `usage: ${PROG} DIR {say,inbox,wait,watch,log} ...
 
 The chat between the user (on the dashboard) and the fleet, stored in DIR/chat.jsonl.
 

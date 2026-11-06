@@ -97,7 +97,7 @@ function serve(machine: Machine, argv: readonly string[]): Effect.Effect<number,
     const dirs = afterPort.filter((a) => a !== "--stop" && a !== "--take-over");
     const dir = dirs[0];
 
-    if (dirs.length !== 1 || dir === undefined) return yield* refuse("serve", "usage: fleet serve DIR [--stop] [--pid PID] [--port N] [--take-over]");
+    if (dirs.length !== 1 || dir === undefined) return yield* refuse("serve", SERVE_USAGE);
     const root = resolvePath(dir);
 
     if (!isDir(root)) return yield* refuse("serve", `${root} is not a directory`);
@@ -184,7 +184,7 @@ function render(machine: Machine, argv: readonly string[]): Effect.Effect<number
     const [statePath, outPath] = paths;
 
     if (paths.length !== 2 || statePath === undefined || outPath === undefined) {
-      return yield* refuse("render_dashboard", "usage: fleet render STATE_JSON OUT_HTML [--fragment]");
+      return yield* refuse("render_dashboard", RENDER_USAGE);
     }
 
     const moved = movedRefusal(dirname(resolvePath(statePath)));
@@ -236,7 +236,7 @@ function usage(machine: Machine, argv: readonly string[]): Effect.Effect<number,
       return 0;
     }
 
-    if (argv[0] !== "capture") return yield* refuse("usage", "usage: fleet usage capture [-- COMMAND...] | show");
+    if (argv[0] !== "capture") return yield* refuse("usage", USAGE_USAGE);
     const rest = argv.slice(1);
     const command = rest[0] === "--" ? rest.slice(1) : rest;
     let given: Buffer = Buffer.alloc(0);
@@ -270,7 +270,7 @@ function spend(machine: Machine, argv: readonly string[]): Effect.Effect<number,
     const out = yield* Out;
     const [dir] = argv;
 
-    if (argv.length !== 1 || dir === undefined) return yield* refuse("spend", "usage: fleet spend DIR");
+    if (argv.length !== 1 || dir === undefined) return yield* refuse("spend", SPEND_USAGE);
     const spent = spentBy(dir, machine.config);
 
     if (spent === undefined) {
@@ -300,6 +300,21 @@ function served(machine: Machine): Effect.Effect<number, never, Out> {
     return 0;
   });
 }
+
+/** The usage line of each control-plane command, as its refusal prints it. */
+export const SERVE_USAGE = "usage: fleet serve DIR [--stop] [--pid PID] [--port N] [--take-over]";
+/** {@link SERVE_USAGE} of `fleet render`. */
+
+export const RENDER_USAGE = "usage: fleet render STATE_JSON OUT_HTML [--fragment]";
+/** {@link SERVE_USAGE} of `fleet usage`. */
+
+export const USAGE_USAGE = "usage: fleet usage capture [-- COMMAND...] | show";
+/** {@link SERVE_USAGE} of `fleet spend`. */
+
+export const SPEND_USAGE = "usage: fleet spend DIR";
+/** {@link SERVE_USAGE} of `fleet served`, which takes nothing. */
+
+export const SERVED_USAGE = "usage: fleet served";
 
 /** Run one of the control plane's commands (`cli` is serve, render, usage, spend or served). */
 export function controlCli(cli: string, argv: readonly string[]): Effect.Effect<number, never, Out | World> {

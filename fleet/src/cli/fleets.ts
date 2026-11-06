@@ -31,7 +31,7 @@ import { World, type Machine } from "../world.ts";
 import { exitOf } from "./exit.ts";
 import { orphansCommand } from "./orphans.ts";
 
-const USAGE =
+export const USAGE =
   "usage: fleet fleets list | waiting | show FLEET | manager | decision FLEET ID | name DIR SESSION | gate [take FLEET|--as NAME WHAT | free TOKEN] | procs | whose FROM TO";
 
 function fail(reason: string): Effect.Effect<never, Refusal> {
@@ -481,7 +481,7 @@ function decision(machine: Machine, fleet: string, id: string): Effect.Effect<vo
 
 // The usage lines are the oracle traces': `gate run` prints its own (RUN_USAGE), and `gate --json` is SPEC's. The Python
 // twin's has no --mem or --floor (the traces' `gate-usage` normaliser).
-const GATE_USAGE = "usage: fleet fleets gate | gate take FLEET|--as NAME WHAT [--for MINUTES] [--wait SECONDS] [--mem SIZE|PERCENT] [--floor SIZE|PERCENT] | gate free TOKEN";
+export const GATE_USAGE = "usage: fleet fleets gate | gate take FLEET|--as NAME WHAT [--for MINUTES] [--wait SECONDS] [--mem SIZE|PERCENT] [--floor SIZE|PERCENT] | gate free TOKEN";
 
 /** How long a hold lasts when `--for` does not say: a dead holder frees its part of the gate after this. */
 const HOLD_MINUTES = 60;
