@@ -16,7 +16,13 @@ from importlib.util import module_from_spec, spec_from_loader
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
-PROGRAMS = ROOT / "skills" / "productivity" / "coordinator" / "PROGRAMS.md"
+COORDINATOR = ROOT / "skills" / "productivity" / "coordinator"
+# PROGRAMS.md and the two files it sends the coordinator to on demand, read as one text in this order.
+PROGRAMS_FILES = [COORDINATOR / n for n in ("PROGRAMS.md", "PROGRAMS-CARDS.md", "PROGRAMS-WORK.md")]
+
+
+def programs_text():
+    return "\n".join(p.read_text() for p in PROGRAMS_FILES)
 FOLD = Path(__file__).resolve().parent / "fleet_fold.mjs"
 CHECKOUT = Path(os.environ.get("TSTACK_FLEET_CHECKOUT") or Path.home() / "repos/luizhcrocha/fleet-live")
 NEEDS = ("packages/ledger/src/prelude.ts", "packages/ledger/src/mirror.ts", "packages/ledger/src/bodies.ts",
@@ -72,19 +78,20 @@ class WorkedCallsTest(unittest.TestCase):
     """PROGRAMS.md's worked calls, in order on one team, as a coordinator would send them."""
 
     def test_every_worked_call_lands_applied(self):
-        text = PROGRAMS.read_text()
+        text = programs_text()
         bodies = [b for b in re.findall(r"```ts\n(.*?)```", text, re.S) if "declare " not in b]
         self.assertGreaterEqual(len(bodies), 6)
         outcomes = fold(self, [{"name": f"worked call {i}: {b.splitlines()[0][:60]}", "body": b}
                                for i, b in enumerate(bodies, 1)])
         assert_applied(self, outcomes)
-        self.assertEqual(outcomes[-1]["returned"][0]["key"], "x7", "the read returns the open cards")
+        read = next(o for o, b in zip(outcomes, bodies) if 'decisions: "open"' in b)
+        self.assertEqual(read["returned"][0]["key"], "x7", "the read returns the open cards")
 
     def test_the_inline_programs_land_applied(self):
         """The programs PROGRAMS.md gives inline, in its prose, after its worked calls on the same team: the grilling's
         close (its questions dropped first, as no program answers one), the on-card reply, and the Manager's card
         withdrawn. The approval op is left out: only the owner's yes on the card backs one."""
-        text = PROGRAMS.read_text()
+        text = programs_text()
         flat = " ".join(text.split())
         bodies = [b for b in re.findall(r"```ts\n(.*?)```", text, re.S) if "declare " not in b]
 
@@ -109,7 +116,7 @@ class WorkedCallsTest(unittest.TestCase):
         if not source.is_file():
             self.skipTest(f"no owner-answer gate at {source}: set TSTACK_FLEET_CHECKOUT to a fleet checkout with design B′")
         code = source.read_text()
-        flat = " ".join(PROGRAMS.read_text().split())
+        flat = " ".join(programs_text().split())
         self.assertIn('"the owner answers on the card\'s page; a program can\'t record it"', flat)
         self.assertIn("the owner answers on the card's page; a program can't record it", code)
         held = re.search(r'the cloud refuses with "(a program cannot set the [^"]*)"', flat)
@@ -124,7 +131,7 @@ class WorkedCallsTest(unittest.TestCase):
     def test_no_worked_permission_runs_a_script(self):
         """A program's permission card carries no `runs`, so the office host refuses the yes to a call that runs a
         script (design review F1): the worked permission names none, as the split every port shares finds them."""
-        calls = re.findall(r'kind: "permission".*?\bcall: ("(?:[^"\\]|\\.)*")', PROGRAMS.read_text(), re.S)
+        calls = re.findall(r'kind: "permission".*?\bcall: ("(?:[^"\\]|\\.)*")', programs_text(), re.S)
         self.assertTrue(calls, "PROGRAMS.md has a worked permission")
         hook = load_hook()
         for call in map(json.loads, calls):
@@ -212,7 +219,7 @@ class WorkAnswersTest(unittest.TestCase):
     away included, and the worked event marks its answers read."""
 
     def blocks(self):
-        bodies = re.findall(r"```ts\n(.*?)```", PROGRAMS.read_text(), re.S)
+        bodies = re.findall(r"```ts\n(.*?)```", programs_text(), re.S)
         return next(b for b in bodies if "work.read(" in b), next(b for b in bodies if 'event("note", "work ' in b)
 
     def test_an_answer_is_read_until_its_event_is_recorded(self):

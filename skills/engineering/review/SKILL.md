@@ -115,7 +115,7 @@ Its cost, as an estimate: for 2,000 lines, about 7 slices, 14 readers and 7 seco
 
 ### 7. Deep review: the pass that tries to break the change
 
-For a contested design, a risky diff, or the areas the coordinator's [Review levels](../../productivity/coordinator/SKILL.md#review-levels) name. It replaces the two axes. Adapted from pstack's interrogate (poteto, MIT): a finding survives only when a run proves it.
+For a contested design, a risky diff, or the areas the coordinator's [Review levels](../../productivity/coordinator/INTEGRATE.md#review-levels) name. It replaces the two axes. Adapted from pstack's interrogate (poteto, MIT): a finding survives only when a run proves it.
 
 1. **State the intent.** One paragraph from the user's message, the change descriptions and the spec (step 2). Unsure: ask before spawning.
 2. **Three finders in parallel.** `general-purpose` Reviewers, one per angle: security; concurrency and state; spec and tests. Each gets the intent, the diff command, the repo's REVIEW.md and its own jj workspace at the stack's head, and this brief: "Break this change. Prove each finding with a run against the real code: a failing test in the repo's own test tools, or the output of the repo's own command. Report the title, the exact command, the output it printed, the output the intent requires, and `Caught by:` the cheapest check that would have caught it with no reader (`type`, `lint`, `test`, `property`, `model` or `none`). Leave out style, naming, structure and risks that need a future change to matter. A claim you could not run goes under Unproven with why. No findings is a valid result."
