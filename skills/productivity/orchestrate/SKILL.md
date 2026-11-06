@@ -53,7 +53,7 @@ Ask them the maximum number of parallel agents to run and to confirm that they w
 Each worker gets a fresh context window — it knows nothing you know. In every spawn prompt include:
 
 - The task and its **exact file ownership** ("you may only edit X, Y").
-- Its **role**, from [MODELS.md](../coordinator/MODELS.md). A worker that writes code is an Implementer. A batch of mechanical reads or reductions, with no edits, goes to Readers. Pass the role's model and effort on each Agent call; a workflow or a team names the role of each stage the same way.
+- Its **role**, from [models.md](../../../docs/models.md). A worker that writes code is an Implementer. A batch of mechanical reads or reductions, with no edits, goes to Readers. Pass the role's model and effort on each Agent call; a workflow or a team names the role of each stage the same way.
 - The **standards block** below, verbatim.
 - How to report back (what "done" looks like).
 - If more optimal, considering the tasks:

@@ -1,6 +1,6 @@
-"""Every model a skill or agent names comes with an effort, and the pair is a row of MODELS.md's table.
+"""Every model a skill or agent names comes with an effort, and the pair is a row of models.md's table.
 
-MODELS.md (skills/productivity/coordinator/) is the one place the (model, effort) pairs are written.
+models.md (docs/) is the one place the (model, effort) pairs are written.
 This reads the pairs from its table, then checks two things against them:
 - an agent definition's frontmatter (`model:` and `effort:`), and any other markdown frontmatter
   that names a model;
@@ -16,7 +16,7 @@ import unittest
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
-MODELS = ROOT / "skills" / "productivity" / "coordinator" / "MODELS.md"
+MODELS = ROOT / "docs" / "models.md"
 PAIR = re.compile(r"\b(Fable|Opus|Sonnet|Haiku) (low|medium|high|xhigh|max)\b")
 SPAWN = re.compile(r'model: "([a-z]+)"(?:,\s*effort: "([a-z]+)")?')
 
@@ -25,7 +25,7 @@ BARE_ALLOWED: dict[str, int] = {}
 
 
 def table_rows():
-    """MODELS.md's role table: role -> the pairs its row names, primary first."""
+    """models.md's role table: role -> the pairs its row names, primary first."""
     rows = {}
     lines = MODELS.read_text().splitlines()
     start = next(i for i, line in enumerate(lines) if line.startswith("| Role |"))
@@ -77,7 +77,7 @@ class ModelsTable(unittest.TestCase):
         rows = table_rows()
         self.assertGreaterEqual(len(rows), 10, rows)
         thin = [role for role, pairs in rows.items() if len(pairs) < 2]
-        self.assertEqual(thin, [], "roles without a model, effort and fallback pair in MODELS.md")
+        self.assertEqual(thin, [], "roles without a model, effort and fallback pair in models.md")
 
     def test_no_role_runs_at_max(self):
         self.assertNotIn("max", {effort for _, effort in table_pairs()})
@@ -85,7 +85,7 @@ class ModelsTable(unittest.TestCase):
     def test_the_sessions_that_run_fleets_route_at_low_effort(self):
         rows = table_rows()
         for role in ("Coordinator", "Manager"):
-            self.assertEqual(rows.get(role, [])[:2], [("opus", "low"), ("sonnet", "medium")], f"{role}'s row in MODELS.md")
+            self.assertEqual(rows.get(role, [])[:2], [("opus", "low"), ("sonnet", "medium")], f"{role}'s row in models.md")
 
 
 class NamedPairs(unittest.TestCase):
@@ -99,7 +99,7 @@ class NamedPairs(unittest.TestCase):
             if "effort" not in keys:
                 bad.append(f"{rel(md)}:{n}: model {model} names no effort")
             elif (model, keys["effort"][1]) not in pairs:
-                bad.append(f"{rel(md)}:{keys['effort'][0]}: ({model}, {keys['effort'][1]}) is not in MODELS.md's table")
+                bad.append(f"{rel(md)}:{keys['effort'][0]}: ({model}, {keys['effort'][1]}) is not in models.md's table")
         self.assertEqual(bad, [], "\n".join(bad))
 
     def test_every_named_pair_is_in_the_table(self):
@@ -107,7 +107,7 @@ class NamedPairs(unittest.TestCase):
         for md in markdown_files():
             for n, model, effort in spawns(md):
                 if effort and (model, effort) not in pairs:
-                    bad.append(f'{rel(md)}:{n}: model: "{model}", effort: "{effort}" is not in MODELS.md\'s table')
+                    bad.append(f'{rel(md)}:{n}: model: "{model}", effort: "{effort}" is not in models.md\'s table')
         self.assertEqual(bad, [], "\n".join(bad))
 
     def test_a_model_without_an_effort_is_only_where_allowed(self):

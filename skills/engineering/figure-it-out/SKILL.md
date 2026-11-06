@@ -26,7 +26,7 @@ Present the framing and tradeoffs before committing to a long run. Reversible wo
 Decompose into atomic, independently-landable units: each one a described jj change. Sequence riskiest-unknown-first. Scaffold and verification come before features (Foundational Thinking).
 
 - Build the verification harness before the work, with the baseline captured from the pre-change state, so the check reads as "old value vs new value".
-- For one-way-door design decisions, design it twice with `tstack:codebase-design` (its DESIGN-IT-TWICE.md), or two Implementers ([MODELS.md](../../productivity/coordinator/MODELS.md)) in separate jj workspaces build competing shapes and you pick or graft. Skip it for mechanical work whose shape is already concrete. A second round over a settled design is over-engineering (Laziness Protocol).
+- For one-way-door design decisions, design it twice with `tstack:codebase-design` (its DESIGN-IT-TWICE.md), or two Implementers ([models.md](../../../docs/models.md)) in separate jj workspaces build competing shapes and you pick or graft. Skip it for mechanical work whose shape is already concrete. A second round over a settled design is over-engineering (Laziness Protocol).
 - Decide what fans out. Parallelize only across seams, and make each worker an Implementer with its own jj workspace (`jj workspace add ../<repo>-<lane> -r <base> --name <lane>`, per tuca-mode's Subagents section; Separate Before Serializing Shared State). Don't over-fan; a batch of independent lanes goes through `tstack:orchestrate`.
 - Write the designed phase list down. That list is what Luiz reviews.
 

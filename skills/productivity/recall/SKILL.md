@@ -69,7 +69,7 @@ Start from tape: `tape build`, then `tape search <topic>` (or `tape view` for "a
 
 Every remaining session is mined by a subagent; the transcripts stay with them and only findings come back. One or two small sessions: read their digests yourself instead.
 
-Split the sessions into batches of about 1 MB of transcript each (one larger session is a batch of its own) and spawn one miner per batch, all in one message: `tstack:reader` agents in the Reader role ([MODELS.md](../coordinator/MODELS.md)), in the background. Each brief carries the session paths, the topic (or "all work"), the window, and these instructions:
+Split the sessions into batches of about 1 MB of transcript each (one larger session is a batch of its own) and spawn one miner per batch, all in one message: `tstack:reader` agents in the Reader role ([models.md](../../../docs/models.md)), in the background. Each brief carries the session paths, the topic (or "all work"), the window, and these instructions:
 
 - Read a session through `python3 ${CLAUDE_SKILL_DIR}/scripts/sessions.py digest <path>`: user prompts, assistant text, one line per tool call, errors, compaction and away summaries. Open the raw JSONL only for a region the digest points at (grep it for the topic or an id); a subagent's work is under `<session-id>/subagents/`.
 - Read the end of a session first, then scan back for the decision points.

@@ -1,6 +1,6 @@
 ---
 name: reader
-description: A read-only Reader (coordinator/MODELS.md). Reads a lot and returns a short result under the caller's cap; writes no files. Spawned by skills that hand out read-and-reduce work, such as recall's miners and automate-me's readers.
+description: A read-only Reader (docs/models.md). Reads a lot and returns a short result under the caller's cap; writes no files. Spawned by skills that hand out read-and-reduce work, such as recall's miners and automate-me's readers.
 model: haiku
 effort: high
 tools: Bash, Read, Grep, Glob

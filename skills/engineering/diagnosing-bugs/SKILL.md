@@ -89,7 +89,7 @@ Do not proceed until you have reproduced **and** minimised.
 
 Generate **3–5 ranked hypotheses** before testing any of them. Single-hypothesis generation anchors on the first plausible idea.
 
-**Escalate once, behind an evidence gate.** Escalate when (a) every hypothesis of a round is falsified with the minimised repro in hand, or (b) the fix did not turn the loop green. A round falsified on an unminimised repro goes back to building the loop (Phases 1 and 2), not up. Spawn one fresh `general-purpose` agent in the Escalation role ([MODELS.md](../../productivity/coordinator/MODELS.md); its fallback when the model is unavailable, said in the reply), in the background, once per diagnosis. It writes no code; it may run the loop and read-only probes. Its brief carries:
+**Escalate once, behind an evidence gate.** Escalate when (a) every hypothesis of a round is falsified with the minimised repro in hand, or (b) the fix did not turn the loop green. A round falsified on an unminimised repro goes back to building the loop (Phases 1 and 2), not up. Spawn one fresh `general-purpose` agent in the Escalation role ([models.md](../../../docs/models.md); its fallback when the model is unavailable, said in the reply), in the background, once per diagnosis. It writes no code; it may run the loop and read-only probes. Its brief carries:
 
 - the loop command, and how red and green read;
 - the minimised repro, and what was cut;

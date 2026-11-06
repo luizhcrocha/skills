@@ -20,7 +20,7 @@ When in doubt, take the simple path.
 
 ## 2. Simple: one pass
 
-Spawn one `Explore` agent playing the Researcher role ([MODELS.md](../../productivity/coordinator/MODELS.md)), in the background, with the brief in [references/explainer-prompt.md](references/explainer-prompt.md) minus its explorer-findings section: it explores and explains in one pass. Go to step 5.
+Spawn one `Explore` agent playing the Researcher role ([models.md](../../../docs/models.md)), in the background, with the brief in [references/explainer-prompt.md](references/explainer-prompt.md) minus its explorer-findings section: it explores and explains in one pass. Go to step 5.
 
 ## 3. Complex: explore
 
@@ -28,7 +28,7 @@ Split the question into 2 to 4 exploration angles, each a distinct slice of the 
 
 ## 4. Complex: explain
 
-When every explorer has returned, spawn one explainer, a Composer, with [references/explainer-prompt.md](references/explainer-prompt.md) and all findings filled in. It moves up as MODELS.md says when the findings contradict each other. The same move applies when the findings leave gaps it must close by reading code, or when the question asks for a judgement about the design ("is this the right layer").
+When every explorer has returned, spawn one explainer, a Composer, with [references/explainer-prompt.md](references/explainer-prompt.md) and all findings filled in. It moves up as models.md says when the findings contradict each other. The same move applies when the findings leave gaps it must close by reading code, or when the question asks for a judgement about the design ("is this the right layer").
 
 ## 5. Present
 

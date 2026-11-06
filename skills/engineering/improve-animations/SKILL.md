@@ -52,7 +52,7 @@ Audit against the eight categories in [AUDIT.md](AUDIT.md):
 7. Cohesion & tokens
 8. Missed opportunities
 
-For anything beyond a small repo, fan out read-only subagents playing the Researcher role ([MODELS.md](../../productivity/coordinator/MODELS.md)), one per category (or per app area for large monorepos). They read and report; the vetting in Phase 3 is yours. Each subagent prompt must include: the absolute path to AUDIT.md and its section heading, the recon facts (stack, motion libraries, token conventions, frequency map), an instruction to return findings only (file:line + evidence, no fixes), and Hard Rule 4 verbatim.
+For anything beyond a small repo, fan out read-only subagents playing the Researcher role ([models.md](../../../docs/models.md)), one per category (or per app area for large monorepos). They read and report; the vetting in Phase 3 is yours. Each subagent prompt must include: the absolute path to AUDIT.md and its section heading, the recon facts (stack, motion libraries, token conventions, frequency map), an instruction to return findings only (file:line + evidence, no fixes), and Hard Rule 4 verbatim.
 
 Depth follows effort level (default `standard`):
 

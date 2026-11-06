@@ -193,9 +193,9 @@ first thing a catch-up asks.
 | Direct API with a key | later, Luiz's call | Exact cache control and per-call cost, but billed outside the plan; not chosen (section 8). |
 
 **Model:** the Reader role, Haiku high, fallback Sonnet medium
-([MODELS.md](../../skills/productivity/coordinator/MODELS.md)). Not
+([models.md](../models.md)). Not
 UniiChat's Haiku xhigh: ADR 0002 rejected that pair for the same job.
-The compaction rules are MODELS.md's reducer contract, which already matches
+The compaction rules are models.md's reducer contract, which already matches
 UniiChat's order (user's words, lasting effects and failures, findings, tool
 steps; never overstate progress).
 
@@ -287,7 +287,7 @@ environment, run in the store's folder (outside any repo).
 custom-mcp-servers holds 86% of those turns (measured: 4,973 of 5,761 in 14
 days); `coelhorocha/skills` has about 30 a day (measured: 423 in 14 days), so
 about 60 calls. Haiku's output costs a twentieth of Sonnet's per token
-(sourced: MODELS.md); how the plan counts Haiku against the weekly allowance
+(sourced: models.md); how the plan counts Haiku against the weekly allowance
 is unknown, and Phase 1b measures it. Backfilling the 30 days on disk is about
 25,000 calls for every project, 1,800 for `coelhorocha/skills` (inferred).
 

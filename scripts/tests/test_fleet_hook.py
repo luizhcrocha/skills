@@ -4585,7 +4585,7 @@ class SpawnEffortTest(FleetCase):
                            input=json.dumps(self.payload("PreToolUse", tool_name="Agent", tool_input={"prompt": "go"})),
                            env={**self.env, "CLAUDE_PLUGIN_ROOT": str(root)})
         reason = json.loads(r.stdout)["hookSpecificOutput"]["permissionDecisionReason"]
-        self.assertIn(f"Pass effort: per MODELS.md ({root}/skills/productivity/coordinator/MODELS.md)", reason)
+        self.assertIn(f"Pass effort: per MODELS.md ({root}/docs/models.md)", reason)
 
     def test_the_check_is_fast(self):
         module = load_hook()

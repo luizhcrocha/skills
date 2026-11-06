@@ -4198,7 +4198,7 @@ def fleet_monitor_watch(hook):
 # from MODELS.md's table, the one place the pairs are written. $CLAUDE_CODE_EFFORT_LEVEL outranks both the call's
 # effort and a definition's (Claude Code's sub-agents doc, "Choose an effort level"): a session that sets it is told.
 EFFORTS = ("low", "medium", "high", "xhigh", "max")
-MODELS_MD = ROOT / "skills" / "productivity" / "coordinator" / "MODELS.md"
+MODELS_MD = ROOT / "docs" / "models.md"
 ROLE_PAIR = re.compile(r"\b(Fable|Opus|Sonnet|Haiku) (low|medium|high|xhigh|max)\b")
 SESSION_ROLES = ("Coordinator", "Manager")  # a session's own effort is its launch's, never a spawn's
 TYPE_ROLES = {"Explore": "Researcher"}
