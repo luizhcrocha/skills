@@ -8,7 +8,7 @@ Two-axis review of the diff between `@` and a fixed point:
 - **Standards**: does the code conform to this repo's documented coding standards?
 - **Spec**: does the code faithfully implement the originating issue / spec?
 
-Both axes run as **parallel sub-agents** so they don't pollute each other's context, then this skill aggregates their findings.
+Both axes run as **parallel sub-agents** so they don't pollute each other's context, then this skill aggregates their findings. Start every sub-agent with a fresh context window.
 
 The issue tracker should have been provided to you. If `docs/agents/issue-tracker.md` is missing, tell the user to run `/setup-luizrocha-skills`.
 
@@ -40,7 +40,7 @@ Look for the originating spec, in this order:
 
 ### 3. Identify the standards sources
 
-Anything in the repo that documents how code should be written, such as `CODING_STANDARDS.md` or `CONTRIBUTING.md`. A `REVIEW.md` at the repo's root goes to both sub-agents: it lists what failure looks like in this repo.
+Search the repo for every file that documents how code should be written. When `CODING_STANDARDS.md` or `CONTRIBUTING.md` exists, it must be on the list. A `REVIEW.md` at the repo's root goes to both sub-agents: it lists what failure looks like in this repo.
 
 If the diff touches TypeScript, also call the Skill tool with "lang-ts" and pass its relevant rules to the Standards sub-agent as a standards source, ranked below any repo-documented standard.
 

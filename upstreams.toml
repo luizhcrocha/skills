@@ -23,7 +23,7 @@
 
 [upstream.mattpocock]
 url = "https://github.com/mattpocock/skills.git"
-base = "d81f3a183412e71a5b1e84ca21bc1a35eea03a60"
+base = "4ae2317ddb22b046e26455e4f9c9b3aaaf62212d"
 units = ["skills/*/*"]
 # Repo plumbing, and bucket READMEs (ours, per AGENTS.md), are never synced.
 ignore = [
@@ -31,6 +31,8 @@ ignore = [
   "docs", "package.json", "package-lock.json", "scripts", "skills/*/README.md",
   # Decided, not copied: zoom-out was folded into how (2026-09-30).
   "skills/engineering/zoom-out",
+  # Decided, not copied (Luiz, 2026-11-09): repo docs and in-progress drafts.
+  "CONTRIBUTING.md", "SCOPE.md", "skills/in-progress",
 ]
 # Undecided, new at d81f3a1 (v1.3) and so no longer flagged as new: GLOSSARY.md
 # (upstream's own repo glossary), skills/engineering/implement-spec, pr, retro.

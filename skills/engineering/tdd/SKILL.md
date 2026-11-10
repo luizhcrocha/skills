@@ -21,7 +21,7 @@ Testing is a ladder: static checks, example tests at seams, integration on real 
 
 A **seam** is the public boundary you test at: the interface where you observe behavior without reaching inside. Tests live at seams, never against internals. You can't test everything, so seams put the effort on the critical paths and complex logic.
 
-Name the seams under test before writing any. When the user is present and the right seam is unclear, ask: "What's the public interface, and which seams should we test?" Otherwise pick them in `codebase-design` vocabulary (module, interface, depth, seam, adapter), state them in one line, and proceed. When the shape of the interface is itself in question, call the Skill tool with "codebase-design".
+Name the seams under test before writing any. When the user is present and the right seam is unclear, ask: "What's the public interface, and which seams should we test?" Otherwise pick them in `codebase-design` vocabulary (module, interface, depth, seam, adapter), state them in one line, and proceed. Give each seam a one-line note on what it catches and what it misses. When the shape of the interface is itself in question, call the Skill tool with "codebase-design".
 
 ## 3. The loop
 
