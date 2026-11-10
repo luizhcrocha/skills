@@ -222,7 +222,7 @@ watch = true
 # Local edits to the fork 3-way merge on the next sync (2026-09-30).
 [upstream.anti-slop]
 url = "https://github.com/dmmulroy/anti-slop.git"
-base = "c44ef22ca116d0ba62a3ff663a0bd13a3f3fa40b"
+base = "13909c9e07590f5a85d93c62712259fe14a883f7"
 # Decided, not copied: repo plumbing, and the install-anti-slop skill, whose
 # job (copy, configure, 3-way update) lint-vendor and lint-audit do; its
 # assets/ are src/ minus the tests.
