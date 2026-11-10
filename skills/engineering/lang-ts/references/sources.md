@@ -10,10 +10,10 @@ The refresher reads this table. Versions come from the npm registry (`dist-tags.
 | `@types/node` | library | 26.6.3 (match the runtime's major in practice) | 2026-09-30 | https://www.npmjs.com/package/@types/node |
 | Vite+ (`vite-plus`, CLI `vp`) | tool | 1.0.0; bundles Vitest 5.0.1, Oxlint 1.85.0, Oxfmt 0.70.0, oxlint-tsgolint 7.0.2003, `@oxlint/plugins` 1.79.0 | 2026-09-30 | https://github.com/voidzero-dev/vite-plus/releases |
 | Vitest | tool | 5.0.3 standalone | 2026-09-30 | https://github.com/vitest-dev/vitest/releases |
-| Oxlint | tool | 1.86.0 standalone | 2026-09-30 | https://github.com/oxc-project/oxc/releases |
+| Oxlint | tool | 1.93.0 standalone | 2026-11-09 | https://github.com/oxc-project/oxc/releases |
 | Oxfmt | tool | 0.71.0 standalone (pre-1.0) | 2026-09-30 | https://github.com/oxc-project/oxc/releases |
 | oxlint-tsgolint | tool | 7.0.2003 (type-aware lint) | 2026-09-30 | https://www.npmjs.com/package/oxlint-tsgolint |
-| `@oxlint/plugins` | library | 1.86.0 latest; pin to the Oxlint that Vite+ bundles | 2026-09-30 | https://github.com/oxc-project/oxc/releases |
+| `@oxlint/plugins` | library | 1.93.0 latest; pin to the Oxlint that Vite+ bundles | 2026-11-09 | https://github.com/oxc-project/oxc/releases |
 | anti-slop Oxlint plugin | tool | vendored copy in custom-mcp-servers (bundle dated 2026-09-26); no canonical npm package (`oxlint-plugin-anti-slop` is a 0.0.0 placeholder) | 2026-09-30 | https://github.com/dmmulroy/anti-slop (vendored copy's provenance: custom-mcp-servers `servers/case-analysis/tools/oxlint/anti-slop/UPSTREAM.md`) |
 | Effect | library | 4.0.0 stable (released 2026-09-30; 3.22.2 is the last 3.x) | 2026-10-01 | https://effect.website/blog/releases/effect/40 |
 | `@effect/vitest` | library | 4.0.0 (peers: effect ^4.0.0, vitest 5) | 2026-10-01 | https://github.com/Effect-TS/effect/releases |
