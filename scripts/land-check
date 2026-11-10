@@ -105,14 +105,14 @@ fleet whose registry entry's pid is among this process's parents.
 "warning:" reason and the verdict "stop" (with --pre-gate, exit 1): the remedy
 is the lane's own review, not Luiz's yes.
 
---push-token T names the token this lane's passed `gate run --landing` printed,
+--push-token T names the token this lane's passed `fleet land --gate` printed,
 when its push hold does not name this workspace.
 
 --apply-skip-ci appends " [skip ci]" to head's subject when suggest_skip_ci
 holds (idempotent, head only), then reports on the rewritten head.
 
 --pre-gate runs before the full gate takes the slot (Land's step 5,
-`land-check --pre-gate -b B && fleet fleets gate run ...`): the same JSON, no
+`fleet land --gate -b B -- ...` runs it with --require-reviews): the same JSON, no
 landing turn asked and nothing rewritten, and the exit code says whether the
 gate may start: 1 when the stack needs a review the ledger does not record,
 or a change changed after its review (the "warning:" reasons), or there is no
@@ -1331,11 +1331,11 @@ def freeze_reason(hold):
     if hold.get("pushing") is True:
         return (f"{who}'s landing gate of this repository passed and holds the landing turn for its push until "
                 f"{clock(str(hold.get('until')))}: a push now moves the tip it proved, and it gates again. Wait for "
-                f"its push (`fleet fleets gate` shows the hold), then {then} (this lane's own landing: pass "
-                "--push-token <the token its gate run printed>)")
+                f"its push (`fleet gate` shows the hold), then {then} (this lane's own landing: pass "
+                "--push-token <the token `fleet land --gate` printed>)")
     return (f"{who} is running a landing gate of this repository ({hold.get('what')}), expected to end by "
             f"{clock(str(hold.get('ends') or hold.get('until')))}: a push now moves the tip it is proving, and it "
-            f"gates again. Wait until it has pushed or ended (`fleet fleets gate` shows the hold), then {then}")
+            f"gates again. Wait until it has pushed or ended (`fleet gate` shows the hold), then {then}")
 
 
 def main(argv=None):

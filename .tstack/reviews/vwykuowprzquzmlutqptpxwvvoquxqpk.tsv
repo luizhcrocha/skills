@@ -1,0 +1,2 @@
+change@commit	at	reviewer	verdict	note	patch
+vwykuowprzquzmlutqptpxwvvoquxqpk@5acb09d7781ea396e2166e8a1310b29db4eb932f	2026-11-10T13:38:24-05:00	Opus	fix first	1 Important fixed in place: land.md step 5 now runs fleet land --gate -b <bookmark> (it runs land-check --pre-gate --require-reviews itself), an unreviewed land goes through fleet run; commands match the live --help	1c1a4ad87778df8a
