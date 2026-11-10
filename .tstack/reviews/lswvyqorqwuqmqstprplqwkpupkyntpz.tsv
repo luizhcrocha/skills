@@ -1,0 +1,2 @@
+change@commit	at	reviewer	verdict	note	patch
+lswvyqorqwuqmqstprplqwkpupkyntpz@8a8a39f12ed9a871b3bf79e48b15313287fc0dd1	2026-11-10T13:38:24-05:00	Opus	land	executable .fleet/test runs just test from the repo root, as fleet test expects	8752ae67dab6e715
