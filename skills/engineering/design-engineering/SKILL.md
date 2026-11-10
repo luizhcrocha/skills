@@ -11,7 +11,10 @@ Good interfaces are made of many small details that users never notice one by on
 
 - One animation to build: `animate`.
 - A diff whose motion needs a verdict: `review-animations`.
-- A codebase's motion to audit and plan: `improve-animations`. Places that should start moving: `find-animation-opportunities`.
+- A codebase's motion to audit and plan: `improve-animations`. Places that should start moving: `find-animation-opportunities`. Motion to take out: `remove-animations`.
+- Several elements moving together: `choreograph`. An animation that drops frames: `animation-performance`.
+- Drag, swipe and sheets on the web: `gestures`.
+- A component to stress-test with worst-case data: `break-ui`.
 - Gestures, springs, materials and type at Apple's level: `apple-design`.
 - A web app that feels wrong on a phone: `mobile-native`.
 - A component library to choose: `pick-ui-library`.
@@ -45,5 +48,7 @@ A UI review is one markdown table with the columns Before, After and Why, one ro
 | No `:active` state on a button | `transform: scale(0.97)` on `:active` | A press needs instant feedback |
 
 ## The reference
+
+For a quick fix to a common symptom (jittering numbers, a squished avatar, "1 members"), check [references/ui-cheatsheet.md](references/ui-cheatsheet.md) first.
 
 Read [references/craft.md](references/craft.md) for the reasons and the code behind each rule: the animation decision framework, springs, component principles (tooltips, blur over a crossfade, `@starting-style`), transforms, clip-path patterns (tabs, hold to delete, image reveals, comparison sliders), drag and gesture handling, performance, accessibility, principles for components people love, stagger, debugging, and the review checklist.

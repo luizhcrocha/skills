@@ -214,7 +214,7 @@ watch = true
 [upstream.optmem-split]
 url = "https://github.com/texarkanine/OptMem-Split.git"
 branch = "main.split"
-base = "72f4149d48187f641e3b5bc9bbba7a2dd15f4df0"
+base = "be43de47e4755875fb46e0a62c1fff61d71df181"
 watch = true
 
 # Dillon Mulroy's anti-slop (MIT): Oxlint JS rules, the seed of the TypeScript
@@ -245,7 +245,7 @@ map = [
 # reference file, so upstream edits still 3-way merge.
 [upstream.emilkowalski]
 url = "https://github.com/emilkowalski/skills.git"
-base = "d16ebe60d09a5ba2afcb7054ede9d0a10c9f6128"
+base = "715c1807e08c497cfd1dc4feb450a2a3300ef2a9"
 units = ["skills/*"]
 ignore = [
   # Repo plumbing (.gitattributes, .gitignore, .pl), the license and the
@@ -275,6 +275,14 @@ map = [
   { from = "skills/improve-animations", to = "skills/engineering/improve-animations" },
   { from = "skills/pick-ui-library", to = "skills/engineering/pick-ui-library" },
   { from = "skills/review-animations", to = "skills/engineering/review-animations" },
+  # Imported 2026-11-09 (Luiz): adapted like the rest (frontmatter, greeting,
+  # self-citations, skill names).
+  { from = "skills/animation-performance", to = "skills/engineering/animation-performance" },
+  { from = "skills/break-ui", to = "skills/engineering/break-ui" },
+  { from = "skills/choreograph", to = "skills/engineering/choreograph" },
+  { from = "skills/gestures", to = "skills/engineering/gestures" },
+  { from = "skills/remove-animations", to = "skills/engineering/remove-animations" },
+  { from = "ui-cheatsheet.md", to = "skills/engineering/design-engineering/references/ui-cheatsheet.md" },
   # prototype merged into ours (mattpocock's, above) by hand: its ideas went
   # into UI.md, which this maps to, so an upstream edit lands there as a
   # conflict to resolve by intent. PICKER.md is verbatim.
