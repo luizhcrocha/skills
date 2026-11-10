@@ -860,3 +860,95 @@ runs = [
   { repo = "/home/luizrocha/repos/luizhcrocha/picasso", date = "2026-10-05", hits = 0, false_positives = 0, note = "widened: no Solid flow callbacks" },
   { repo = "/home/luizrocha/repos/luizhcrocha/skills", date = "2026-10-05", hits = 0, false_positives = 0, note = "widened (For index, Show/Match value): workspace at trunk kyptnlyl; 19 keyed={false} sites, 2 For callbacks with an index, 40 Show/Match function children, all read reactively; fleet/page's own lint passes with the rule at error; the 3 pre-fix incidents still hit" },
 ]
+
+[[rule]]
+id = "ts/tstack/no-boolean-state-fields"
+lang = "ts"
+engine = "oxlint"
+kind = "custom"
+status = "retired"
+summary = "two or more boolean fields naming lifecycle steps (loading, failed, done...) on one type or class, in place of a discriminated union"
+where = "lint/ts/tstack/rules/no-boolean-state-fields.ts"
+created = "2026-11-09"
+last_hit = "2026-11-09"
+evidence = [
+  "skill:lang-ts SKILL.md (Model the domain: no mode booleans) and references/domain-modeling.md (Avoid contradictory bags)",
+  "skill:principles model-the-domain.md (a state machine instead of scattered booleans)",
+  "repo:fleet packages/ledger/src/answer-text.ts:13 and apps/cli/page/src/core.ts:1478 (AnswerForm done + failed)",
+  "repo:custom-mcp-servers apps/casos/src/kit/collection/Collection.tsx:774 (loading + error props)",
+  "repo:custom-mcp-servers apps/casos/src/huddle/voice.ts:126 (phase + reconnecting)",
+  "repo:custom-mcp-servers servers/case-analysis/src/pipeline/page-images-fill.ts:122 (failed + done), src/cost/ledger.ts:232 (completed implies attempted)",
+]
+history = [
+  { date = "2026-11-09", status = "proposed", note = "proposed by lint-evolve" },
+  { date = "2026-11-09", status = "trial", note = "trial across 11 TS repos" },
+  { date = "2026-11-09", status = "retired", note = "2 false positives after 2 reworks (timeline/data.ts:21 and page-picture.ts:276 mirror TanStack Query's result shape); retired per lint-evolve step 5 (Luiz, 2026-11-09). The review baseline smell Implicit State Machine covers the lesson by hand" },
+]
+runs = [
+  { repo = "~/repos/coelhorocha/chimr", date = "2026-11-09", hits = 0, false_positives = 0, note = "no hits after rework 2" },
+  { repo = "~/repos/coelhorocha/custom-mcp-servers", date = "2026-11-09", hits = 6, false_positives = 2, note = "after 2 reworks (run 1: 219 hits, run 2: 11). True: voice.ts phase+reconnecting, Collection.tsx loading+error, page-images-fill.ts failed+done, ledger.ts completed+attempted. FP: timeline/data.ts:21 and documents/page-picture.ts:276 mirror TanStack Query's result shape" },
+  { repo = "~/repos/coelhorocha/durable-automations", date = "2026-11-09", hits = 0, false_positives = 0, note = "no hits after rework 2" },
+  { repo = "~/repos/coelhorocha/email-automations", date = "2026-11-09", hits = 0, false_positives = 0, note = "no hits after rework 2" },
+  { repo = "~/repos/coelhorocha/infra-monorepo", date = "2026-11-09", hits = 0, false_positives = 0, note = "no hits after rework 2" },
+  { repo = "~/repos/coelhorocha/process-contract", date = "2026-11-09", hits = 0, false_positives = 0, note = "no hits after rework 2" },
+  { repo = "~/repos/coelhorocha/slack-bot", date = "2026-11-09", hits = 0, false_positives = 0, note = "no hits after rework 2" },
+  { repo = "~/repos/coelhorocha/slopjus", date = "2026-11-09", hits = 0, false_positives = 0, note = "no hits after rework 2" },
+  { repo = "~/repos/luizhcrocha/fleet", date = "2026-11-09", hits = 2, false_positives = 0, note = "AnswerForm done+failed in packages/ledger/src/answer-text.ts:13 and apps/cli/page/src/core.ts:1478 (run 2 also flagged markframe.ts done+active; dropped by rework 2)" },
+  { repo = "~/repos/luizhcrocha/picasso", date = "2026-11-09", hits = 0, false_positives = 0, note = "no hits after rework 2" },
+  { repo = "~/repos/luizhcrocha/skills", date = "2026-11-09", hits = 0, false_positives = 0, note = "no hits after rework 2" },
+]
+
+[[rule]]
+id = "rust/clippy/struct_excessive_bools"
+lang = "rust"
+engine = "clippy"
+kind = "config"
+status = "retired"
+summary = "a struct with more than 3 bool fields (clippy pedantic), a sign of a state machine in bools"
+where = "lint/rust/lints.toml"
+created = "2026-11-09"
+last_hit = "2026-11-09"
+evidence = [
+  "skill:lang-rust SKILL.md (an enum per state machine)",
+  "repo:chimr chimr-setup/src/lib.rs:33 (Args: help + uninstall + no_launch are modes)",
+]
+history = [
+  { date = "2026-11-09", status = "proposed", note = "proposed by lint-evolve" },
+  { date = "2026-11-09", status = "trial", note = "trial across 6 Rust repos (dotfiles' only crate is vendored atuin, excluded; midicaster not run: needs GTK system libraries, no dev shell)" },
+  { date = "2026-11-09", status = "retired", note = "trial: 7 hits, 6 false positives, mostly feature toggles and config structs; clippy's count cannot tell a lifecycle from independent options, and no threshold separates them (the false positives hold 4-5 bools)" },
+]
+runs = [
+  { repo = "~/repos/coelhorocha/chimr", date = "2026-11-09", hits = 5, false_positives = 4, note = "True: chimr-setup Args (help, uninstall as bools: modes). FP: PolishToggles and PolishFeatures (feature toggles), CaptureConfig (config overrides), SileroDsp (DSP state with two gate flags)" },
+  { repo = "~/repos/luizhcrocha/aimgr", date = "2026-11-09", hits = 0, false_positives = 0, note = "no hits" },
+  { repo = "~/repos/luizhcrocha/hyprgate", date = "2026-11-09", hits = 0, false_positives = 0, note = "no hits" },
+  { repo = "~/repos/luizhcrocha/hyprnotes", date = "2026-11-09", hits = 1, false_positives = 1, note = "FP: InlineStyle src/gui/preview.rs:271 (bold, italic, code, strike, link: independent styles); run on a copy, Cargo.lock is stale" },
+  { repo = "~/repos/luizhcrocha/ocrgrab", date = "2026-11-09", hits = 1, false_positives = 1, note = "FP: ViewerState src/ui/app.rs:29 (fitted, ctrl_held, alt_held, document_ai_pending: independent)" },
+]
+
+[[rule]]
+id = "rust/clippy/fn_params_excessive_bools"
+lang = "rust"
+engine = "clippy"
+kind = "config"
+status = "warn"
+summary = "a function taking more than 3 bool parameters (clippy pedantic): a positional boolean trap, usually a state passed as flags"
+where = "lint/rust/lints.toml"
+created = "2026-11-09"
+last_hit = "2026-11-09"
+evidence = [
+  "skill:lang-ts SKILL.md (no mode booleans) and references/domain-modeling.md (Boolean blindness: createUser(input, true))",
+  "skill:lang-py ruff ALL selects flake8-boolean-trap FBT001-FBT003, the same lesson in the Python pack",
+  "repo:chimr chimr-core/src/decisions.rs:348 (video_in_r2 takes five positional bools: streamed, two_pass_remux, transcoded, baked, leveled)",
+]
+history = [
+  { date = "2026-11-09", status = "proposed", note = "proposed by lint-evolve" },
+  { date = "2026-11-09", status = "trial", note = "trial across 6 Rust repos (dotfiles' only crate is vendored atuin, excluded; midicaster not run: needs GTK system libraries, no dev shell)" },
+  { date = "2026-11-09", status = "warn", note = "trial clean: chimr, ocrgrab, hyprnotes, aimgr, hyprgate; 1 hit, 0 false positives" },
+]
+runs = [
+  { repo = "~/repos/coelhorocha/chimr", date = "2026-11-09", hits = 1, false_positives = 0, note = "chimr-core/src/decisions.rs:348 video_in_r2(streamed, two_pass_remux, transcoded, baked, leveled): five positional bools" },
+  { repo = "~/repos/luizhcrocha/aimgr", date = "2026-11-09", hits = 0, false_positives = 0, note = "no hits" },
+  { repo = "~/repos/luizhcrocha/hyprgate", date = "2026-11-09", hits = 0, false_positives = 0, note = "no hits" },
+  { repo = "~/repos/luizhcrocha/hyprnotes", date = "2026-11-09", hits = 0, false_positives = 0, note = "no hits" },
+  { repo = "~/repos/luizhcrocha/ocrgrab", date = "2026-11-09", hits = 0, false_positives = 0, note = "no hits" },
+]

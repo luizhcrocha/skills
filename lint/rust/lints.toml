@@ -11,3 +11,4 @@
 
 [workspace.lints.clippy]
 all = { level = "warn", priority = -1 }  # rust/clippy-all
+fn_params_excessive_bools = "warn"  # rust/clippy/fn_params_excessive_bools
