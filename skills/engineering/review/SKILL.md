@@ -46,7 +46,7 @@ If the diff touches TypeScript, also call the Skill tool with "lang-ts" and pass
 
 When the user asks for a stricter bar ("thermo-nuclear", "harsh maintainability review"), add the maintainability lens ([references/maintainability.md](references/maintainability.md)) as a standards source, ranked below the repo's standards and above the smell baseline.
 
-On top of whatever the repo documents, the Standards axis always carries the **smell baseline** below: a fixed set of Fowler code smells (_Refactoring_, ch.3) that applies even when a repo documents nothing. Two rules bind it:
+On top of whatever the repo documents, the Standards axis always carries the **smell baseline** below: a fixed set of Fowler code smells (_Refactoring_, ch.3), plus one of ours, that applies even when a repo documents nothing. Two rules bind it:
 
 - **The repo overrides.** A documented repo standard always wins; where it endorses something the baseline would flag, suppress the smell.
 - **Always a judgement call.** Each smell is a labelled heuristic ("possible Feature Envy"), never a hard violation, and always a Nit. Like any standard here, skip anything tooling already enforces.
@@ -65,6 +65,7 @@ Each smell reads *what it is* → *how to fix*; match it against the diff:
 - **Message Chains**: long `a.b().c().d()` navigation the caller shouldn't depend on. → hide the walk behind one method on the first object.
 - **Middle Man**: a class or function that mostly just delegates onward. → cut it, call the real target direct.
 - **Refused Bequest**: a subclass or implementer that ignores or overrides most of what it inherits. → drop the inheritance, use composition.
+- **Implicit State Machine** (ours, not Fowler's; `tstack:principles`, Model the Domain): a lifecycle spread over booleans, nullable modes, flags or a status string checked in several places, so invalid combinations are representable (`isLoading && error`), or a one-off flag threaded into an unrelated flow. → one explicit state type (an enum or discriminated union) with its transitions in one place; a policy object or module for a flag that belongs elsewhere.
 
 ### 4. Spawn both sub-agents in parallel
 
