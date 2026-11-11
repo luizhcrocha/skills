@@ -1,0 +1,2 @@
+change@commit	at	reviewer	verdict	note	patch
+sylozxlkzukqololnmqnykpunyqslszn@7ea2a080462e4f82f81e2748e8553cbaab0c3d7d	2026-11-11T20:36:55Z	r7b-opus	pass	r7 fixes verified: grant-e2e passes, --fleet exact-only, state -q/--no-render take session fleet, grants shim works, no stale callers; tsc/oxlint/bun tests green	11c3b2550478d69a
