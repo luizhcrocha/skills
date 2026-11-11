@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# Reads origin, moves master forward to the given commit and pushes it, as a tstack release. Refuses a rewind, a
-# commit on the way that carries an attribution line, as the owner's rule is no attribution, and a commit whose
-# .claude-plugin/plugin.json version is not above master@origin's. A failed or interrupted push sets master back.
+# Reads origin, moves master forward to the given commit and pushes it, as a tstack release. Refuses a rewind, and a
+# commit on the way that carries an attribution line, as the owner's rule is no attribution. A failed or interrupted
+# push sets master back.
 set -euo pipefail
 
 W=$(cd "$(dirname "$(readlink -f "$0")")/../.." && pwd -P)
@@ -19,22 +19,6 @@ WAS=$(jj -R "$W" log -r master --no-graph -T commit_id) || refuse "master does n
 ATTRIBUTED='description(regex:"(?im)^[ \\t]*(claude-session|co-authored-by)[ \\t]*:|^[ \\t]*(🤖[ \\t]*)?generated with (\\[claude code\\]\\([^)\\s]*\\)|claude code)[ \\t]*$")'
 carrying=$(jj -R "$W" log -r "(master@origin..$COMMIT) & $ATTRIBUTED" --no-graph -T 'commit_id ++ "\n"')
 [ -z "$carrying" ] || refuse "these commits carry an attribution line: $carrying"
-
-version() {
-  jj -R "$W" file show -r "$1" 'root-file:".claude-plugin/plugin.json"' | python3 -I -c '
-import json, sys
-try:
-    print(json.load(sys.stdin)["version"])
-except Exception:
-    sys.exit(1)'
-}
-NEW=$(version "$COMMIT") || refuse "$COMMIT has no readable .claude-plugin/plugin.json version"
-OLD=$(version master@origin) || refuse "master@origin has no readable .claude-plugin/plugin.json version"
-for v in "$OLD" "$NEW"; do
-  [[ $v =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || refuse "the version '$v' is not MAJOR.MINOR.PATCH"
-done
-python3 -I -c 'import sys; o, n = (tuple(map(int, v.split("."))) for v in sys.argv[1:]); sys.exit(n <= o)' "$OLD" "$NEW" ||
-  refuse "$COMMIT does not raise .claude-plugin/plugin.json's version above master@origin's ($OLD to $NEW)"
 
 restore() {
   jj -R "$W" bookmark set master --allow-backwards -r "$WAS" ||

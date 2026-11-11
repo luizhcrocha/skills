@@ -300,7 +300,9 @@ map = [
 # the plugin name, so inside tstack every atom would need renaming (Luiz,
 # 2026-11-06). The panel's Korean strings are English here, in register.tsx and
 # the test that asserts the title; the Korean comments stay, so an upstream edit
-# conflicts only where it touches a translated line.
+# conflicts only where it touches a translated line. Our plugin.json drops the
+# upstream's `version`, as tstack's does, so Claude Code versions the mod by
+# commit SHA: an upstream release bump conflicts there, resolved by leaving it out.
 [upstream.prompt-jump]
 url = "https://github.com/nickhealthy/claude-code-prompt-jump.git"
 base = "db1ca4b5767462b8463307626a9ea56e88a1b5eb"

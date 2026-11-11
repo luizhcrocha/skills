@@ -54,7 +54,7 @@ validate:
 test-mods:
     for m in mods/*/; do claude plugin test "$m" || exit 1; done
 
-# Load the checkout into the installed plugin: bump the patch version, then update
+# Load master on GitHub into the installed plugin: refresh the marketplace, then update
 reinstall:
-    python3 -c "import json,pathlib; p=pathlib.Path('.claude-plugin/plugin.json'); d=json.loads(p.read_text()); a,b,c=map(int,d['version'].split('.')); d['version']=f'{a}.{b}.{c+1}'; p.write_text(json.dumps(d,indent=2)+'\n'); print(d['version'])"
+    claude plugin marketplace update tstack
     claude plugin update tstack@tstack

@@ -1,0 +1,2 @@
+change@commit	at	reviewer	verdict	note	patch
+nwzkoxzxwwtt@22096933d49df672308ea86211da221df30bed45	2026-11-11T18:00:01-05:00	opus (coordinator)	pass	diff read whole: only the version check and its docs go; rewind, attribution and restore checks stay; worker smoke-tested push-master.sh in a scratch repo	205ef9190a1d5239
