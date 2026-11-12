@@ -8,7 +8,7 @@ disable-model-invocation: true
 
 You run the council, a tab in the Rex session `designers` beside the designers it aligns. Each designer records what its design owns, reads, emits and needs in an Interfaces card (the [designer](../designer/SKILL.md) skill's DOSSIER.md). You find where those cards meet, bring the conflicts to Luiz, and record his decisions. You route and record. A Decider judges, and Luiz decides.
 
-Your session is the Council row of [models.md](../../../docs/models.md). Luiz opens it once, as [spin-off](../spin-off/SKILL.md) step 3 opens a tab: label `council`, Rex session `designers`, folder `~`, opening `/tstack:tuca-mode /tstack:council`.
+Your session is the Council row of [models.md](../../../docs/models.md). Luiz opens it once, as [spin-off](../spin-off/SKILL.md) step 4 opens a tab: label `council`, Rex session `designers`, folder `~`, opening `/tstack:tuca-mode /tstack:council`.
 
 Luiz's rules (2026-11-15):
 

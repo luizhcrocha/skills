@@ -1,0 +1,106 @@
+<!doctype html>
+<!--
+Design page shell. Copy it to docs/design/<slug>/design.html and fill it.
+- Keep the bar and the first screen: version and date, what you need from Luiz
+  (one line per open decision, its recommendation, a link to its seam), what
+  changed since the last version, the whole model in one diagram with the picks.
+- Below that the page is yours: one <section id data-nav="Short name"> per part,
+  shaped to its idea. Visual first: each part of the model has a diagram beside
+  its short text (parts and seams, data flow, data shapes, the statechart's chart,
+  each option's shape where options differ), drawn through tstack:show-me.
+- Render every Mermaid diagram to inline SVG with Pele, as the statechart's
+  references/render.md says, so the page loads no library.
+- Tables carry comparisons, never the model itself; wrap each in <div class="wide">
+  so a wide one scrolls inside itself at phone width.
+- Open seams come first and stay open; a decided seam and the proof's detail fold
+  into <details> under one line that states the result.
+- The bar never shows a gate's answer: the dossier does.
+- Delete this comment in the copy.
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SLUG design</title>
+<style>
+:root {
+  --bg: #ffffff; --fg: #1c1c1c; --muted: #656565; --line: #d8d8d8;
+  --surface: #f6f6f4; --accent: #1f6feb; --open: #b85a06;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #141414; --fg: #e8e8e8; --muted: #a0a0a0; --line: #333333;
+    --surface: #1d1d1d; --accent: #6ea8ff; --open: #f0a35c;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #141414; --fg: #e8e8e8; --muted: #a0a0a0; --line: #333333;
+  --surface: #1d1d1d; --accent: #6ea8ff; --open: #f0a35c;
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--fg); font: 16px/1.55 system-ui, sans-serif; }
+main { max-width: 64rem; margin: 0 auto; padding: 0 16px 4rem; }
+.bar { position: sticky; top: 0; z-index: 10; background: var(--bg); border-bottom: 1px solid var(--line); padding: 8px 16px; }
+.bar .id { font-weight: 600; } .bar .meta { color: var(--muted); margin-left: .5rem; }
+.bar nav { display: flex; gap: 1rem; overflow-x: auto; white-space: nowrap; padding-top: 4px; font-size: .9rem; }
+.bar nav a { color: var(--muted); text-decoration: none; }
+.bar nav a.current { color: var(--accent); font-weight: 600; }
+section { scroll-margin-top: 5.5rem; padding-top: 1.5rem; }
+h2 { margin: 0 0 .5rem; }
+.needs li { margin: .25rem 0; } .needs .rec { color: var(--muted); }
+.open { color: var(--open); font-weight: 600; }
+.picks { display: flex; flex-wrap: wrap; gap: .5rem; padding: 0; list-style: none; }
+.picks li { background: var(--surface); border: 1px solid var(--line); border-radius: 6px; padding: 2px 8px; font-size: .9rem; }
+.wide { overflow-x: auto; }
+figure { margin: 1rem 0; } figure svg { max-width: 100%; height: auto; }
+table { border-collapse: collapse; } th, td { border: 1px solid var(--line); padding: 4px 8px; text-align: left; vertical-align: top; }
+details { border: 1px solid var(--line); border-radius: 6px; padding: 6px 10px; margin: .5rem 0; }
+details > summary { cursor: pointer; }
+.pele { --pele-bg: var(--bg); --pele-fg: var(--fg); --pele-muted: var(--muted); --pele-line: var(--muted);
+  --pele-surface: var(--surface); --pele-surface-alt: var(--surface); --pele-border: var(--line); }
+</style>
+</head>
+<body>
+<header class="bar">
+  <span class="id">SLUG</span><span class="meta">design vN · YYYY-MM-DD</span>
+  <nav id="nav"></nav>
+</header>
+<main>
+  <section id="needs" data-nav="Needs you" class="needs">
+    <h2>What I need from you</h2>
+    <ul>
+      <li><a href="#seam-NAME">Seam name</a>: the question in one line. <span class="rec">Recommended: the pick, because the reason.</span></li>
+    </ul>
+  </section>
+  <section id="changed" data-nav="Changed">
+    <h2>Changed since vN-1</h2>
+    <ul><li>One line per change.</li></ul>
+  </section>
+  <section id="model" data-nav="Model">
+    <h2>The model</h2>
+    <figure class="wide"><!-- the whole model in one Pele SVG --></figure>
+    <ul class="picks"><li>Seam: pick</li><li class="open">Seam: open</li></ul>
+  </section>
+  <!-- Below here the page is yours. Each part: <section id="..." data-nav="Short name">, shaped to its idea. -->
+</main>
+<script>
+(function () {
+  var nav = document.getElementById("nav");
+  var sections = Array.prototype.slice.call(document.querySelectorAll("section[data-nav]"));
+  var links = sections.map(function (s) {
+    var a = document.createElement("a");
+    a.href = "#" + s.id; a.textContent = s.getAttribute("data-nav");
+    nav.appendChild(a); return a;
+  });
+  if (!("IntersectionObserver" in window)) return;
+  var seen = new Map();
+  var watch = new IntersectionObserver(function (entries) {
+    entries.forEach(function (e) { seen.set(e.target, e.isIntersecting); });
+    var i = sections.findIndex(function (s) { return seen.get(s); });
+    links.forEach(function (a, j) { a.classList.toggle("current", j === i); });
+  }, { rootMargin: "-80px 0px -60% 0px" });
+  sections.forEach(function (s) { watch.observe(s); });
+})();
+</script>
+</body>
+</html>

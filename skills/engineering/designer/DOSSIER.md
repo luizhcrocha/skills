@@ -46,7 +46,7 @@ card for design v<n>
 
 - **phase** is one of `designing`, `designReview`, `planReview`, `fleetCheck`, `parked`, `teamReview`, `ready`, `handed`, `dropped`: the model's names for the chart's states.
 - **versions** count each artifact's revisions. A version is 0 until its file first exists, 1 from then, and each new version adds 1. The model counts from the first file, so its version 0 is the record's v1.
-- **Artifacts** lists the design page's link and source, the statechart files, the ADRs and `CONTEXT.md` terms, each by path.
+- **Artifacts** lists the design page's link and source, `model.md`, the statechart files, the ADRs and `CONTEXT.md` terms, each by path.
 
 ## Approvals
 
@@ -81,7 +81,7 @@ An approval is live only when its version is the current one, its sha256 matches
 
 ## Conversation
 
-What Luiz said before the design began (Design, step 1): what should change and for whom, what he knows or has decided, what worries him. His words, dated. Later reshapings of the options go here too.
+Luiz's answers to the opening questions (Design, step 2) and his later challenges and reshapings, in his words, dated.
 
 ## Interfaces
 
