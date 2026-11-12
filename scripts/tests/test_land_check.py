@@ -961,6 +961,14 @@ class ReviewRecordTest(RepoCase):
         self.assertEqual(result["verdict"], "stop")
         self.said(result, f"{change}: no review records it: review its full diff")
 
+    def test_a_stack_under_the_threshold_lands_without_records_even_when_required(self):
+        self.trunk(("feat: a", {"a.ts": "a\n"}))
+        self.change("feat: b", {"b.ts": self.lines(40)})
+        result = self.check("--require-reviews")
+        self.assertFalse(result["review"]["needed"])
+        self.assertEqual(result["verdict"], "push")
+        self.assertFalse([r for r in result["reasons"] if r.startswith("warning:")])
+
     def test_a_record_at_the_head_commit_needs_nothing(self):
         change = self.stack()
         [read] = self.read()

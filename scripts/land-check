@@ -102,8 +102,10 @@ workspace. Exit 0 when the verdict is "push", 1 for "ask" or "stop", 2 on error.
 fleet whose registry entry's pid is among this process's parents.
 
 --require-reviews makes a change with state "missing" or "interdiff" a
-"warning:" reason and the verdict "stop" (with --pre-gate, exit 1): the remedy
-is the lane's own review, not Luiz's yes.
+"warning:" reason and the verdict "stop" (with --pre-gate, exit 1), but only
+when the stack needs a review (review.needed: over 300 changed lines, or a
+sensitive file); a smaller stack lands without records (Luiz, 2026-11-15).
+The remedy is the lane's own review, not Luiz's yes.
 
 --push-token T names the token this lane's passed `fleet land --gate` printed,
 when its push hold does not name this workspace.
@@ -694,7 +696,7 @@ def land_check(repo, bookmark, head_rev=None, remote=LANDING_REMOTE, apply_skip_
                                              review_records(repo, head["commit"], tracked, stack))
             result["reviews"] = result["review"].pop("per_change")
             reasons += review_reasons(result["review"])
-            if require_reviews:
+            if require_reviews and result["review"]["needed"]:
                 required = required_reasons(result["reviews"])
                 reasons += required
                 unreviewed = bool(required)
