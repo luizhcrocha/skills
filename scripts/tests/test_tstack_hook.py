@@ -164,16 +164,6 @@ class TapeBuildTest(HookCase):
         self.env.update(CLAUDE_PLUGIN_ROOT=str(self.root), FAKE_TAPE_LOG=str(self.runs), FAKE_DREAM_LOG=str(self.dreams))
         self.index = self.tmp / "data" / "tstack" / "tape" / "index.db"
 
-    def tearDown(self):
-        """The build and the proposer outlive the hook, and one still writing fails the temp folder's cleanup."""
-        logs = (self.tmp / "tape-runs.jsonl", self.dreams)
-        deadline = time.monotonic() + 20
-        while any(log.exists() for log in logs) and not all(log.exists() for log in logs):
-            if time.monotonic() > deadline:
-                break
-            time.sleep(0.05)
-        super().tearDown()
-
     def tape_in_use(self):
         self.index.parent.mkdir(parents=True)
         self.index.write_bytes(b"")
@@ -206,30 +196,11 @@ class TapeBuildTest(HookCase):
         self.assertEqual(self.wait_runs(1), [["build", "--on-start", "--cwd", str(self.repo)]])
         self.assertNotIn("tape_build failed", self.log())
 
-    def test_the_note_proposer_starts_detached_beside_the_build(self):
-        """memo-dream (the proposer) starts with the build, niced and out of the hook's process group like it; it
-        waits on the build's lock itself and keeps its own pilot list and once-a-day rule, so the hook only starts it."""
-        import signal
+    def test_session_start_never_starts_memo_dream(self):
+        """memo-dream dreams at night as a service (`memo-dream night`), not from a session's start."""
         self.tape_in_use()
-        p = subprocess.Popen([str(HOOK), "SessionStart"], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                             stderr=subprocess.PIPE, text=True, start_new_session=True,
-                             env={**self.env, "FAKE_TAPE_SLEEP": "3"})
-        started = time.monotonic()
-        out, err = p.communicate(json.dumps(self.base("SessionStart", source="startup")), timeout=30)
-        self.assertEqual(p.returncode, 0, err)
-        self.assertLess(time.monotonic() - started, 2.5, "the hook waited on the proposer")
-        try:
-            os.killpg(p.pid, signal.SIGKILL)
-        except ProcessLookupError:
-            pass
-        self.runs = self.dreams
-        self.assertEqual(self.wait_runs(1), [["run", "--cwd", str(self.repo)]])
-        self.assertEqual(self.wait_runs(1, key="nice"), [min(os.nice(0) + 10, 19)])
-
-    def test_no_proposer_without_tape_on_the_machine_nor_for_a_worker(self):
-        self.hook("SessionStart", self.base("SessionStart", source="startup"))
-        self.tape_in_use()
-        self.hook("SessionStart", self.base("SessionStart", source="startup", agent_id="a1"))
+        self.assertEqual(self.hook("SessionStart", self.base("SessionStart", source="startup")).returncode, 0)
+        self.assertEqual(self.wait_runs(1), [["build", "--on-start", "--cwd", str(self.repo)]])
         time.sleep(0.5)
         self.assertFalse(self.dreams.exists())
 
@@ -720,6 +691,8 @@ class DreamReportTest(QuietCase):
                                                       "note": None if v == "unwritten" else "01KA" + "0" * 22})}
             if v == "unwritten":
                 c["judged"].update(verdict="keep", error="memo: 9 pins and 9 open threads already")
+            if v == "supersede":
+                c["judged"]["target"] = "01KA" + "1" * 22
         dream.Batches(self.env, key).save({"project": key, "date": date, "made": made, "turns": [0, 1],
                                            "answer": answer, "candidates": candidates,
                                            **({"judge": judge} if judge else {})})
@@ -736,10 +709,10 @@ class DreamReportTest(QuietCase):
         bin_ = f"{ROOT}/scripts/memo-dream"
         self.batch("coelhorocha/custom-mcp-servers", "2026-10-01", ["keep", "edit", "drop"], judge={"at": 5})
         self.batch("coelhorocha/custom-mcp-servers", "2026-10-02", ["drop", "unwritten"], judge={"at": 6})
-        self.batch("acme/widget", "2026-10-01", ["keep"], judge={"at": 7})
+        self.batch("acme/widget", "2026-10-01", ["keep", "supersede"], judge={"at": 7})
         self.batch("acme/widget", "2026-10-02", n=4, answer={"at": 0, "verdicts": ["drop"] * 4})
         self.assertEqual(self.lines(start), [
-            f"memo-dream kept 1 note (0 dropped) for acme/widget: `{bin_} log`.",
+            f"memo-dream kept 2 notes (0 dropped, 1 superseding an older note) for acme/widget: `{bin_} log`.",
             f"memo-dream kept 2 notes (2 dropped, 1 not written) for coelhorocha/custom-mcp-servers: `{bin_} log`."])
         self.assertEqual(self.lines(start), [], "a report is said once")
 

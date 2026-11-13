@@ -128,10 +128,7 @@ def tape_build(hook):
     makes it a no-op, and the project's flock keeps it to one build at a time. The build runs in a session of its
     own, out of the hook's process group, and in a user scope of its own where systemd has one, out of the
     session's; it runs at nice 10, capped at 2G in that scope; its output goes nowhere, so nothing holds the
-    hook's pipes.
-    Right after it, the same way but in a scope of its own, it starts `memo-dream run`, the note drafter and judge:
-    that keeps its own pilot list and once-a-day rule and waits on the build's lock itself, so the hook only starts
-    it."""
+    hook's pipes. memo-dream is not started here: it dreams at night as a service (`memo-dream night`)."""
     if hook.is_worker or hook.headless:
         return None
     if not memo().tape_index(hook.env).exists() or memo().resolve_project(hook.cwd) is None:
@@ -140,16 +137,16 @@ def tape_build(hook):
     import subprocess
     run = Path(hook.env.get("XDG_RUNTIME_DIR") or "/nonexistent")
     scope = (run / "bus").exists() and user_manager_runs(run) and shutil.which("systemd-run", path=hook.env.get("PATH"))
-    for script, *args in (("tape", "build", "--on-start"), ("memo-dream", "run")):
-        argv = [sys.executable, str(ROOT / "scripts" / script), *args, "--cwd", hook.cwd]
-        if scope:
-            argv = ["systemd-run", "--user", "--scope", "--collect", "--quiet", "-p", "MemoryMax=2G", "--", *argv]
-        subprocess.Popen(argv, env=dict(hook.env), stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
-                         stderr=subprocess.DEVNULL, start_new_session=True, preexec_fn=lambda: os.nice(10))
+    argv = [sys.executable, str(ROOT / "scripts" / "tape"), "build", "--on-start", "--cwd", hook.cwd]
+    if scope:
+        argv = ["systemd-run", "--user", "--scope", "--collect", "--quiet", "-p", "MemoryMax=2G", "--", *argv]
+    subprocess.Popen(argv, env=dict(hook.env), stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                     stderr=subprocess.DEVNULL, start_new_session=True, preexec_fn=lambda: os.nice(10))
     return None
 
 
-DREAM_KEPT = "memo-dream kept {kept} note{s} ({dropped} dropped{unwritten}) for {project}: `{bin} log`."
+DREAM_KEPT = ("memo-dream kept {kept} note{s} ({dropped} dropped{superseded}{unwritten}) for {project}: "
+              "`{bin} log`.")
 DREAM_STUCK = "memo-dream: {n} candidate note{s} for {project} wait for the judge{why}: `{bin} judge`."
 
 
@@ -195,9 +192,10 @@ def memo_dream_report(hook):
                 seen.add(name)
                 if name not in done:
                     fresh.add(name)
-                    k = kept.setdefault(project, [0, 0, 0])
+                    k = kept.setdefault(project, [0, 0, 0, 0])
                     for v in verdicts:
                         k[0 if v.get("verdict") == "drop" else 1 if v.get("note") else 2] += 1
+                        k[3] += v.get("verdict") == "supersede" and bool(v.get("note"))
             elif judge.get("failed") or now - (batch.get("made") or 0) > 86400:
                 st = stuck.setdefault(project, [0, None])
                 st[0] += len(cands)
@@ -211,7 +209,9 @@ def memo_dream_report(hook):
                 pass
     bin_ = ROOT / "scripts" / "memo-dream"
     lines = [DREAM_KEPT.format(kept=k[1], s="" if k[1] == 1 else "s", dropped=k[0], project=p, bin=bin_,
-                               unwritten=f", {k[2]} not written" if k[2] else "") for p, k in sorted(kept.items())]
+                               unwritten=f", {k[2]} not written" if k[2] else "",
+                               superseded=f", {k[3]} superseding an older note" if k[3] else "")
+             for p, k in sorted(kept.items())]
     lines += [DREAM_STUCK.format(n=n, s="" if n == 1 else "s", project=p, bin=bin_,
                                  why=f" (it could not settle them: {why})" if why else "")
               for p, (n, why) in sorted(stuck.items())]

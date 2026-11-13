@@ -61,7 +61,7 @@ if os.environ.get("FAKE_MEMO_REFUSE"):
 print("noted 01KA0000000000000000000000 [" + sys.argv[2] + "] project:x")
 """
 
-PILOT_ORIGIN = "git@github.com:coelhorocha/custom-mcp-servers.git"
+ORIGIN = "git@github.com:coelhorocha/custom-mcp-servers.git"
 LESSON = "the widget cache keys on the tenant id, so a test that shares tenants sees stale rows"
 OVER = "x" * 281
 FAKE_SECRET = "api_key = " + "Zq" * 10  # matches memo's SECRET_PATTERNS; invented, never a real key
@@ -128,7 +128,7 @@ class DreamCase(unittest.TestCase):
         }
         (self.tmp / "config" / "tstack").mkdir(parents=True)
         self.tape_config('projects = "all"')
-        self.repo = self.git_repo("custom-mcp-servers", PILOT_ORIGIN)
+        self.repo = self.git_repo("custom-mcp-servers", ORIGIN)
         self.writer = Writer("s1", self.repo)
         self.transcript = self.tmp / "claude" / "projects" / "slug" / "s1.jsonl"
         self.states = self.tmp / "state" / "tstack" / "memo-dream" / "coelhorocha__custom-mcp-servers"
@@ -202,7 +202,7 @@ class DreamCase(unittest.TestCase):
 
 
 class DraftTest(DreamCase):
-    def test_a_pilot_repo_gets_a_batch_of_vetted_candidates_and_the_drafter_writes_no_note(self):
+    def test_a_project_gets_a_batch_of_vetted_candidates_and_the_drafter_writes_no_note(self):
         self.note("fact", "deploys go out through the staging lane first and then production after review")
         before = self.notes()
         self.session(("fix the cache", "fixed", f"w1 report.\n1. done\nLesson: {LESSON}"),
@@ -216,6 +216,7 @@ class DraftTest(DreamCase):
              "turn": 1},
             {"kind": "preference", "text": "Luiz wants  docs\nin plain words", "turn": 1},
         ])
+        [live] = [Path(n).stem for n in before]
         self.run_dream()
         [call] = self.calls()
         args = call["args"]
@@ -229,13 +230,15 @@ class DraftTest(DreamCase):
         [batch] = self.batches()
         self.assertEqual(batch["candidates"], [
             {"kind": "gotcha", "text": LESSON, "turn": 0},
+            {"kind": "fact", "text": "deploys go out through the staging lane first then production after review",
+             "turn": 1, "near": [live]},
             {"kind": "preference", "text": "Luiz wants docs in plain words", "turn": 1},
         ])
         self.assertIsNone(batch["answer"])
         self.assertEqual(self.notes(), before, "the drafter (or a judge that settled nothing) wrote the memo store")
         self.assertNotIn("Zq" * 10, "".join(p.read_text() for p in self.states.rglob("*") if p.is_file()))
 
-    def test_a_candidate_is_dropped_only_for_overlapping_a_live_note_or_a_kept_candidate(self):
+    def test_a_candidate_is_dropped_only_for_overlapping_a_kept_candidate(self):
         """A~B and B~C, A and C apart: B goes for A, and C stays, since what it overlaps is gone."""
         a = "alpha bravo charlie delta echo foxtrot"
         b = "charlie delta echo foxtrot golf hotel"
@@ -263,13 +266,15 @@ class DraftTest(DreamCase):
         self.assertIn("ask about widgets", call["stdin"])
         self.assertEqual(len(self.batches()), 1)
 
-    def test_it_runs_at_most_once_a_local_day_and_then_reads_only_newer_turns(self):
+    def test_a_run_reads_only_newer_turns_and_never_overwrites_the_days_batch(self):
+        self.answer([{"kind": "fact", "text": "the widget renders server side", "turn": 0}])
         self.session(("first ask", "first answer"), ("second ask", "second answer"))
         now = self.writer.t + 2 * DAY
         self.run_dream(now=now)
         self.session(("third ask", "third answer"), ("fourth ask", "x"))
-        self.run_dream(now=now + timedelta(minutes=5))
-        self.assertEqual(len(self.calls()), 1, "a second run the same day, with new turns, made a call")
+        out = self.run_dream(now=now + timedelta(minutes=5))
+        self.assertEqual(len(self.calls()), 1, "a second batch the same day would overwrite the first")
+        self.assertIn("exists already", out)
         self.run_dream(now=now + DAY)
         first, second = self.calls()
         self.assertIn("first ask", first["stdin"])
@@ -282,20 +287,34 @@ class DraftTest(DreamCase):
         self.run_dream(now=self.writer.t + 5 * DAY)
         self.assertEqual(len(self.calls()), 1)
 
-    def test_a_repo_off_the_pilot_list_gets_nothing_unless_the_env_names_it(self):
+    def test_the_env_list_restricts_the_projects_and_unset_means_every_one(self):
         other = self.git_repo("widget", "git@github.com:acme/widget.git")
         self.writer = Writer("s2", other)
         self.transcript = self.tmp / "claude" / "projects" / "slug" / "s2.jsonl"
         self.session(("ask", "answer"), ("close", "x"))
         self.answer([{"kind": "fact", "text": "the widget renders server side", "turn": 0}])
-        self.run_dream(cwd=other)
+        for listed in ("", "coelhorocha/custom-mcp-servers"):
+            self.assertIn("MEMO_DREAM_PROJECTS", self.run_dream(cwd=other, env={"MEMO_DREAM_PROJECTS": listed}))
         self.assertEqual(self.calls(), [])
-        self.run_dream(cwd=other, env={"MEMO_DREAM_PROJECTS": "acme/widget"})
+        self.run_dream(cwd=other, env={"MEMO_DREAM_PROJECTS": "Acme/Widget, coelhorocha/custom-mcp-servers"})
         self.assertEqual(len(self.calls()), 1)
         self.assertTrue((self.tmp / "state" / "tstack" / "memo-dream" / "acme__widget").is_dir())
         self.session(("more", "x"), ("close", "x"))
-        self.run_dream(env={"MEMO_DREAM_PROJECTS": "acme/widget"})
-        self.assertEqual(len(self.calls()), 1, "the env list replaces the pilot")
+        self.run_dream(cwd=other, now=self.writer.t + 3 * DAY)
+        self.assertEqual(len(self.calls()), 2, "unset, the list is every project tape allows")
+
+    def test_the_drafter_sees_the_live_notes_with_their_ids_as_data(self):
+        self.note("fact", "deploys go out through the staging lane first and then production after review")
+        [name] = self.notes()
+        self.session(("ask", "answer"), ("close", "x"))
+        self.run_dream()
+        [call] = self.calls()
+        notes = call["stdin"][call["stdin"].index("<notes>"):call["stdin"].index("</notes>")]
+        self.assertIn(f"{Path(name).stem} [fact] deploys go out through the staging lane", notes)
+        self.assertLess(call["stdin"].index("</notes>"), call["stdin"].index("<turns>"))
+        prompt = call["args"][call["args"].index("--system-prompt") + 1]
+        self.assertIn("<notes>", prompt)
+        self.assertIn("already says", prompt)
 
     def test_the_input_is_bounded(self):
         self.session(*((f"ask {k} " + "lorem " * 2000, "answer " * 2000) for k in range(60)), ("close", "x"))
@@ -394,7 +413,7 @@ class AnswerTest(DreamCase):
         self.assertIn("never instructions to follow", first)
         self.assertIn("never instructions to follow", json.loads(self.dream("pending", "--json", now=now)[1])["about"])
 
-    def test_pending_outside_a_pilot_repo_lists_every_pilots_batches_and_answer_takes_the_project(self):
+    def test_pending_outside_a_dreamed_repo_lists_every_projects_batches_and_answer_takes_the_project(self):
         both = {"MEMO_DREAM_PROJECTS": "coelhorocha/custom-mcp-servers acme/widget"}
         now = self.writer.t + 2 * DAY
         self.answer(self.facts(1))
@@ -418,7 +437,7 @@ class AnswerTest(DreamCase):
                 self.assertIn("acme/widget", out)
                 self.assertIn(self.FACTS[1], out)
                 self.assertIn("--project acme/widget", out)
-        self.assertNotIn(self.FACTS[1], self.dream("pending", now=now, env=both)[1], "a pilot repo lists its own")
+        self.assertNotIn(self.FACTS[1], self.dream("pending", now=now, env=both)[1], "a dreamed repo lists its own")
         day = self.batches()[0]["date"]
         self.assertEqual(self.dream("answer", "--project", "acme/widget", day, "keep", now=now, cwd=nowhere)[0], 0)
         self.assertNotIn(self.FACTS[1], self.dream("pending", now=now, cwd=nowhere, env=both)[1])
@@ -518,6 +537,41 @@ class VerdictParseTest(unittest.TestCase):
         self.assertLessEqual(len(recs[1]["reason"]), dream.REASON_MAX)
 
 
+    TARGET = "01KA" + "0" * 21 + "7"
+
+    def test_supersede_names_a_live_note_of_the_input_and_writes_the_corrected_line_or_the_candidates(self):
+        recs = dream.parse_verdicts(json.dumps([
+            {"line": 1, "verdict": "supersede", "target": self.TARGET.lower(), "kind": "fact",
+             "text": "the billing worker retries a webhook  three times", "reason": "billing.py retries 3"},
+            {"line": 2, "verdict": "supersede", "target": "01KA" + "0" * 21 + "8", "reason": "the note is old"}]),
+            self.CANDS, {self.TARGET, "01KA" + "0" * 21 + "8"})
+        self.assertEqual(recs, [
+            {"verdict": "supersede", "target": self.TARGET, "kind": "fact",
+             "text": "the billing worker retries a webhook three times", "reason": "billing.py retries 3",
+             "by": "judge"},
+            {"verdict": "supersede", "target": "01KA" + "0" * 21 + "8", "kind": "gotcha", "text": self.CANDS[1]["text"],
+             "reason": "the note is old", "by": "judge"}])
+
+    def test_a_supersede_of_a_note_not_in_the_input_twice_or_with_a_bad_line_is_a_drop(self):
+        sup = {"verdict": "supersede", "kind": "fact", "reason": "r"}
+        for answer, targets in (
+                ([{"line": 1, **sup, "target": "01KA" + "9" * 22}, {"line": 2, **sup, "target": self.TARGET}], set()),
+                ([{"line": 1, **sup}, {"line": 2, **sup, "target": 7}], {self.TARGET}),
+                ([{"line": 1, **sup, "target": self.TARGET, "text": OVER}, {"line": 2, "verdict": "drop"}],
+                 {self.TARGET})):
+            with self.subTest(answer=answer):
+                recs = dream.parse_verdicts(json.dumps(answer), self.CANDS, targets)
+                self.assertEqual([r["verdict"] for r in recs], ["drop", "drop"])
+                self.assertNotIn("target", recs[0])
+        twice = dream.parse_verdicts(json.dumps([{"line": 1, **sup, "target": self.TARGET},
+                                                 {"line": 2, **sup, "target": self.TARGET}]), self.CANDS, {self.TARGET})
+        self.assertEqual([r["verdict"] for r in twice], ["supersede", "drop"])
+        self.assertIn("line 1", twice[1]["reason"])
+
+    def test_supersede_is_the_judges_alone(self):
+        self.assertNotIn("supersede", dream.VERDICTS, "a manual `answer` writes no note, so it cannot supersede")
+
+
 class JudgeTest(DreamCase):
     FACTS = AnswerTest.FACTS
     EDITED = "search results are ranked by recency inside a tenant, then by score"
@@ -585,6 +639,64 @@ class JudgeTest(DreamCase):
         rows = CapTest.db(self).execute("select kind, ok, model from calls order by id").fetchall()
         self.assertEqual(rows, [("dream", 1, "claude-sonnet-5"), ("judge", 1, "claude-fable-5")])
 
+    def test_the_judge_supersedes_a_live_note_the_candidate_shows_wrong(self):
+        self.note("fact", "webhooks are retried five times then parked by the billing lane")
+        [old] = [Path(n).stem for n in self.notes()]
+        self.judge([{"line": 1, "verdict": "supersede", "target": old, "kind": "fact", "text": self.FACTS[0],
+                     "reason": "billing/worker.py retries three times"}])
+        out = self.drafted(1)
+        [call] = self.judge_calls()
+        self.assertIn(f"{old} [fact] webhooks are retried five times", call["stdin"])
+        self.assertIn("supersede", call["args"][call["args"].index("--system-prompt") + 1])
+        [batch] = self.batches()
+        rec = batch["candidates"][0]["judged"]
+        self.assertEqual((rec["verdict"], rec["target"]), ("supersede", old))
+        self.assertRegex(rec["note"], r"^[0-9A-Z]{26}$")
+        [new] = [t for t in self.live_texts() if self.FACTS[0] in t]
+        self.assertIn(old, new, "the new note records the one it supersedes")
+        self.assertIn("kept 1 (1 superseding a live note), dropped 0", out)
+        log = self.dream("log")[1]
+        self.assertIn(f"supersede [fact] {self.FACTS[0]} (note {rec['note']} superseding {old}", log)
+        self.assertIn("1 of 1 candidates kept", log)
+
+    def test_a_correction_worded_like_a_live_note_reaches_the_judge_flagged_and_supersedes_it(self):
+        self.note("fact", "the billing worker retries a webhook five times before it parks it")
+        [old] = [Path(n).stem for n in self.notes()]
+        self.judge([{"line": 1, "verdict": "supersede", "target": old, "kind": "fact", "text": self.FACTS[0],
+                     "reason": "billing/worker.py retries three times"}])
+        self.drafted(1)
+        [batch] = self.batches()
+        self.assertEqual(batch["candidates"][0]["near"], [old])
+        [call] = self.judge_calls()
+        self.assertIn(f"1. [fact] {self.FACTS[0]} (from turn 0; near live note {old})", call["stdin"])
+        self.assertIn("near live note", call["args"][call["args"].index("--system-prompt") + 1])
+        rec = batch["candidates"][0]["judged"]
+        self.assertEqual((rec["verdict"], rec["target"]), ("supersede", old))
+        [new] = [t for t in self.live_texts() if self.FACTS[0] in t]
+        self.assertIn(old, new)
+
+    def test_supersede_runs_memo_supersede_in_the_checkout(self):
+        memo_calls = self.fake_memo()
+        target = "01KA" + "0" * 21 + "7"
+        live = [dream.memo.Item(target, "fact", "webhooks are retried five times", scope="project:x")]
+        self.judge([{"line": 1, "verdict": "supersede", "target": target, "kind": "decision", "text": self.EDITED,
+                     "reason": "r"}])
+        with mock.patch.object(dream, "live_notes", return_value=live):
+            self.drafted(1)
+        [call] = memo_calls()
+        self.assertEqual(call["args"], ["supersede", "--kind", "decision", target, self.EDITED])
+        self.assertEqual((call["cwd"], call["role"]), (str(self.repo), "memo-dream"))
+
+    def test_a_global_note_is_shown_but_never_a_target(self):
+        target = "01KA" + "0" * 21 + "7"
+        live = [dream.memo.Item(target, "preference", "Luiz wants plain words", scope="global")]
+        self.judge([{"line": 1, "verdict": "supersede", "target": target, "kind": "fact", "reason": "r"}])
+        with mock.patch.object(dream, "live_notes", return_value=live):
+            self.drafted(1)
+        self.assertIn(f"{target} [preference] (global) Luiz wants plain words", self.judge_calls()[0]["stdin"])
+        self.assertEqual(self.batches()[0]["candidates"][0]["judged"]["verdict"], "drop")
+        self.assertEqual(self.notes(), [])
+
     def test_drop_writes_nothing_and_keep_runs_memo_note_in_the_checkout(self):
         memo_calls = self.fake_memo()
         self.judge(self.verdicts("drop", "drop"))
@@ -616,8 +728,8 @@ class JudgeTest(DreamCase):
 
         real = dream.write_note
 
-        def dies_after_the_second(env, repo, kind, text):
-            noted = real(env, repo, kind, text)
+        def dies_after_the_second(env, repo, kind, text, target=None):
+            noted = real(env, repo, kind, text, target)
             if text == self.EDITED:
                 raise Died
             return noted
@@ -730,6 +842,23 @@ class JudgeTest(DreamCase):
         self.assertIn(self.EDITED, "".join(self.live_texts()))
         self.assertIn("no batch waits", self.dream("judge", cwd=nowhere)[1])
 
+    def test_checkout_prefers_the_main_checkout_over_a_jj_workspace_listed_first(self):
+        key = "acme/widget"
+        ws, main = self.tmp / "widget-feature", self.tmp / "widget"
+        ws.mkdir()
+        (main / ".git").mkdir(parents=True)
+        batches = dream.Batches(self.env, key)
+        batches.save({"project": key, "date": "2026-10-22", "made": 0, "turns": [0, 1], "repo": str(ws),
+                      "candidates": [], "answer": None})
+        store = type("Store", (), {"scope": f"project:{key}"})()
+        with mock.patch.object(dream.memo, "project_root", lambda p: (Path(p),)), \
+                mock.patch.object(dream.memo, "resolve_project", lambda p: store):
+            self.assertEqual(dream.checkout(self.env, batches, cwd=None), str(ws))
+            self.assertEqual(dream.checkout(self.env, batches, cwd=str(main)), str(main))
+            batches.save({"project": key, "date": "2026-10-23", "made": 0, "turns": [2, 3], "repo": str(main),
+                          "candidates": [], "answer": None})
+            self.assertEqual(dream.checkout(self.env, batches, cwd=str(ws)), str(main))
+
     def test_a_project_with_no_checkout_on_the_machine_stays_pending_and_says_so(self):
         key = "acme/widget"
         dream.Batches(self.env, key).save({"project": key, "date": "2026-10-22", "made": 0, "turns": [0, 1],
@@ -776,6 +905,162 @@ class JudgeTest(DreamCase):
         self.session(("later", "x"), ("close", "x"))
         self.run_dream(now=self.writer.t + 20 * DAY)
         self.assertEqual(len(self.calls()), 2)
+
+
+class NightTest(DreamCase):
+    """`night`: the service's entry point, called often by a timer; it dreams once a night, once sessions are quiet."""
+
+    NIGHT = datetime(2026, 12, 2, 3, 0)  # naive: local time, as the window is read
+    FACT = [{"kind": "fact", "text": "the widget renders server side", "turn": 0}]
+
+    def night(self, *args, at=None, idle=120, env=None):
+        """`memo-dream night` at local time `at`, every transcript last written `idle` minutes before."""
+        at = at or self.NIGHT
+        for f in (self.tmp / "claude" / "projects").rglob("*.jsonl"):
+            os.utime(f, (at.timestamp() - 60 * idle,) * 2)
+        return self.dream("night", *args, now=at, env=env)
+
+    def other(self, name, origin):
+        """Later sessions go to a second project."""
+        repo = self.git_repo(name, origin)
+        self.writer = Writer(name, repo, t=self.writer.t)
+        self.transcript = self.tmp / "claude" / "projects" / name / f"{name}.jsonl"
+        self.turns = 0
+        return repo
+
+    def done(self):
+        path = self.tmp / "state" / "tstack" / "memo-dream" / "night.json"
+        return json.loads(path.read_text())["night"] if path.exists() else None
+
+    def test_outside_the_window_it_does_nothing_and_says_why(self):
+        self.session(("ask", "answer"), ("close", "x"))
+        for at in (self.NIGHT.replace(hour=0, minute=59), self.NIGHT.replace(hour=7), self.NIGHT.replace(hour=14)):
+            with self.subTest(at=at):
+                code, out = self.night(at=at)
+                self.assertEqual(code, 0, out)
+                self.assertEqual(len(out.splitlines()), 1)
+                self.assertIn("outside the night window 01:00-07:00", out)
+        self.assertEqual(self.every_call(), [])
+        self.assertIsNone(self.done())
+
+    def test_it_dreams_once_a_night_and_the_next_night_reads_only_newer_turns(self):
+        self.answer(self.FACT)
+        self.session(("first ask", "answer"), ("close", "x"))
+        code, out = self.night()
+        self.assertEqual(code, 0, out)
+        self.assertIn("coelhorocha/custom-mcp-servers: 1 candidates from turns 0-1", out)
+        self.assertEqual(self.done(), "2026-12-02")
+        self.session(("second ask", "answer"), ("close", "x"))
+        code, out = self.night(at=self.NIGHT.replace(hour=5))
+        self.assertEqual((code, len(out.splitlines())), (0, 1), out)
+        self.assertIn("dreamed already", out)
+        self.assertEqual(len(self.calls()), 1)
+        self.night(at=self.NIGHT + DAY)
+        first, second = self.calls()
+        self.assertNotIn("first ask", second["stdin"])
+        self.assertIn("second ask", second["stdin"])
+        self.assertEqual(self.done(), "2026-12-03")
+
+    def test_a_window_across_midnight_keys_the_night_by_the_day_it_started(self):
+        self.session(("ask", "answer"), ("close", "x"))
+        late = self.NIGHT.replace(hour=23, minute=30)
+        code, out = self.night("--window", "22:00-06:00", "--last-call", "05:30", at=late)
+        self.assertEqual(code, 0, out)
+        self.assertEqual(self.done(), "2026-12-02")
+        out = self.night("--window", "22:00-06:00", "--last-call", "05:30", at=late + timedelta(hours=5))[1]
+        self.assertIn("dreamed already", out)
+        self.assertIn("outside", self.night("--window", "22:00-06:00", "--last-call", "05:30",
+                                            at=late - timedelta(hours=2))[1])
+
+    def test_busy_sessions_hold_it_until_last_call(self):
+        self.session(("ask", "answer"), ("close", "x"))
+        code, out = self.night(idle=10)
+        self.assertEqual((code, len(out.splitlines())), (0, 1), out)
+        self.assertIn("10 min ago", out)
+        self.assertIn("45", out)
+        self.assertEqual((self.calls(), self.done()), ([], None))
+        self.assertIn("quiet", self.night("--quiet", "5", idle=10)[1])
+        self.assertEqual(len(self.calls()), 1, "ten idle minutes are quiet enough for --quiet 5")
+        self.session(("more", "x"), ("close", "x"))
+        self.night(at=self.NIGHT + DAY + timedelta(hours=3, minutes=29), idle=1)
+        self.assertEqual(len(self.calls()), 1)
+        self.night(at=self.NIGHT + DAY + timedelta(hours=3, minutes=30), idle=1)
+        self.assertEqual(len(self.calls()), 2, "at last call it dreams with sessions running")
+
+    def test_force_skips_the_window_the_once_rule_and_quiet(self):
+        self.session(("ask", "answer"), ("close", "x"))
+        self.night()
+        self.session(("more", "x"), ("close", "x"))
+        code, out = self.night("--force", at=self.NIGHT.replace(hour=4), idle=0)
+        self.assertEqual(code, 0, out)
+        self.assertEqual(len(self.calls()), 2)
+        self.night("--force", at=self.NIGHT.replace(hour=14), idle=0)
+        self.assertEqual(len(self.calls()), 2, "no new turns, no call")
+
+    def test_a_bad_window_or_last_call_is_refused(self):
+        for args in (("--window", "25:00-07:00"), ("--window", "01:00"), ("--window", "03:00-03:00"),
+                     ("--last-call", "08:00"), ("--quiet", "-1")):
+            with self.subTest(args=args):
+                code, out = self.night(*args)
+                self.assertEqual(code, 2, out)
+        self.assertEqual(self.every_call(), [])
+
+    def test_every_project_tape_allows_is_dreamed_and_one_failure_stops_none(self):
+        self.answer(self.FACT)
+        self.session(("custom ask", "answer"), ("close", "x"))
+        widget = self.other("widget", "git@github.com:acme/widget.git")
+        self.session(("widget ask", "answer"), ("close", "x"))
+        self.other("secret", "git@github.com:acme/secret.git")
+        self.session(("secret ask", "answer"), ("close", "x"))
+        self.tape_config('projects = "all"', 'exclude = ["acme/secret"]')
+        real = dream.draft
+
+        def widget_breaks(env, cwd, key, *rest):
+            if key == "acme/widget":
+                raise RuntimeError("the widget broke")
+            return real(env, cwd, key, *rest)
+
+        with mock.patch.object(dream, "draft", widget_breaks):
+            code, out = self.night()
+        self.assertEqual(code, 1, out)
+        [call] = self.calls()
+        self.assertIn("custom ask", call["stdin"])
+        self.assertEqual(call["cwd"], str(self.repo))
+        self.assertNotIn("secret ask", json.dumps(self.every_call()))
+        lines = out.splitlines()
+        self.assertTrue(any(ln.startswith("memo-dream: acme/widget: failed (RuntimeError") for ln in lines), out)
+        self.assertTrue(any(ln.startswith("memo-dream: coelhorocha/custom-mcp-servers: 1 candidates") for ln in lines))
+        self.assertNotIn("acme/secret", out)
+        self.assertEqual(self.done(), "2026-12-02")
+        code, out = self.night(at=self.NIGHT + DAY)
+        self.assertEqual(code, 0, out)
+        [_, call] = self.calls()
+        self.assertEqual(call["cwd"], str(widget), "the failed project's turns wait for the next night")
+        self.assertIn("widget ask", call["stdin"])
+        self.assertIn("coelhorocha/custom-mcp-servers: no new turns", out)
+
+    def test_the_env_list_restricts_the_night_to_its_projects(self):
+        self.session(("custom ask", "answer"), ("close", "x"))
+        self.other("widget", "git@github.com:acme/widget.git")
+        self.session(("widget ask", "answer"), ("close", "x"))
+        self.night(env={"MEMO_DREAM_PROJECTS": ""})
+        self.assertEqual(self.calls(), [])
+        self.night("--force", env={"MEMO_DREAM_PROJECTS": "acme/widget"})
+        [call] = self.calls()
+        self.assertIn("widget ask", call["stdin"])
+
+    def test_it_judges_pending_batches_and_settles_them_at_night(self):
+        self.answer(self.FACT)
+        self.session(("ask", "answer"), ("close", "x"))
+        self.night()
+        self.assertEqual(self.batches()[0]["judge"]["failed"], "answer did not settle every line")
+        self.judge([{"line": 1, "verdict": "keep", "kind": "fact", "reason": "r"}])
+        code, out = self.night(at=self.NIGHT + DAY)
+        self.assertEqual(code, 0, out)
+        self.assertIn("no new turns", out)
+        self.assertIn("the judge kept 1", out)
+        self.assertEqual(len(self.calls()), 1)
+        self.assertTrue(dream.settled(self.batches()[0]))
 
 
 if __name__ == "__main__":

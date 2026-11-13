@@ -1,0 +1,2 @@
+change@commit	at	reviewer	verdict	note	patch
+uxovmklqxlrxsnwxnkkmurqkwtzptoqp@b0bdca39c5ce548c1eb14960548a4e69845a7811	2026-11-13T13:01:22-05:00	reviewer-opus-high	pass	PASS; medium (checkout picked a jj workspace) fixed by the coordinator with a test, 159 pass; lows left: supersede of unshown/global note drops, target not rechecked on retry, 200-turn cursor skip, run-by-hand vs midnight window	af1c73122bf1c31d
