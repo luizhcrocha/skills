@@ -1,0 +1,2 @@
+change@commit	at	reviewer	verdict	note	patch
+lnoztmynunpvluquzwytpvvzsuurlykv@abe56d2672fe4acd78733cfda0a9ae54a4c434cc	2026-11-13T10:14:55-05:00	reviewer-opus-high	pass	FIX (hook report could skip batches; crash double-write; answer unlocked) fixed and retested, 142 pass; low items left: stale clone in checkout(), write_note timeout label, Opus fallback on timeout	e121dbbce31638a2

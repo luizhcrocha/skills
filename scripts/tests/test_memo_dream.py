@@ -1,9 +1,10 @@
-"""Tests for scripts/memo-dream, the note-drafting proposer, against synthetic transcripts and a fake `claude`.
+"""Tests for scripts/memo-dream, the note drafter and its judge, against synthetic transcripts and a fake `claude`.
 
 Run: python3 -m unittest scripts/tests/test_memo_dream.py
 
 No real transcript is read and no model is called: every fixture, every lesson and every "secret" is invented
-here, and `claude` on PATH is a stand-in that logs its call and answers from FAKE_CLAUDE_ANSWER.
+here, and `claude` on PATH is a stand-in that logs its call and answers from FAKE_CLAUDE_ANSWER_<MODEL>, else
+FAKE_CLAUDE_ANSWER. Notes are written to throwaway repos only.
 """
 
 import contextlib
@@ -15,6 +16,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 from datetime import datetime, timedelta, timezone
 from importlib.machinery import SourceFileLoader
 from importlib.util import module_from_spec, spec_from_loader
@@ -32,16 +34,31 @@ dream = module_from_spec(spec_from_loader("memo_dream_under_test", _loader))
 _loader.exec_module(dream)
 
 FAKE_CLAUDE = r"""#!{python}
-# A stand-in for `claude -p`: logs each call and answers with FAKE_CLAUDE_ANSWER's text. No model is called.
+# A stand-in for `claude -p`: logs each call and answers with its model's answer file. No model is called.
 import json, os, sys
 stdin = sys.stdin.read()
+model = sys.argv[sys.argv.index("--model") + 1]
 with open(os.environ["FAKE_CLAUDE_LOG"], "a") as f:
-    f.write(json.dumps({{"args": sys.argv[1:], "role": os.environ.get("TSTACK_ROLE"), "stdin": stdin}}) + "\n")
-answer = open(os.environ["FAKE_CLAUDE_ANSWER"]).read()
+    f.write(json.dumps({{"args": sys.argv[1:], "role": os.environ.get("TSTACK_ROLE"), "stdin": stdin,
+                        "cwd": os.getcwd(), "model": model}}) + "\n")
+path = os.environ.get("FAKE_CLAUDE_ANSWER_" + model.upper()) or os.environ["FAKE_CLAUDE_ANSWER"]
+answer = open(path).read()
 fail = answer.startswith("FAIL")
 print(json.dumps({{"type": "result", "is_error": fail, "result": answer, "total_cost_usd": 0.01, "duration_ms": 9,
-                  "modelUsage": {{"claude-sonnet-5": {{}}}}, "usage": {{"input_tokens": 40, "output_tokens": 20}}}}))
+                  "modelUsage": {{f"claude-{{model}}-5": {{}}}}, "usage": {{"input_tokens": 40, "output_tokens": 20}}}}))
 sys.exit(1 if fail else 0)
+"""
+
+FAKE_MEMO = r"""#!{python}
+# A stand-in for scripts/memo: logs `memo note` and answers like it, or refuses when FAKE_MEMO_REFUSE is set.
+import json, os, sys
+with open(os.environ["FAKE_MEMO_LOG"], "a") as f:
+    f.write(json.dumps({{"args": sys.argv[1:], "cwd": os.getcwd(), "role": os.environ.get("TSTACK_ROLE"),
+                        "quiet": os.environ.get("MEMO_QUIET")}}) + "\n")
+if os.environ.get("FAKE_MEMO_REFUSE"):
+    print("memo: 9 pins and 9 open threads already", file=sys.stderr)
+    sys.exit(2)
+print("noted 01KA0000000000000000000000 [" + sys.argv[2] + "] project:x")
 """
 
 PILOT_ORIGIN = "git@github.com:coelhorocha/custom-mcp-servers.git"
@@ -96,6 +113,7 @@ class DreamCase(unittest.TestCase):
         fake.write_text(FAKE_CLAUDE.format(python=sys.executable))
         fake.chmod(0o755)
         self.calls_log, self.answer_file = self.tmp / "calls.jsonl", self.tmp / "answer.txt"
+        self.judge_files = {m: self.tmp / f"judge-{m}.txt" for m in ("fable", "opus")}
         self.env = {
             "HOME": str(self.tmp / "home"),
             "XDG_DATA_HOME": str(self.tmp / "data"),
@@ -105,6 +123,8 @@ class DreamCase(unittest.TestCase):
             "PATH": f"{self.bin}{os.pathsep}{os.environ.get('PATH', '')}",
             "FAKE_CLAUDE_LOG": str(self.calls_log),
             "FAKE_CLAUDE_ANSWER": str(self.answer_file),
+            "FAKE_CLAUDE_ANSWER_FABLE": str(self.judge_files["fable"]),
+            "FAKE_CLAUDE_ANSWER_OPUS": str(self.judge_files["opus"]),
         }
         (self.tmp / "config" / "tstack").mkdir(parents=True)
         self.tape_config('projects = "all"')
@@ -114,6 +134,7 @@ class DreamCase(unittest.TestCase):
         self.states = self.tmp / "state" / "tstack" / "memo-dream" / "coelhorocha__custom-mcp-servers"
         self.turns = 0  # turns written so far: tape numbers them from 0, in order
         self.answer([])
+        self.judge("no verdicts here")  # by default the judge settles nothing: the batch stays pending
 
     def git_repo(self, name, origin):
         path = self.tmp / "repos" / name
@@ -127,6 +148,11 @@ class DreamCase(unittest.TestCase):
 
     def answer(self, candidates):
         self.answer_file.write_text(candidates if isinstance(candidates, str) else json.dumps(candidates))
+
+    def judge(self, verdicts, opus=None):
+        """The judge's answer on Fable, and on Opus (the same unless given)."""
+        for model, v in (("fable", verdicts), ("opus", verdicts if opus is None else opus)):
+            self.judge_files[model].write_text(v if isinstance(v, str) else json.dumps(v))
 
     def write(self, *records):
         self.transcript.parent.mkdir(parents=True, exist_ok=True)
@@ -153,8 +179,15 @@ class DreamCase(unittest.TestCase):
         self.assertEqual(code, 0, out)
         return out
 
-    def calls(self):
+    def every_call(self):
         return [json.loads(ln) for ln in self.calls_log.read_text().splitlines()] if self.calls_log.exists() else []
+
+    def calls(self):
+        """The drafting calls."""
+        return [c for c in self.every_call() if c["model"] == "sonnet"]
+
+    def judge_calls(self):
+        return [c for c in self.every_call() if c["model"] != "sonnet"]
 
     def batches(self):
         return sorted((json.loads(p.read_text()) for p in self.states.glob("????-??-??.json")),
@@ -169,7 +202,7 @@ class DreamCase(unittest.TestCase):
 
 
 class DraftTest(DreamCase):
-    def test_a_pilot_repo_gets_a_batch_of_vetted_candidates_and_no_note(self):
+    def test_a_pilot_repo_gets_a_batch_of_vetted_candidates_and_the_drafter_writes_no_note(self):
         self.note("fact", "deploys go out through the staging lane first and then production after review")
         before = self.notes()
         self.session(("fix the cache", "fixed", f"w1 report.\n1. done\nLesson: {LESSON}"),
@@ -199,7 +232,7 @@ class DraftTest(DreamCase):
             {"kind": "preference", "text": "Luiz wants docs in plain words", "turn": 1},
         ])
         self.assertIsNone(batch["answer"])
-        self.assertEqual(self.notes(), before, "the proposer wrote the memo store")
+        self.assertEqual(self.notes(), before, "the drafter (or a judge that settled nothing) wrote the memo store")
         self.assertNotIn("Zq" * 10, "".join(p.read_text() for p in self.states.rglob("*") if p.is_file()))
 
     def test_a_candidate_is_dropped_only_for_overlapping_a_live_note_or_a_kept_candidate(self):
@@ -289,7 +322,7 @@ class CapTest(DreamCase):
     def test_the_call_is_a_row_in_tapes_ledger(self):
         self.session(("ask", "answer"), ("close", "x"))
         self.run_dream()
-        rows = self.db().execute("select kind, ok, model from calls").fetchall()
+        rows = self.db().execute("select kind, ok, model from calls where kind = 'dream'").fetchall()
         self.assertEqual(rows, [("dream", 1, "claude-sonnet-5")])
 
     def test_a_failed_calls_error_text_stays_out_of_the_ledger_the_output_and_the_batches(self):
@@ -347,7 +380,8 @@ class AnswerTest(DreamCase):
         self.assertIn(day, out)
         for k in range(3):
             self.assertIn(f"{k + 1}. fact: {self.FACTS[k]}", out)
-        self.assertIn("grill", out)
+        self.assertIn("wait for the judge", out)
+        self.assertIn("the judge failed (answer did not settle every line)", out)
         self.assertEqual(self.dream("answer", day, "keep", "edit", "drop", now=now)[0], 0)
         self.assertEqual(self.batches()[0]["answer"]["verdicts"], ["keep", "edit", "drop"])
         self.assertNotIn(day, self.dream("pending", now=now)[1])
@@ -408,7 +442,7 @@ class AnswerTest(DreamCase):
         [batch] = project["pending"]
         self.assertEqual(batch["candidates"][0]["text"], self.facts(1)[0]["text"])
 
-    def test_a_batch_unanswered_for_seven_days_stops_drafting(self):
+    def test_a_batch_the_judge_failed_on_for_seven_days_stops_drafting(self):
         now = self.writer.t + 2 * DAY
         self.drafted(1, now)
         self.drafted(1, now + 6 * DAY)
@@ -418,8 +452,9 @@ class AnswerTest(DreamCase):
         out = self.run_dream(now=later)
         self.assertEqual(len(self.calls()), 2)
         self.assertIn("7 days", out)
+        self.assertIn("answer did not settle every line", out)
         self.dream("answer", self.batches()[0]["date"], "drop", now=later)
-        self.run_dream(now=later)
+        self.run_dream(now=later + DAY)
         self.assertEqual(len(self.calls()), 3)
 
     def test_a_keep_rate_under_a_third_over_two_weeks_suggests_switching_off(self):
@@ -433,6 +468,314 @@ class AnswerTest(DreamCase):
         self.assertIn("1 of 4", out)
         self.assertIn("switch", out)
         self.assertNotIn("switch", self.dream("pending", now=now + 16 * DAY)[1], "the window is two weeks")
+
+
+class VerdictParseTest(unittest.TestCase):
+    """parse_verdicts: the judge's answer, one record per candidate or None."""
+
+    CANDS = [{"kind": "fact", "text": "the billing worker retries a webhook three times", "turn": 0},
+             {"kind": "gotcha", "text": "the ocr lane needs the gpu box for long scans", "turn": 1}]
+
+    def parse(self, answer):
+        return dream.parse_verdicts(answer if isinstance(answer, str) else json.dumps(answer), self.CANDS)
+
+    def test_a_full_answer_gives_one_record_per_line_and_keep_takes_the_candidates_own_text(self):
+        recs = self.parse("Here you go:\n" + json.dumps([
+            {"line": 2, "verdict": "edit", "kind": "fact", "text": "the ocr lane needs  the gpu box for scans over "
+             "forty pages", "reason": "checked\nocr/lane.py"},
+            {"line": 1, "verdict": "keep", "kind": "fact", "text": "something else entirely", "reason": "true"}]))
+        self.assertEqual(recs, [
+            {"verdict": "keep", "kind": "fact", "text": self.CANDS[0]["text"], "reason": "true", "by": "judge"},
+            {"verdict": "edit", "kind": "fact", "text": "the ocr lane needs the gpu box for scans over forty pages",
+             "reason": "checked ocr/lane.py", "by": "judge"}])
+
+    def test_an_answer_that_misses_doubles_or_misnames_a_line_settles_nothing(self):
+        keep = {"verdict": "keep", "reason": "r"}
+        for answer in ([{"line": 1, **keep}],
+                       [{"line": 1, **keep}, {"line": 1, **keep}, {"line": 2, **keep}],
+                       [{"line": 1, **keep}, {"line": 3, **keep}],
+                       [{"line": 1, **keep}, {"line": 2, "verdict": "maybe"}],
+                       [{"line": True, **keep}, {"line": 2, **keep}],
+                       "not json", []):
+            with self.subTest(answer=answer):
+                self.assertIsNone(self.parse(answer))
+
+    def test_an_edit_that_fails_memos_check_is_a_drop_and_one_that_changes_nothing_is_a_keep(self):
+        recs = self.parse([{"line": 1, "verdict": "edit", "text": OVER, "reason": "shorter"},
+                           {"line": 2, "verdict": "edit", "text": f"login takes {FAKE_SECRET}", "reason": "r"}])
+        self.assertEqual([r["verdict"] for r in recs], ["drop", "drop"])
+        self.assertIn("280", recs[0]["reason"])
+        self.assertNotIn("Zq" * 10, json.dumps(recs))
+        same = self.parse([{"line": 1, "verdict": "edit", "text": self.CANDS[0]["text"], "kind": "fact"},
+                           {"line": 2, "verdict": "drop", "reason": "stale: ocr/lane.py has no gpu check"}])
+        self.assertEqual([r["verdict"] for r in same], ["keep", "drop"])
+        self.assertNotIn("text", same[1])
+
+    def test_a_reason_that_looks_like_a_secret_is_withheld_and_a_long_one_is_clipped(self):
+        recs = self.parse([{"line": 1, "verdict": "drop", "reason": f"the .env holds {FAKE_SECRET}"},
+                           {"line": 2, "verdict": "drop", "reason": "y" * 900}])
+        self.assertNotIn("Zq" * 10, recs[0]["reason"])
+        self.assertLessEqual(len(recs[1]["reason"]), dream.REASON_MAX)
+
+
+class JudgeTest(DreamCase):
+    FACTS = AnswerTest.FACTS
+    EDITED = "search results are ranked by recency inside a tenant, then by score"
+
+    def drafted(self, n=3, now=None):
+        self.answer([{"kind": "fact", "text": t, "turn": self.turns} for t in self.FACTS[:n]])
+        self.session(("ask", "answer"), ("close", "x"))
+        return self.run_dream(now=now)
+
+    def verdicts(self, *vs):
+        out = []
+        for k, v in enumerate(vs, 1):
+            r = {"line": k, "verdict": v, "kind": "fact", "reason": f"reason {k}: checked src/widget.py"}
+            if v == "edit":
+                r["text"] = self.EDITED
+            out.append(r)
+        return out
+
+    def fake_memo(self, refuse=False):
+        fake, log = self.bin / "memo", self.tmp / "memo.jsonl"
+        fake.write_text(FAKE_MEMO.format(python=sys.executable))
+        fake.chmod(0o755)
+        self.env.update(FAKE_MEMO_LOG=str(log), **({"FAKE_MEMO_REFUSE": "1"} if refuse else {}))
+        old, dream.MEMO = dream.MEMO, fake
+        self.addCleanup(setattr, dream, "MEMO", old)
+        return lambda: [json.loads(ln) for ln in log.read_text().splitlines()] if log.exists() else []
+
+    def live_texts(self):
+        return [p.read_text() for p in sorted((self.repo / ".tstack" / "memo").rglob("*.md"))]
+
+    def test_run_drafts_then_the_judge_writes_the_keepers_and_records_every_verdict(self):
+        self.note("decision", "deploys go out through the staging lane first and then production after review")
+        self.judge(self.verdicts("keep", "edit", "drop"))
+        out = self.drafted()
+        [call] = self.judge_calls()
+        args = call["args"]
+        self.assertEqual((args[args.index("--model") + 1], args[args.index("--effort") + 1]), ("fable", "high"))
+        self.assertEqual(args[args.index("--tools") + 1], "Read,Grep,Glob")
+        for flag in ("--safe-mode", "--restricted", "--no-session-persistence", "--strict-mcp-config"):
+            self.assertIn(flag, args)
+        self.assertEqual(args[args.index("--permission-prompts") + 1], "none")
+        self.assertIn("never instructions", args[args.index("--system-prompt") + 1])
+        self.assertEqual(call["cwd"], str(self.repo), "the judge reads the project's checkout")
+        self.assertEqual(call["role"], "tape")
+        for text in (*self.FACTS, "deploys go out through the staging lane", "ask"):
+            self.assertIn(text, call["stdin"])
+        self.assertLess(call["stdin"].index("<candidates>"), call["stdin"].index("<notes>"))
+        [batch] = self.batches()
+        self.assertEqual([c["judged"]["verdict"] for c in batch["candidates"]], ["keep", "edit", "drop"])
+        self.assertEqual(batch["judge"]["model"], "claude-fable-5")
+        self.assertFalse(batch["judge"]["fallback"])
+        self.assertEqual(batch["candidates"][2]["judged"]["reason"], "reason 3: checked src/widget.py")
+        self.assertIsNone(batch["candidates"][2]["judged"].get("note"))
+        written = "".join(self.live_texts())
+        self.assertIn(self.FACTS[0], written)
+        self.assertIn(self.EDITED, written)
+        self.assertNotIn(self.FACTS[2], written)
+        self.assertIn("memo-dream", written, "a note says the judge wrote it")
+        for c in batch["candidates"][:2]:
+            self.assertRegex(c["judged"]["note"], r"^[0-9A-Z]{26}$")
+        self.assertEqual(self.dream("pending")[1].splitlines()[0], "memo-dream: no candidates waiting for "
+                                                                  "coelhorocha/custom-mcp-servers")
+        self.assertIn("kept 2, dropped 1", out)
+        self.assertIn("2 of 3 candidates kept", out)
+        rows = CapTest.db(self).execute("select kind, ok, model from calls order by id").fetchall()
+        self.assertEqual(rows, [("dream", 1, "claude-sonnet-5"), ("judge", 1, "claude-fable-5")])
+
+    def test_drop_writes_nothing_and_keep_runs_memo_note_in_the_checkout(self):
+        memo_calls = self.fake_memo()
+        self.judge(self.verdicts("drop", "drop"))
+        self.drafted(2)
+        self.assertEqual(memo_calls(), [])
+        self.judge(self.verdicts("keep"))
+        self.drafted(1, now=self.writer.t + 3 * DAY)
+        [call] = memo_calls()
+        self.assertEqual(call["args"], ["note", "fact", self.FACTS[0]])
+        self.assertEqual(call["cwd"], str(self.repo))
+        self.assertEqual((call["role"], call["quiet"]), ("memo-dream", "1"))
+        self.assertEqual(self.batches()[1]["candidates"][0]["judged"]["note"], "01KA0000000000000000000000")
+
+    def test_a_note_memo_refuses_is_settled_and_logged_as_not_written(self):
+        self.fake_memo(refuse=True)
+        self.judge(self.verdicts("keep"))
+        self.drafted(1)
+        [batch] = self.batches()
+        rec = batch["candidates"][0]["judged"]
+        self.assertIsNone(rec["note"])
+        self.assertIn("open threads", rec["error"])
+        self.assertIn("not written", self.dream("log")[1])
+
+    def test_a_run_that_dies_while_writing_keepers_is_finished_by_the_next_without_a_new_verdict(self):
+        """The verdicts are saved before any note is written: a retry writes what is missing from them, and memo
+        answers a line it already holds with that note's id, so nothing is written twice."""
+        class Died(Exception):
+            pass
+
+        real = dream.write_note
+
+        def dies_after_the_second(env, repo, kind, text):
+            noted = real(env, repo, kind, text)
+            if text == self.EDITED:
+                raise Died
+            return noted
+
+        self.judge(self.verdicts("keep", "edit", "keep"))
+        with mock.patch.object(dream, "write_note", dies_after_the_second), self.assertRaises(Died):
+            self.drafted()
+        [batch] = self.batches()
+        self.assertEqual([c["judged"]["verdict"] for c in batch["candidates"]], ["keep", "edit", "keep"])
+        self.assertRegex(batch["candidates"][0]["judged"]["note"], r"^[0-9A-Z]{26}$")
+        self.assertIsNone(batch["candidates"][1]["judged"].get("note"))
+        self.assertFalse(dream.settled(batch))
+        self.assertEqual(len(self.notes()), 2)
+        self.judge(self.verdicts("drop", "drop", "drop"))
+        code, out = self.dream("judge")
+        self.assertEqual(code, 0, out)
+        self.assertEqual(len(self.judge_calls()), 1, "the saved verdicts are not asked for again")
+        [batch] = self.batches()
+        self.assertTrue(dream.settled(batch))
+        self.assertEqual([c["judged"]["verdict"] for c in batch["candidates"]], ["keep", "edit", "keep"])
+        self.assertEqual(len(self.notes()), 3, "the edited line, written before the crash, is not written again")
+        written = "".join(self.live_texts())
+        self.assertEqual(written.count(self.EDITED), 1)
+        self.assertIn(self.FACTS[2], written)
+        self.assertIn("kept 3, dropped 0", out)
+
+    def test_answer_refuses_while_a_run_holds_the_projects_lock(self):
+        self.drafted(1)
+        day = self.batches()[0]["date"]
+        lock = dream.Batches(self.env, "coelhorocha/custom-mcp-servers").lock()
+        self.addCleanup(lock.close)
+        code, out = self.dream("answer", day, "keep")
+        self.assertNotEqual(code, 0)
+        self.assertIn("another run", out)
+        self.assertIsNone(self.batches()[0]["answer"])
+        lock.close()
+        self.assertEqual(self.dream("answer", day, "keep")[0], 0)
+
+    def test_an_answer_saved_during_the_judges_call_is_kept(self):
+        """The judge re-reads the batch before it saves, so a verdict given meanwhile is not overwritten."""
+        self.drafted(2)
+        [batch] = self.batches()
+        real = dream.tape.call_claude
+
+        def answered_meanwhile(*args, **kw):
+            dream.Batches(self.env, batch["project"]).save({**batch, "answer": {"at": 0, "verdicts": ["drop"] * 2}})
+            return real(*args, **kw)
+
+        self.judge(self.verdicts("keep", "keep"))
+        with mock.patch.object(dream.tape, "call_claude", answered_meanwhile):
+            code, out = self.dream("judge")
+        self.assertEqual(code, 0, out)
+        [batch] = self.batches()
+        self.assertEqual(batch["answer"]["verdicts"], ["drop", "drop"])
+        self.assertNotIn("judged", batch["candidates"][0])
+        self.assertEqual(self.notes(), [])
+
+    def test_a_model_error_on_fable_falls_back_to_opus_xhigh_and_the_batch_says_so(self):
+        self.judge("FAIL overloaded", opus=self.verdicts("keep", "drop"))
+        self.drafted(2)
+        fable, opus = self.judge_calls()
+        self.assertEqual(opus["args"][opus["args"].index("--model") + 1], "opus")
+        self.assertEqual(opus["args"][opus["args"].index("--effort") + 1], "xhigh")
+        [batch] = self.batches()
+        self.assertEqual(batch["judge"]["model"], "claude-opus-5")
+        self.assertTrue(batch["judge"]["fallback"])
+        self.assertIn("(the fallback)", self.dream("log")[1])
+
+    def test_a_judge_that_fails_leaves_the_batch_pending_and_the_next_run_settles_it(self):
+        self.judge("FAIL overloaded: the vault phrase is periwinkle-octopus")
+        self.drafted(2)
+        [batch] = self.batches()
+        self.assertEqual(batch["judge"]["failed"], "call failed")
+        self.assertNotIn("judged", batch["candidates"][0])
+        self.assertEqual(self.notes(), [])
+        self.assertNotIn("periwinkle", "".join(p.read_text() for p in self.states.rglob("*") if p.is_file()))
+        self.judge(self.verdicts("keep", "drop"))
+        self.run_dream(now=self.writer.t + 3 * DAY)
+        [batch] = self.batches()
+        self.assertTrue(dream.settled(batch))
+        self.assertNotIn("failed", batch["judge"])
+
+    def test_an_answer_that_settles_no_line_costs_no_fallback_call(self):
+        self.judge([{"line": 1, "verdict": "keep"}])
+        self.drafted(2)
+        self.assertEqual(len(self.judge_calls()), 1)
+        self.assertEqual(self.batches()[0]["judge"]["failed"], "answer did not settle every line")
+
+    def test_the_judge_counts_against_tapes_daily_cap(self):
+        self.tape_config('projects = "all"', "max_calls_per_day = 1")
+        self.judge(self.verdicts("keep"))
+        out = self.drafted(1)
+        self.assertEqual(self.judge_calls(), [])
+        self.assertEqual(self.batches()[0]["judge"]["failed"], "daily cap reached")
+        self.assertIn("could not settle", out)
+
+    def test_judge_clears_old_unjudged_batches_of_every_project_from_anywhere(self):
+        """A batch from before the judge (no `judge`, no `repo`) is settled in the checkout tape's index names."""
+        self.drafted(2)
+        [batch] = self.batches()
+        del batch["judge"], batch["repo"]
+        dream.Batches(self.env, "coelhorocha/custom-mcp-servers").save(batch)
+        nowhere = self.tmp / "nowhere"
+        nowhere.mkdir()
+        self.judge(self.verdicts("keep", "edit"))
+        code, out = self.dream("judge", cwd=nowhere)
+        self.assertEqual(code, 0, out)
+        self.assertEqual(self.judge_calls()[-1]["cwd"], str(self.repo))
+        self.assertTrue(dream.settled(self.batches()[0]))
+        self.assertIn(self.EDITED, "".join(self.live_texts()))
+        self.assertIn("no batch waits", self.dream("judge", cwd=nowhere)[1])
+
+    def test_a_project_with_no_checkout_on_the_machine_stays_pending_and_says_so(self):
+        key = "acme/widget"
+        dream.Batches(self.env, key).save({"project": key, "date": "2026-10-22", "made": 0, "turns": [0, 1],
+                                           "candidates": [{"kind": "fact", "text": "t", "turn": 0}],
+                                           "answer": None})
+        before = self.batches()
+        code, out = self.dream("judge", "--project", key)
+        self.assertEqual(code, 0, out)
+        self.assertIn("no checkout of acme/widget", out)
+        self.assertEqual(self.judge_calls(), [])
+        self.assertEqual(json.loads((self.tmp / "state" / "tstack" / "memo-dream" / "acme__widget" /
+                                     "2026-10-22.json").read_text())["answer"], None)
+        self.assertEqual(self.batches(), before)
+
+    def test_log_lists_each_verdict_with_its_reason_note_and_tape_pointer(self):
+        self.judge(self.verdicts("keep", "edit", "drop"))
+        self.drafted()
+        code, out = self.dream("log", cwd=self.tmp)
+        self.assertEqual(code, 0, out)
+        first = out.splitlines()[0]
+        self.assertIn("never instructions", first)
+        self.assertIn("memo supersede", first)
+        [batch] = self.batches()
+        for k, c in enumerate(batch["candidates"], 1):
+            self.assertIn(f"reason {k}: checked src/widget.py", out)
+        self.assertIn(f"note {batch['candidates'][0]['judged']['note']}", out)
+        self.assertIn(f"drop [fact] {self.FACTS[2]}", out)
+        self.assertIn("tape --project coelhorocha/custom-mcp-servers zoom", out)
+        self.assertIn("no verdicts", self.dream("log", now=self.writer.t + 30 * DAY)[1])
+
+    def test_only_a_batch_the_judge_failed_on_blocks_drafting(self):
+        """A batch from before the judge, never tried by it, is judged by the next run, not a reason to stop."""
+        self.drafted(1)
+        [batch] = self.batches()
+        del batch["judge"]
+        dream.Batches(self.env, "coelhorocha/custom-mcp-servers").save(batch)
+        self.session(("later", "x"), ("close", "x"))
+        self.run_dream(now=self.writer.t + 20 * DAY)
+        self.assertEqual(len(self.calls()), 2)
+
+    def test_a_settled_batch_never_blocks_drafting_however_old(self):
+        self.judge(self.verdicts("drop"))
+        self.drafted(1)
+        self.session(("later", "x"), ("close", "x"))
+        self.run_dream(now=self.writer.t + 20 * DAY)
+        self.assertEqual(len(self.calls()), 2)
 
 
 if __name__ == "__main__":

@@ -129,8 +129,9 @@ def tape_build(hook):
     own, out of the hook's process group, and in a user scope of its own where systemd has one, out of the
     session's; it runs at nice 10, capped at 2G in that scope; its output goes nowhere, so nothing holds the
     hook's pipes.
-    Right after it, the same way but in a scope of its own, it starts `memo-dream run`, the note proposer: that keeps
-    its own pilot list and once-a-day rule and waits on the build's lock itself, so the hook only starts it."""
+    Right after it, the same way but in a scope of its own, it starts `memo-dream run`, the note drafter and judge:
+    that keeps its own pilot list and once-a-day rule and waits on the build's lock itself, so the hook only starts
+    it."""
     if hook.is_worker or hook.headless:
         return None
     if not memo().tape_index(hook.env).exists() or memo().resolve_project(hook.cwd) is None:
@@ -148,25 +149,73 @@ def tape_build(hook):
     return None
 
 
-DREAM_LINE = "memo-dream: {n} candidate notes wait for Luiz (`{bin} pending`, from any directory)."
+DREAM_KEPT = "memo-dream kept {kept} note{s} ({dropped} dropped{unwritten}) for {project}: `{bin} log`."
+DREAM_STUCK = "memo-dream: {n} candidate note{s} for {project} wait for the judge{why}: `{bin} judge`."
 
 
-def memo_dream_pending(hook):
-    """SessionStart: one line when memo-dream's drafted notes wait for Luiz,
-    counted over every project's unanswered batches. It reads the batch files memo-dream writes
-    ($XDG_STATE_HOME/tstack/memo-dream/<owner>__<repo>/<date>.json) and nothing else: no model, no import."""
+def memo_dream_report(hook):
+    """SessionStart: what memo-dream's judge kept since the last report, one line a project, and the candidates it
+    could not settle. It reads the batch files memo-dream writes
+    ($XDG_STATE_HOME/tstack/memo-dream/<owner>__<repo>/<date>.json, each line's `judged` verdict and the batch's
+    `judge`) and keeps the batches it has reported in `reported.json` beside them: no model, no import. A batch is
+    reported once, when every line has a verdict and every keeper its note id or memo's error; a batch drafted under
+    a day ago and not settled yet is left out, since the run that drafted it may still be judging it."""
+    import fcntl
     if hook.is_worker or hook.headless:
         return None
-    base = Path(hook.env.get("XDG_STATE_HOME") or Path(hook.env.get("HOME", "/tmp")) / ".local" / "state")
-    n = 0
-    for path in (base / "tstack" / "memo-dream").glob("*/????-??-??.json"):
+    root = Path(hook.env.get("XDG_STATE_HOME") or Path(hook.env.get("HOME", "/tmp")) / ".local" / "state")
+    root = root / "tstack" / "memo-dream"
+    if not root.is_dir():
+        return None
+    # A set of batches, not a time cursor: a run stamps its batches with the time it started, which can be before
+    # a report another session made while it ran.
+    with open(root / "reported.lock", "a") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
         try:
-            batch = json.loads(path.read_text())
-        except (OSError, ValueError):
-            continue
-        if isinstance(batch, dict) and not batch.get("answer") and isinstance(batch.get("candidates"), list):
-            n += len(batch["candidates"])
-    return DREAM_LINE.format(n=n, bin=ROOT / "scripts" / "memo-dream") if n else None
+            done = set(json.loads((root / "reported.json").read_text()))
+        except (OSError, ValueError, TypeError):
+            done = set()
+        now = time.time()
+        kept, stuck, seen, fresh = {}, {}, set(), set()
+        for path in sorted(root.glob("*/????-??-??.json")):
+            try:
+                batch = json.loads(path.read_text())
+            except (OSError, ValueError):
+                continue
+            cands = batch.get("candidates") if isinstance(batch, dict) else None
+            if not isinstance(cands, list) or not cands or batch.get("answer"):
+                continue
+            name = f"{path.parent.name}/{path.stem}"
+            project = str(batch.get("project") or path.parent.name)
+            judge = batch.get("judge") if isinstance(batch.get("judge"), dict) else {}
+            verdicts = [c.get("judged") for c in cands if isinstance(c, dict)]
+            if len(verdicts) == len(cands) and all(
+                    isinstance(v, dict) and (v.get("verdict") == "drop" or v.get("note") or v.get("error"))
+                    for v in verdicts):
+                seen.add(name)
+                if name not in done:
+                    fresh.add(name)
+                    k = kept.setdefault(project, [0, 0, 0])
+                    for v in verdicts:
+                        k[0 if v.get("verdict") == "drop" else 1 if v.get("note") else 2] += 1
+            elif judge.get("failed") or now - (batch.get("made") or 0) > 86400:
+                st = stuck.setdefault(project, [0, None])
+                st[0] += len(cands)
+                st[1] = judge.get("failed") or st[1]
+        if fresh or done - seen:
+            try:
+                tmp = root / f".reported.json.{os.getpid()}"
+                tmp.write_text(json.dumps(sorted((done & seen) | fresh)))
+                os.replace(tmp, root / "reported.json")
+            except OSError:
+                pass
+    bin_ = ROOT / "scripts" / "memo-dream"
+    lines = [DREAM_KEPT.format(kept=k[1], s="" if k[1] == 1 else "s", dropped=k[0], project=p, bin=bin_,
+                               unwritten=f", {k[2]} not written" if k[2] else "") for p, k in sorted(kept.items())]
+    lines += [DREAM_STUCK.format(n=n, s="" if n == 1 else "s", project=p, bin=bin_,
+                                 why=f" (it could not settle them: {why})" if why else "")
+              for p, (n, why) in sorted(stuck.items())]
+    return "\n".join(lines) or None
 
 
 NUDGE = (
@@ -1511,7 +1560,7 @@ def _rm_shown(path, home):
 
 
 HANDLERS = {
-    "SessionStart": [memo_wake, jj_hints, tuca_mode, memo_dream_pending, tape_build],
+    "SessionStart": [memo_wake, jj_hints, tuca_mode, memo_dream_report, tape_build],
     "Stop": [memo_nudge],
     "PreCompact": [memo_precompact],
     "PreToolUse": [push_attribution, rm_guard],

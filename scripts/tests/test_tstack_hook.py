@@ -702,37 +702,84 @@ class TapeRoleTest(QuietCase):
         self.assertNotEqual(self.files(), before)
 
 
-class DreamPendingTest(QuietCase):
-    """memo_dream_pending: an attended session's SessionStart says, in one line, how many drafted notes wait for Luiz."""
+class DreamReportTest(QuietCase):
+    """memo_dream_report: an attended session's SessionStart says what memo-dream's judge kept since the last report,
+    and which candidates it could not settle."""
 
-    def batch(self, key, date, n, answer=None):
+    def batch(self, key, date, verdicts=None, n=None, answer=None, judge=None, made=0):
         """A batch as memo-dream itself saves it, so the hook reads memo-dream's own layout."""
         from importlib.machinery import SourceFileLoader
         from importlib.util import module_from_spec, spec_from_loader
         loader = SourceFileLoader("dream_for_hook", str(ROOT / "scripts" / "memo-dream"))
         dream = module_from_spec(spec_from_loader("dream_for_hook", loader))
         loader.exec_module(dream)
-        candidates = [{"kind": "fact", "text": f"t{k}", "turn": 0} for k in range(n)]
-        dream.Batches(self.env, key).save({"project": key, "date": date, "made": 0, "turns": [0, 1], "answer": answer,
-                                           "candidates": candidates})
+        candidates = [{"kind": "fact", "text": f"t{k}", "turn": 0} for k in range(n or len(verdicts or ()))]
+        for c, v in zip(candidates, verdicts or ()):
+            c["judged"] = {"verdict": v, "reason": "r", "by": "judge",
+                           **({} if v == "drop" else {"kind": "fact", "text": c["text"],
+                                                      "note": None if v == "unwritten" else "01KA" + "0" * 22})}
+            if v == "unwritten":
+                c["judged"].update(verdict="keep", error="memo: 9 pins and 9 open threads already")
+        dream.Batches(self.env, key).save({"project": key, "date": date, "made": made, "turns": [0, 1],
+                                           "answer": answer, "candidates": candidates,
+                                           **({"judge": judge} if judge else {})})
 
     def lines(self, payload):
         result = self.hook("SessionStart", payload)
         self.assertEqual(result.returncode, 0, result.stderr)
         text = json.loads(result.stdout)["hookSpecificOutput"]["additionalContext"] if result.stdout else ""
-        return [l for l in text.splitlines() if l.startswith("memo-dream:")]
+        return [l for l in text.splitlines() if l.startswith("memo-dream")]
 
-    def test_a_session_hears_how_many_candidates_wait_across_projects(self):
+    def test_a_session_hears_what_the_judge_kept_once(self):
         start = self.payload("SessionStart", source="startup")
         self.assertEqual(self.lines(start), [])
-        self.batch("coelhorocha/custom-mcp-servers", "2026-10-01", 2)
-        self.batch("acme/widget", "2026-10-02", 1)
-        self.batch("acme/widget", "2026-10-01", 4, answer={"at": 0, "verdicts": ["drop"] * 4})
+        bin_ = f"{ROOT}/scripts/memo-dream"
+        self.batch("coelhorocha/custom-mcp-servers", "2026-10-01", ["keep", "edit", "drop"], judge={"at": 5})
+        self.batch("coelhorocha/custom-mcp-servers", "2026-10-02", ["drop", "unwritten"], judge={"at": 6})
+        self.batch("acme/widget", "2026-10-01", ["keep"], judge={"at": 7})
+        self.batch("acme/widget", "2026-10-02", n=4, answer={"at": 0, "verdicts": ["drop"] * 4})
         self.assertEqual(self.lines(start), [
-            f"memo-dream: 3 candidate notes wait for Luiz (`{ROOT}/scripts/memo-dream pending`, from any directory)."])
+            f"memo-dream kept 1 note (0 dropped) for acme/widget: `{bin_} log`.",
+            f"memo-dream kept 2 notes (2 dropped, 1 not written) for coelhorocha/custom-mcp-servers: `{bin_} log`."])
+        self.assertEqual(self.lines(start), [], "a report is said once")
+
+    def test_a_batch_saved_after_a_report_is_reported_whatever_its_judge_time(self):
+        """A long run stamps `judge.at` when it starts; a session that reports mid-run must not skip its batches."""
+        start = self.payload("SessionStart", source="startup")
+        bin_ = f"{ROOT}/scripts/memo-dream"
+        self.batch("acme/widget", "2026-10-01", ["keep"], judge={"at": time.time() + 3600})
+        self.assertEqual(len(self.lines(start)), 1)
+        self.batch("acme/widget", "2026-10-02", ["keep", "drop"], judge={"at": 1})
+        self.assertEqual(self.lines(start), [f"memo-dream kept 1 note (1 dropped) for acme/widget: `{bin_} log`."])
+        self.assertEqual(self.lines(start), [])
+
+    def test_a_batch_whose_keepers_are_still_being_written_waits_for_them(self):
+        start = self.payload("SessionStart", source="startup")
+        bin_ = f"{ROOT}/scripts/memo-dream"
+        self.batch("acme/widget", "2026-10-01", ["keep", "drop"], judge={"at": 5}, made=time.time())
+        path = Path(self.env["HOME"], ".local", "state", "tstack", "memo-dream", "acme__widget", "2026-10-01.json")
+        batch = json.loads(path.read_text())
+        batch["candidates"][0]["judged"]["note"] = None
+        path.write_text(json.dumps(batch))
+        self.assertEqual(self.lines(start), [])
+        batch["candidates"][0]["judged"]["note"] = "01KA" + "0" * 22
+        path.write_text(json.dumps(batch))
+        self.assertEqual(self.lines(start), [f"memo-dream kept 1 note (1 dropped) for acme/widget: `{bin_} log`."])
+
+    def test_candidates_the_judge_could_not_settle_are_said_every_session(self):
+        start = self.payload("SessionStart", source="startup")
+        bin_ = f"{ROOT}/scripts/memo-dream"
+        self.batch("coelhorocha/custom-mcp-servers", "2026-10-22", n=2, judge={"at": 9, "failed": "usage limit"})
+        self.batch("coelhorocha/custom-mcp-servers", "2026-10-23", n=3)
+        self.batch("acme/widget", "2026-10-24", n=1, made=time.time())
+        want = [f"memo-dream: 5 candidate notes for coelhorocha/custom-mcp-servers wait for the judge (it could not "
+                f"settle them: usage limit): `{bin_} judge`."]
+        self.assertEqual(self.lines(start), want, "a batch drafted under a day ago may still be being judged")
+        self.assertEqual(self.lines(start), want)
+        self.assertNotIn("Luiz", "".join(want))
 
     def test_a_worker_and_a_headless_session_hear_nothing(self):
-        self.batch("coelhorocha/custom-mcp-servers", "2026-10-01", 2)
+        self.batch("coelhorocha/custom-mcp-servers", "2026-10-01", ["keep"], judge={"at": 5})
         self.assertEqual(self.lines(self.payload("SessionStart", source="startup", agent_id="a1")), [])
         self.env["CLAUDE_CODE_SESSION_ATTENDED"] = "0"
         self.assertEqual(self.lines(self.payload("SessionStart", source="startup")), [])

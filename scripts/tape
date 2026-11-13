@@ -761,17 +761,17 @@ def claude_argv(env, model="haiku", prompt=None):
             "--system-prompt", SYSTEM_PROMPT if prompt is None else prompt]
 
 
-def call_claude(argv, env, cwd, stdin):
+def call_claude(argv, env, cwd, stdin, timeout=CALL_TIMEOUT):
     """One `claude -p` call: (answer text, ledger fields, error or None, usage limit hit)."""
     import subprocess
     started = time.monotonic()
     row = {"at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}
     try:
-        p = subprocess.run(argv, input=stdin, capture_output=True, text=True, cwd=cwd, timeout=CALL_TIMEOUT,
+        p = subprocess.run(argv, input=stdin, capture_output=True, text=True, cwd=cwd, timeout=timeout,
                            env={**env, "TSTACK_ROLE": "tape"})
     except subprocess.TimeoutExpired:
         row["wall_ms"] = int((time.monotonic() - started) * 1000)
-        return "", row, f"no answer in {CALL_TIMEOUT} s", False
+        return "", row, f"no answer in {timeout} s", False
     except OSError as e:
         return "", row, f"cannot run claude: {e}", False
     row["wall_ms"] = int((time.monotonic() - started) * 1000)
