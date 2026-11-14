@@ -20,6 +20,8 @@ spin-off: spin-off.md
 | gate | version | parent | file | sha256 | date | Luiz's words | status |
 | :-- | :-- | :-- | :-- | :-- | :-- | :-- | :-- |
 
+## Conversation
+
 ## Artifacts
 
 ## Decider
@@ -64,6 +66,10 @@ An approval is live only when its version is the current one, its sha256 matches
 - All three live: `ready`. Check **Launch** for coordinators already started before you run any `fleet team add`.
 
 `parked`, `handed` and `dropped` are kept as written: parked waits on the fleet, and the other two have nothing left to do.
+
+## Conversation
+
+What Luiz said before the design began (Design, step 1): what should change and for whom, what he knows or has decided, what worries him. His words, dated. Later reshapings of the options go here too.
 
 ## Decider
 

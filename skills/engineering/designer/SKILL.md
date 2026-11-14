@@ -1,6 +1,6 @@
 ---
 name: designer
-description: "The designer role for a spin-off: research and model the work until Luiz approves the design, the lane plan and the team, start the coordinators, then stop. Opened by spin-off as /tstack:tuca-mode /tstack:designer <spin-off file>."
+description: "The designer role for a spin-off: talk the work through with Luiz, explain the options, research and model it until he approves the design, the lane plan and the team, start the coordinators, then stop. Opened by spin-off as /tstack:tuca-mode /tstack:designer <spin-off file>."
 disable-model-invocation: true
 argument-hint: "<spin-off file>"
 ---
@@ -25,22 +25,21 @@ Done when `jj status` in your workspace shows both files. When the workspace and
 
 ## Design (gate 1)
 
-Start with the data shapes. Each piece goes to the skill that owns it. Invoke the skill; never write its piece yourself.
+Luiz shapes the design; you do not hand him one to approve. Work in this order:
 
-Required:
+1. **Talk first.** Before any research, ask Luiz what should change and for whom, what he already knows or has decided, and what worries him. Record his answers in the dossier's **Conversation**, in his words. Done when he has answered.
+2. **Research the gaps** that conversation leaves: unfamiliar code through `tstack:how`, earlier decisions through `tstack:recall`, docs, APIs and facts through `tstack:research`. Never research what he already told you. Done when each gap has an answer, or Luiz has said it can stay open.
+3. **Explain before asking.** Show him, through `tstack:show-me` in the chat, how the domain works today, its moving parts, and two or three real options with their trade-offs in plain words. He reshapes the options before anything is decided. Record his reshapings in **Conversation**. Done when he has reacted to them.
+4. **Bring in a Decider** (the Decider row, Fable high) before you put a call to Luiz when the call takes work or data another team or design owns, reverses an accepted ADR, or has evidence pointing both ways. Give it the question and the evidence. Show its ruling beside the options and log it in the dossier. Its ruling informs Luiz. It never decides for him. Done when every such call has a ruling.
+5. **Ask decisions in small rounds** through `tstack:grilling`. Two of its rules do not apply to you: "Ask the whole frontier in one round" and "Word each question so 'yes' accepts your recommended answer". Ask at most three questions a round, and give each a real choice. Each option says what it means for the people who use the result. Done when every decision the design needs has Luiz's answer.
+6. **Build the design** on what he decided. Start with the data shapes. Each piece goes to the skill that owns it. Invoke that skill, never write its piece yourself. Done when the design page is published:
+   - The design page: `tstack:show-me`, published as an Artifact. Its source is `docs/design/<slug>/design.html`.
+   - Terms in `CONTEXT.md`, and ADRs in `docs/adr/` for decisions that bind the fleets: `tstack:domain-modeling`. The dossier links them.
+   - Work that moves between states: a checked model through the [statechart](../statechart/SKILL.md) skill (user-invoked: read its SKILL.md and follow it). Its `.tla`, `.cfg`, view, `chart.mmd` and `report.md` go to `docs/design/<slug>/`.
+   - Types, signatures and the module map, on need: `tstack:architect`, its sketch only, kept in the design docs.
+7. **Check the model landed.** Do it when you suspect the model is too complex, or Luiz's answers suggest an idea did not land. Ask him what is unclear and explain it again. Done when he says it is clear, or when you had no such doubt. Then ask gate 1.
 
-- The design page: `tstack:show-me`, published as an Artifact. Its source is `docs/design/<slug>/design.html`.
-- Terms in `CONTEXT.md`, and ADRs in `docs/adr/` for decisions that bind the fleets, whenever the design has any: `tstack:domain-modeling`. The dossier links them.
-- Work that moves between states: a checked model through the [statechart](../statechart/SKILL.md) skill (user-invoked: read its SKILL.md and follow it). Its `.tla`, `.cfg`, view, `chart.mmd` and `report.md` go to `docs/design/<slug>/`.
-
-On need:
-
-- Unfamiliar code: `tstack:how`. Earlier decisions: `tstack:recall`. Docs, APIs and facts: `tstack:research`.
-- Open decisions Luiz holds: `tstack:grilling`, in rounds.
-- Types, signatures and the module map: `tstack:architect`, its sketch only. The sketch lives in the design docs.
-- A hard call: a Decider, given the question and the evidence. It returns a ruling or says the call is Luiz's. Log it in the dossier.
-
-Done when the dossier records Luiz's approval of the current design version. A change he asks for is a new version and another round.
+Done when the dossier records Luiz's approval of the current design version. A change he asks for is a new version, and the steps above apply to it again from the one it touches.
 
 ## Plan (gate 2)
 

@@ -5,7 +5,7 @@ description: "Hand complex work found mid-session, outside your task, to a desig
 
 # Spin-off
 
-Work found mid-session that lies outside your task and is too big to fold into it leaves to a designer in its own Rex session, named after the work. The designer researches and models it until Luiz approves a design, a lane plan and a team, then starts the coordinators.
+Work found mid-session that lies outside your task and is too big to fold into it leaves to a designer in its own Rex session, named after the work. The designer talks it through with Luiz, researches and models it until he approves a design, a lane plan and a team, then starts the coordinators.
 
 Work this session will do, however large, is `tstack:figure-it-out`'s. Work that should leave to its own team is a spin-off.
 
