@@ -1,11 +1,11 @@
 ---
 name: spin-off
-description: "Hand complex work found mid-session, outside your task, to a designer session in a new tab, then go back to your task. Use when such work turns up, or on \"spin this off\"."
+description: "Hand complex work found mid-session, outside your task, to a designer in its own Rex session, then go back to your task. Use when such work turns up, or on \"spin this off\"."
 ---
 
 # Spin-off
 
-Work found mid-session that lies outside your task and is too big to fold into it leaves to a designer session in its own Rex tab. The designer researches and models it until Luiz approves a design, a lane plan and a team, then starts the coordinators.
+Work found mid-session that lies outside your task and is too big to fold into it leaves to a designer in its own Rex session, named after the work. The designer researches and models it until Luiz approves a design, a lane plan and a team, then starts the coordinators.
 
 Work this session will do, however large, is `tstack:figure-it-out`'s. Work that should leave to its own team is a spin-off.
 
@@ -20,11 +20,11 @@ Work this session will do, however large, is `tstack:figure-it-out`'s. Work that
    - `out-of-scope`: what you keep doing yourself.
 
    Point at files; paste nothing a path can carry. The file is read-only once the designer opens. Done when every section has content or says `none`.
-3. **Open the designer tab.** Inside Rex (`$REX_SESSION` is set), run:
+3. **Open the designer's session.** Inside Rex (`$REX_SESSION` is set), create a Rex session labelled `<slug>`, with the designer in it:
 
    ```sh
-   rex run -s "$REX_SESSION" -c <repo> --label designer-<slug> -- claude --name designer-<slug> --model opus --effort high "/tstack:tuca-mode /tstack:designer <spin-off file>"
+   rex new <slug> -c <repo> -- claude --name designer-<slug> --model opus --effort high "/tstack:tuca-mode /tstack:designer <spin-off file>"
    ```
 
-   The pair is the Designer row of [models.md](../../../docs/models.md). Outside Rex, give Luiz the launch in nushell instead: `cd <repo>; claude --name designer-<slug> --model opus --effort high "/tstack:tuca-mode /tstack:designer <spin-off file>"`. Done when the tab is open or Luiz has the command.
-4. **Return to your task.** You never wait on the designer. It posts to `fleet news` when the coordinators start. Your reply names the spin-off file and the tab's label.
+   The pair is the Designer row of [models.md](../../../docs/models.md). Outside Rex, give Luiz the launch in nushell instead: `cd <repo>; claude --name designer-<slug> --model opus --effort high "/tstack:tuca-mode /tstack:designer <spin-off file>"`. Done when `rex ls` lists `<slug>` or Luiz has the command.
+4. **Return to your task.** You never wait on the designer. It posts to `fleet news` when the coordinators start. Your reply names the spin-off file and the Rex session `<slug>`.

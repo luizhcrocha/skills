@@ -31,7 +31,7 @@ Done when every check passes. A clash changes the team or the plan: a plan chang
 
 - **project**: an existing fleet project's id (`fleet project list`), since `fleet team add` needs one. When none fits, write `project: new <id> "<title>"` instead, and gate 3 offers three answers: approve the team and create that project, change the team, or drop the spin-off. On the yes Luiz types, run `fleet project new "<title>" --id <id>` once, in Launch, after step 3 and before step 4. The `--id` gives the project the id `team.md` already names, so the file and its approval stay as they are. When the command fails, the team changes and gate 3 comes back.
 - **manager**: the project's existing manager. A project has at most one, so the designer adds none.
-- **coordinators**: per coordinator, its name, its repo, the lanes it owns and its mission line.
+- **coordinators**: per coordinator, its name, its repo, the Rex session it will open in (Launch step 4), the lanes it owns and its mission line.
 
 Ask gate 3 only after the fleet check passed on the current plan and the current team version.
 
@@ -40,7 +40,7 @@ Ask gate 3 only after the fleet check passed on the current plan and the current
 1. Recheck the record (DOSSIER.md, "Resume from the record"). Launch only when all three approvals are live; otherwise go to the gate the record names.
 2. Land `docs/design/<slug>/`, with any ADRs and `CONTEXT.md` edits, as docs through tuca-mode's Land playbook. The coordinators' workspaces see the design only once it has landed. Done when `<bookmark>@origin` holds the folder.
 3. Run `fleet ls` again. When it fails, the phase goes back to `parked`.
-4. Per coordinator, as one Bash call with `timeout: 300000`, in that coordinator's repo: `cd <repo>; fleet team add <name> --project <id> --mission "<mission>"`. Write the coordinator's row in the dossier's **Launch** table as the call returns, then go on to the next. When the call does not start it:
+4. `fleet team` opens a repo's coordinators in that repo's own Rex session (its folder name, or `.fleet/team.json`'s `"session"`), not in yours: it keeps one session per repo and has no flag to choose another (`fleet team --help`). `team.md` names that session, so Luiz sees at gate 3 where they will run. Never edit `.fleet/team.json` for it: that moves every standing agent of the repo. Per coordinator, as one Bash call with `timeout: 300000`, in that coordinator's repo: `cd <repo>; fleet team add <name> --project <id> --mission "<mission>"`. Write the coordinator's row in the dossier's **Launch** table as the call returns, then go on to the next. When the call does not start it:
    - **Untrusted repo.** The refusal names `--trust`. Ask Luiz with `AskUserQuestion`, showing the exact line you would run: `cd <repo>; fleet team add <name> --project <id> --mission "<mission>" --trust`. On the yes he types, run that line once, unchanged.
    - **Auto mode refuses** a call, this one or the `--trust` line. Report the refusal and the refused line to Luiz, record the row as `refused`, and do nothing else for that coordinator: no retry, no other route.
    - **Killed midway.** The tool killed the run. Run the same `add` again: it starts the file it wrote.
@@ -52,7 +52,7 @@ Ask gate 3 only after the fleet check passed on the current plan and the current
 
 ## No fleet
 
-On a machine without `fleet` (decision D, 2026-11-14), the plan runs in one new tuca-mode tab under `tstack:orchestrate`. `team.md` names that session in place of coordinators: its label, its repo, and the Coordinator pair from models.md. Gate 3 approves that session. Then run Launch steps 1 and 2 (recheck the record, land the docs) and open the tab. Inside Rex:
+On a machine without `fleet` (decision D, 2026-11-14), the plan runs in one new tuca-mode tab under `tstack:orchestrate`, in your own Rex session. `team.md` names that session in place of coordinators: its label, its repo, and the Coordinator pair from models.md. Gate 3 approves that session. Then run Launch steps 1 and 2 (recheck the record, land the docs) and open the tab. Inside Rex:
 
 ```sh
 rex run -s "$REX_SESSION" -c <repo> --label <label> -- claude --name <label> --model opus --effort medium "/tstack:tuca-mode /tstack:orchestrate docs/design/<slug>/plan.md"

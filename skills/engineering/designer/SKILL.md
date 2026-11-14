@@ -15,8 +15,8 @@ Open the todo list with the sections below as items, in order.
 
 ## Start or resume
 
-1. Read the spin-off file. Its `found-in` names the repo; `<slug>` is the file's name between `spin-off-` and `.md`.
-2. Open your own jj workspace from the repo's root, on the landing bookmark its `AGENTS.md` names: `jj workspace add ../<repo>-design-<slug> -r <bookmark>@origin --name design-<slug>`. Work there from now on, by absolute path. A tab in the origin's workspace would snapshot your files into its open change.
+1. Read the spin-off file. Its `found-in` names the repo; `<slug>` is the file's name between `spin-off-` and `.md`. You run in your own Rex session, labelled `<slug>`. A tab you open with `rex run -s "$REX_SESSION"` opens in it; coordinators open in the repo's team session (LAUNCH.md, Launch step 4).
+2. Open your own jj workspace from the repo's root, on the landing bookmark its `AGENTS.md` names: `jj workspace add ../<repo>-design-<slug> -r <bookmark>@origin --name design-<slug>`. Work there from now on, by absolute path. Working in the origin's workspace would snapshot your files into its open change.
 3. Copy the spin-off file to `docs/design/<slug>/spin-off.md` and start `docs/design/<slug>/dossier.md` as [DOSSIER.md](DOSSIER.md) shapes it.
 
 Every working file lives in that workspace under `docs/design/<slug>/`. Scratch runs, such as the statechart's `--out`, go to `docs/design/<slug>/.scratch/` or the workspace's own temp folder, never another session's scratchpad. Remove `.scratch/` before you land: only what the dossier links lands.
