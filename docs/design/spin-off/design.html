@@ -1,0 +1,204 @@
+<title>Fork skill design</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&family=Fraunces:opsz,wght@9..144,600&display=swap">
+<style>
+/* Layout: one reading column, a design dossier; decisions are the only cards. */
+:root{
+  --bg:#f6f7f9; --fg:#1b1f27; --muted:#5b6474; --line:#d9dde4; --accent:#3b5bdb; --panel:#ffffff; --warn:#b4541a;
+  --display:"Fraunces",Georgia,serif; --body:"IBM Plex Sans",system-ui,sans-serif; --mono:"IBM Plex Mono",ui-monospace,monospace;
+}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){--bg:#12151b;--fg:#e4e7ee;--muted:#9aa3b2;--line:#2a303b;--accent:#8ea4ff;--panel:#1a1e26;--warn:#f0a36b;color-scheme:dark}}
+:root[data-theme="dark"]{--bg:#12151b;--fg:#e4e7ee;--muted:#9aa3b2;--line:#2a303b;--accent:#8ea4ff;--panel:#1a1e26;--warn:#f0a36b;color-scheme:dark}
+body{background:var(--bg);color:var(--fg);font:15px/1.6 var(--body);padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px));padding-block:32px 64px}
+main{max-width:760px;margin:0 auto;display:flex;flex-direction:column;gap:40px}
+h1{font:600 2.1rem/1.15 var(--display);margin:0;text-wrap:balance}
+h2{font:600 1.35rem/1.2 var(--display);margin:0 0 12px;text-wrap:balance}
+p{margin:0 0 10px}
+.lede{color:var(--muted);font-size:1.05rem}
+.eyebrow{font:500 .72rem var(--mono);letter-spacing:.08em;text-transform:uppercase;color:var(--accent)}
+pre{font:13px/1.5 var(--mono);background:var(--panel);border:1px solid var(--line);border-radius:6px;padding:14px;overflow-x:auto;margin:0 0 10px}
+code{font-family:var(--mono);font-size:.9em}
+table{border-collapse:collapse;width:100%;font-size:14px}
+.tw{overflow-x:auto}
+th,td{text-align:left;padding:8px 10px;border-bottom:1px solid var(--line);vertical-align:top}
+th{font-weight:600;color:var(--muted);font-size:12px;text-transform:uppercase;letter-spacing:.05em}
+.dec{display:flex;flex-direction:column;gap:12px}
+.d{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:14px 16px}
+.d h3{margin:0 0 6px;font-size:1rem}
+.rec{color:var(--accent);font-weight:600}
+.dev{border-left:3px solid var(--warn);padding-left:12px}
+ul{margin:0;padding-left:20px}
+li{margin-bottom:4px}
+.small{font-size:13px;color:var(--muted)}
+</style>
+<main>
+<header>
+<div class="eyebrow">tstack · design for review · version 5 · 2026-11-14</div>
+<h1>Spin-off: hand complex work found mid-session to a designer, then to a fleet</h1>
+<p class="lede">An agent that finds work too big for its current task proposes a spin-off. On your yes, a designer session (Opus high) opens in a new Rex tab. It researches, models and draws the work until you approve three things: the design, the lane plan and the team. Then it starts the coordinators and its job ends. The origin agent keeps its own task the whole time.</p>
+<p class="small">v3 takes in a Fable advisor's ruling ("go with changes"). Its changes are marked below. Your three approvals of v2 are void under the design's own rule, so they are asked again at the end.</p>
+</header>
+
+<section>
+<h2>Who does what</h2>
+<pre class="mermaid">
+sequenceDiagram
+  participant O as Origin agent
+  participant L as Luiz
+  participant D as Designer, Opus high (new tab)
+  participant X as Decider, Fable (on need)
+  participant C as Coordinators
+  O->>L: proposes a spin-off (a fleet worker asks its coordinator instead)
+  L-->>O: yes
+  O->>O: writes spin-off.md outside the repo
+  O->>D: rex run ... claude --model opus --effort high "/tstack:tuca-mode /tstack:designer path"
+  O->>O: back to its own task
+  D->>D: own jj workspace, copies spin-off.md into docs/design/slug/
+  loop until approved
+    D->>D: research (Sonnet), model, statechart, show-me
+    opt a hard call
+      D->>X: question + evidence
+      X-->>D: ruling, or "this is Luiz's"
+    end
+    D->>L: gate 1: design
+  end
+  D->>L: gate 2: lane plan
+  D->>D: checks names, missions, file overlap against fleet ls
+  D->>L: gate 3: team (project id, coordinators, lanes each owns)
+  D->>D: lands docs/design/slug/ as docs
+  D->>C: fleet team add, one per coordinator
+  D->>D: fleet news: spin-off launched (wakes nobody)
+</pre>
+</section>
+
+<section>
+<h2>Lifecycle, model-checked</h2>
+<p>TLA+ model run through the statechart skill: 328 states, 1,180 steps, every rule holds (measured). The approvals live in dossier.md, and launch reads them from the record, never from the session's memory, so a compacted or resumed designer cannot skip a gate.</p>
+<pre class="mermaid">
+stateDiagram-v2
+  s0: Origin agent finds complex work
+  s1: Spin-off proposed to Luiz
+  s2: Designer researches and models
+  s3: Dropped
+  s4: Gate 1: design out for review
+  s5: Gate 2: lane plan out for review
+  s6: Checking names and overlap in fleet
+  s7: Parked: fleet unavailable
+  s8: Gate 3: team out for review
+  s9: All three approved on record
+  s10: Coordinators own it
+  [*] --> s0
+  s0 --> s1: the agent proposes a spin-off
+  s1 --> s2: Luiz says yes#59; a tab opens
+  s1 --> s3: Luiz says no
+  s2 --> s4: the designer publishes artifacts
+  s4 --> s2: the design changes#59; later approvals void
+  s4 --> s5: Luiz approves the design
+  s5 --> s6: Luiz approves the plan
+  s6 --> s7: fleet is unavailable
+  s6 --> s8: fleet is up#59; no clash
+  s8 --> s6: the designer resumes from the record or the team changes#59; its approval voids and the fleet check reruns
+  s8 --> s9: Luiz approves the team or the designer resumes from the record
+  s7 --> s6: fleet is back
+  s9 --> s6: the team changes#59; its approval voids and the fleet check reruns
+  s9 --> s10: the designer runs fleet team add per coordinator
+  s9 --> s7: fleet went down before launch
+  s6 --> s9: the designer resumes from the record
+</pre>
+<div class="tw"><table>
+<tr><th>Rule</th><th>Reader's sentence</th><th>Status</th></tr>
+<tr><td><code>LaunchOnlyAllApproved</code></td><td>Coordinators start only when the record shows the current design, plan and team each approved.</td><td>holds (measured)</td></tr>
+<tr><td><code>PlanApprovalNeedsDesign</code></td><td>A plan approval on record always sits on the current, approved design.</td><td>holds. Proven to bite: with voiding removed, TLC breaks it in 6 steps (approve design, approve plan, change design).</td></tr>
+<tr><td><code>TeamApprovalNeedsPlan</code></td><td>A team approval on record always sits on the current, approved plan.</td><td>holds (measured)</td></tr>
+<tr><td><code>TeamReviewedOnlyWithFleet</code></td><td>Luiz sees a team only after fleet checked that exact team version for name, lane and project clashes.</td><td>holds. Proven to bite: a team change that skips the check breaks it in 7 steps; a check that records nothing breaks it in 6.</td></tr>
+</table></div>
+<p class="small">The chart hides: "Luiz drops it" (open from every live state), design and plan changes raised at later gates (each returns to its own gate and voids the ones after), and steps that stay in one state. Not modelled, carried by the skill text: the designer writes no product code, the origin never waits, launch of several coordinators is not atomic (recorded per coordinator).</p>
+</section>
+
+<section>
+<h2>Data shapes</h2>
+<p>The origin writes one file outside the repo, as handoff does, so it never lands in its own open change. The designer copies it into its own jj workspace. Everything lands as docs before launch, so coordinators' workspaces see it. Missions are one line of at most 2,000 characters (<code>fleet team add --help</code>), so they point at these paths.</p>
+<pre>$TMPDIR/spin-off-&lt;slug&gt;.md     written by the origin, read-only after
+  goal          one sentence: what changes for whom
+  found-in      origin session name, repo, change id
+  evidence      file:line pointers, logs, what was tried
+  constraints   known must / must-not
+  out-of-scope  what the origin keeps doing itself
+
+docs/design/&lt;slug&gt;/dossier.md   owned by the designer
+  phase         current state of the chart above
+  versions      design vN, plan vN, team vN
+  approvals[]   gate, version, parent version, file hash, date, Luiz's words
+                only a yes typed in the designer session counts
+                a design change voids plan and team; a plan change voids team
+  artifacts     show-me pages, statecharts (.tla, .mmd), ADRs for decisions that bind fleets
+  decider       each question put to Fable and its ruling
+  launch[]      per coordinator: name, status (started, failed, refused)
+
+docs/design/&lt;slug&gt;/plan.md      gate 2
+  lanes[]       id, goal, files owned, depends-on, suggested role (the coordinator decides), done criterion
+  dependency order
+
+docs/design/&lt;slug&gt;/team.md      gate 3
+  project       fleet project id (fleet team add needs one)
+  manager       the project's existing one; a project has at most one
+  coordinators  name, repo, lanes it owns, its mission line</pre>
+</section>
+
+<section>
+<h2>Files in tstack</h2>
+<pre>skills/engineering/
+├── spin-off/SKILL.md      model-invoked: propose, write spin-off.md, open the tab, back to work
+└── designer/
+    ├── SKILL.md           disable-model-invocation; opened as /tstack:tuca-mode /tstack:designer &lt;path&gt;
+    ├── DOSSIER.md         record, versions, approvals and voiding, resume from the record
+    ├── LAUNCH.md          fleet check, fleet team add per coordinator, park, no-fleet path
+    └── references/        lifecycle.tla + view.ts (this model)
+docs/models.md             + Designer row (Opus high, fallback Sonnet xhigh) and its Context-by-role line
+skills/engineering/figure-it-out/SKILL.md   + boundary: do it here, or it leaves as a spin-off
+skills/engineering/tuca-mode/SKILL.md       standing-program line also points at spin-off
+README.md, .claude-plugin/plugin.json, skills/engineering/README.md   + both skills</pre>
+</section>
+
+<section class="dev">
+<h2>Changed in v5 (review and a real run)</h2>
+<ul>
+<li><b>A team change goes back through the fleet check</b> before gate 3 asks again. v3 sent it straight to review, so a renamed coordinator could clash unseen.</li>
+<li><b>Gate 3 can create a project.</b> When no fleet project fits, team.md names a new id and gate 3 offers: approve and create it, change the team, or drop. <code>fleet project new "&lt;title&gt;" --id &lt;id&gt;</code> runs once on your typed yes.</li>
+<li><b>An untrusted repo</b> shows you the exact <code>fleet team add … --trust</code> line; it runs once on your typed yes. A refusal is reported, never retried.</li>
+<li><b>The no-fleet path rechecks the record</b> and lands the docs before it opens the orchestrate tab.</li>
+<li><b>The design hash covers the whole design folder</b> (all but dossier, plan and team), so an edited .tla or ADR voids the design too.</li>
+<li><b>Required skills are named</b>: show-me for the page, domain-modeling for ADRs and terms, statechart when the work moves between states. A real <code>claude -p</code> run had skipped them all.</li>
+<li><b>Headless fallback</b>: with no AskUserQuestion, the designer asks the gate in its reply and records nothing. The real run did exactly that and stopped at gate 1 with no approval.</li>
+</ul>
+</section>
+
+<section class="dev">
+<h2>What the advisor changed</h2>
+<ul>
+<li><b>Approvals live in the record, not in memory.</b> The v2 model kept the plan's approval after a design change; only the session's phase forced the re-ask, and a compacted designer would lose it.</li>
+<li><b>The designer has its own jj workspace.</b> A tab in the origin's workspace would snapshot design files into the origin's open change. Your CLAUDE.md forbids shared workspaces.</li>
+<li><b>The tab opens with <code>rex run</code>, not <code>fleet team add</code>.</b> fleet team takes only coordinator and manager roles, starts them at Opus medium, and a ledger in the opening turns the session into a coordinator. Outside Rex, the origin prints the command for you in nushell.</li>
+<li><b>One <code>fleet team add</code> per coordinator</b>, run by the designer itself, since its yes is first-hand and a relayed yes is not (fleet manager skill). No "register with the manager": the manager greets new fleets, and the FYI goes to fleet news.</li>
+<li><b>The fleet check comes before gate 3</b>, so you never approve a team whose names or files clash. With fleet down, the designer parks there.</li>
+<li><b>Fable is a Decider, not the fleet advisor.</b> <code>fleet advisor</code> needs a ledger the designer does not have.</li>
+<li><b>Renames.</b> brief.md became spin-off.md (the fleet already has a brief.md); "landing order" became "dependency order" (landing order is the manager's).</li>
+</ul>
+</section>
+
+<section>
+<h2>Decided after the advisor (2026-11-14)</h2>
+<div class="tw"><table>
+<tr><th>Question</th><th>Your answer</th></tr>
+<tr><td>B. Where outputs live</td><td>ADRs in <code>docs/adr/</code> and terms in <code>CONTEXT.md</code>, through domain-modeling. Dossier, plan, team, models and show-me sources in <code>docs/design/&lt;slug&gt;/</code>, which links the ADRs.</td></tr>
+<tr><td>C. Telling the origin</td><td>A fleet news post at launch.</td></tr>
+<tr><td>D. No fleet on the machine</td><td>After gate 2 the designer hands plan.md to a new tuca-mode tab that runs it with orchestrate. Gate 3 approves that session.</td></tr>
+<tr><td>Gates for this skill</td><td>v3, plan and team approved, then voided by the v5 changes above. Asked again.</td></tr>
+</table></div>
+</section>
+
+<section>
+<h2>After approval, for this skill itself</h2>
+<p>One lane, no fleet: one Implementer (Opus high) in jj workspace <code>../skills-spin-off</code>, a fresh Reviewer (Opus high), one real <code>claude -p</code> run of the designer skill at Opus high on a throwaway spin-off.md (Verifier, Opus medium). The <code>runner</code> session runs <code>just validate</code>, <code>just test-changed</code> and the push of master, since fleet tools are down.</p>
+</section>
+</main>
