@@ -117,4 +117,4 @@ Files in [playbooks/](playbooks/). No playbook fits → `tstack:figure-it-out` d
 | Trace forensics | Diagnose a captured profile, trace or heap snapshot | [trace-forensics.md](playbooks/trace-forensics.md) |
 | Visual parity | Pixel-exact UI equivalence, or a styling migration | [visual-parity.md](playbooks/visual-parity.md) |
 
-A standing program ("run this whole project", "fan out", multi-day, many lanes) is not a playbook: it goes to the coordinator and orchestrate skills, per [Coordinator, lazily](#coordinator-lazily).
+A standing program ("run this whole project", "fan out", multi-day, many lanes) is not a playbook: it goes to the coordinator and orchestrate skills, per [Coordinator, lazily](#coordinator-lazily). Such work found mid-session, outside the task at hand, leaves to its own team through `tstack:spin-off`.

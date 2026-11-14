@@ -7,6 +7,8 @@ description: "Design an auditable bespoke playbook when no tuca-mode playbook fi
 
 When the task matches no playbook, design one. The deliverable before any code is the workflow itself: a sequence of phases that scales rigor to the task, runs the scientific method, and leaves a decision trail Luiz can audit after stepping away. Adapted from poteto's pstack (MIT).
 
+It plans work this session will do. Work that should leave to its own team goes to `tstack:spin-off`.
+
 ## Start
 
 Open a todo list whose first item is to read the Principles section of tuca-mode (`${CLAUDE_PLUGIN_ROOT}/skills/engineering/tuca-mode/SKILL.md`) and the `tstack:principles` index. Then add the phases below as todos.

@@ -1,0 +1,55 @@
+---
+title: "spin-off: from found work to a running fleet"
+---
+stateDiagram-v2
+  state "Legend" as legend {
+    lg0: origin
+    lg1: designer
+    lg2: review
+    lg3: fleet
+    lg4: end
+  }
+  class lg0 blue
+  class lg1 purple
+  class lg2 orange
+  class lg3 teal
+  class lg4 tan
+  s0: Origin agent finds complex work
+  s1: Spin-off proposed to Luiz
+  s2: Designer researches and models
+  s3: Dropped
+  s4: Gate 1: design out for review
+  s5: Gate 2: lane plan out for review
+  s6: Checking names and overlap in fleet
+  s7: Parked: fleet unavailable
+  s8: Gate 3: team out for review
+  s9: All three approved on record
+  s10: Coordinators own it
+  [*] --> s0
+  s0 --> s1: the agent proposes a spin-off
+  s1 --> s2: Luiz says yes#59; a tab opens
+  s1 --> s3: Luiz says no
+  s2 --> s4: the designer publishes artifacts
+  s4 --> s2: the design changes#59; later approvals void
+  s4 --> s5: Luiz approves the design
+  s5 --> s6: Luiz approves the plan
+  s6 --> s7: fleet is unavailable
+  s6 --> s8: fleet is up#59; no clash
+  s8 --> s6: the designer resumes from the record or the team changes#59; its approval voids and the fleet check reruns
+  s8 --> s9: Luiz approves the team or the designer resumes from the record
+  s7 --> s6: fleet is back
+  s9 --> s6: the team changes#59; its approval voids and the fleet check reruns
+  s9 --> s10: the designer runs fleet team add per coordinator
+  s9 --> s7: fleet went down before launch
+  s6 --> s9: the designer resumes from the record
+  class s0 blue
+  class s1 blue
+  class s2 purple
+  class s3 tan
+  class s4 orange
+  class s5 orange
+  class s6 purple
+  class s7 purple
+  class s8 orange
+  class s9 purple
+  class s10 teal
