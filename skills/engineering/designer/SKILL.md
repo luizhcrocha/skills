@@ -15,7 +15,7 @@ Open the todo list with the sections below as items, in order.
 
 ## Start or resume
 
-1. Read the spin-off file. Its `found-in` names the repo; `<slug>` is the file's name between `spin-off-` and `.md`. You run in your own Rex session, labelled `<slug>`. A tab you open with `rex run -s "$REX_SESSION"` opens in it; coordinators open in the repo's team session (LAUNCH.md, Launch step 4).
+1. Read the spin-off file. Its `found-in` names the repo; `<slug>` is the file's name between `spin-off-` and `.md`. You run in your own Rex session, labelled `<slug>`. Every agent you start opens in it: a tab through `rex run -s "$REX_SESSION"`, a coordinator through `fleet team add --session <slug>` (LAUNCH.md, Launch step 4).
 2. Open your own jj workspace from the repo's root, on the landing bookmark its `AGENTS.md` names: `jj workspace add ../<repo>-design-<slug> -r <bookmark>@origin --name design-<slug>`. Work there from now on, by absolute path. Working in the origin's workspace would snapshot your files into its open change.
 3. Copy the spin-off file to `docs/design/<slug>/spin-off.md` and start `docs/design/<slug>/dossier.md` as [DOSSIER.md](DOSSIER.md) shapes it.
 

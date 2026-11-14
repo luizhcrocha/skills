@@ -49,3 +49,4 @@ Team v2, as asked (team v3 is unchanged): "No fleet, since there is one lane and
 ## After the land
 
 - 2026-11-14, Luiz in session 7fcb85bb: "the new designer agent should be created on a new rex session, named after the work to be done. when he creates the agent's to impelemnt, he will create in the session he is in." The designer now opens with `rex new <slug>`, and the no-fleet orchestrate tab opens in its session. Coordinators still open in the repo's team session: `fleet team` keeps one Rex session per repo, with one `marks.json` and one `team.lock` per repo (fleet `apps/cli/src/team/team.ts`). Luiz chose to add a session option to fleet; that change is fleet's own work, proposed as a spin-off.
+- 2026-11-14, same day: fleet gained `fleet team add --session <label>` (per-agent `fleet.session`; marks and lock were already per session). Coordinators now open in the designer's Rex session.
