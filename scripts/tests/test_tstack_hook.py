@@ -549,6 +549,41 @@ class StopTest(HookCase):
         self.context(self.stop())
 
 
+class AskNudgeTest(HookCase):
+    def stop(self, text, env=None, **extra):
+        return self.hook("Stop", self.base("Stop", stop_hook_active=False, last_assistant_message=text, **extra),
+                         env=env)
+
+    def nudge(self, result):
+        self.assertEqual(result.returncode, 0, result.stderr)
+        context = json.loads(result.stdout)["hookSpecificOutput"]["additionalContext"]
+        self.assertIn("AskUserQuestion", context)
+        return context
+
+    def test_a_reply_ending_on_a_question_is_sent_to_ask_user_question(self):
+        self.nudge(self.stop("Done: the gate passed.\n\nShould I push it to master?"))
+        self.nudge(self.stop("Two options.\n\n- A\n- B\n\n**Which one do you want?**"))
+        self.nudge(self.stop("Run this in your terminal, then tell me when it's done (did 1Password approve?)"))
+        self.nudge(self.stop("Should I push it?\n\n```nu\njj git push --bookmark master\n```"))
+
+    def test_a_question_earlier_in_the_reply_or_in_code_is_not_one_for_the_user(self):
+        self.assertSilent(self.stop("Why did it fail? The cache was stale.\n\nFixed and pushed."))
+        self.assertSilent(self.stop("Done.\n\n```nu\nls | where size > 1mb # big?\n```"))
+        self.assertSilent(self.stop("Done.\n\n```nu\nls # big?"))
+        self.assertSilent(self.stop("Replaced each unwrap() with `?`"))
+        self.assertSilent(self.stop("He asked:\n\n> Should I push it?"))
+        self.assertSilent(self.stop("## Open questions?"))
+        self.assertSilent(self.stop(""))
+        self.assertSilent(self.hook("Stop", self.base("Stop", stop_hook_active=False)))
+
+    def test_skipped_for_workers_headless_runs_and_an_active_stop_hook(self):
+        text = "Should I push it?"
+        self.assertSilent(self.stop(text, agent_id="worker-1"))
+        self.assertSilent(self.stop(text, env={"TSTACK_ROLE": "worker"}))
+        self.assertSilent(self.stop(text, env={"CLAUDE_CODE_SESSION_ATTENDED": "0"}))
+        self.assertSilent(self.hook("Stop", self.base("Stop", stop_hook_active=True, last_assistant_message=text)))
+
+
 class PreCompactTest(HookCase):
     def test_prints_compaction_instructions_as_plain_text(self):
         r = self.hook("PreCompact", self.base("PreCompact", trigger="auto", custom_instructions=None))

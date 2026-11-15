@@ -1,0 +1,3 @@
+change@commit	at	reviewer	verdict	note	patch
+knzrqrowrsmm@b51cc0fa9167	2026-11-15T14:06:30-05:00	opus	LAND	0 important, 6 nits (code span, unclosed fence, quoted lines, land.md asks), taken	62cbc74972498d27
+knzrqrowrsmm@56425d8d13a3	2026-11-15T14:06:30-05:00	opus	LAND	interdiff re-check of the nit fixes: 0 important, 4 small nits left	bed7723688ed3c82

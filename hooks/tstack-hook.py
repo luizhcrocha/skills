@@ -278,6 +278,28 @@ def memo_nudge(hook):
     return NUDGE if remind else None
 
 
+ASK = (
+    "Your reply ends on a question for the user. A turn that ends in text shows as done in the terminal, not as "
+    "waiting on them: Rex and Claude Code mark a session blocked only while a dialog is open. If you need their answer, "
+    "ask it now with AskUserQuestion: its options are the choices, or, for a step only they can take (a login, a "
+    "1Password approval, a command in their terminal), the step's words with Done and Not now. In a fleet session "
+    "the question goes on a card instead (`fleet state <dir> decision`). If the question was rhetorical, carry on."
+)
+_FENCE = re.compile(r"^```.*?(?:^```[^\n]*$|\Z)", re.M | re.S)
+_CODE_SPAN = re.compile(r"`[^`\n]*`")
+_ENDS_ASKING = re.compile(r"\?[\s*_)\]\"']*$")
+
+
+def ask_nudge(hook):
+    """Stop: when the reply's last line asks the user something, point the agent at AskUserQuestion, whose dialog
+    reports the session as blocked on the user (OSC 7501 state=blocked, kind=question); an ended turn reports done."""
+    if hook.is_worker or hook.headless or hook.input.get("stop_hook_active"):
+        return None
+    text = _FENCE.sub("", str(hook.input.get("last_assistant_message") or "")).strip()
+    last = _CODE_SPAN.sub("", text.splitlines()[-1]) if text else ""
+    return ASK if not last.lstrip().startswith((">", "#")) and _ENDS_ASKING.search(last) else None
+
+
 PRECOMPACT = (
     "If this conversation holds a durable decision and its reason, a gotcha, a stated user preference "
     "or an unfinished thread that was not recorded with `memo note`, list each as one line under a "
@@ -1561,7 +1583,7 @@ def _rm_shown(path, home):
 
 HANDLERS = {
     "SessionStart": [memo_wake, jj_hints, tuca_mode, memo_dream_report, tape_build],
-    "Stop": [memo_nudge],
+    "Stop": [ask_nudge, memo_nudge],
     "PreCompact": [memo_precompact],
     "PreToolUse": [push_attribution, rm_guard],
 }
