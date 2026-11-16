@@ -1,6 +1,6 @@
 # Plan, team and launch
 
-Read from the designer's [SKILL.md](SKILL.md) when you write the plan, check the fleet, write the team, or launch. Record every gate and launch step in the dossier ([DOSSIER.md](DOSSIER.md)).
+Record every gate and launch step in the dossier ([DOSSIER.md](DOSSIER.md)).
 
 ## plan.md (gate 2)
 
@@ -35,23 +35,22 @@ Done when every check passes. A clash changes the team or the plan, which voids 
 
 Ask gate 3 only after the fleet check passed on the current plan and the current team version.
 
-When another tab whose name holds `-designer` is open in the Rex session `designers` (`rex window ls -s designers`), gate 3 also offers **Hold for the council**: related designers may be staffed together (the council skill, Judge and Decide). On that answer, set the phase to `parked` with the reason `council`, rename your tab to `<slug>-designer (council)` so the tab bar shows the wait (`rex window rename -s designers <window> "<slug>-designer (council)"`; the session keeps its name, which is its address). From there SKILL.md's "Under a council" holds: the council asks your gates and launches your coordinators. When Luiz releases the hold without a council, rename the tab back to `<slug>-designer` and go on here. The hold is Luiz's: a missing `fleet council` never releases it. On 2026-11-16 run-efficiency launched while its neighbours were held, because `fleet council --help` failed on that machine, and Luiz had its workers stopped.
+When another tab whose name holds `-designer` is open in the Rex session `designers` (`rex window ls -s designers`), gate 3 also offers **Hold for the council**, so related designers can be staffed together. On that answer, set the phase to `parked` with the reason `council` and rename your tab to `<slug>-designer (council)` (`rex window rename -s designers <window> "<slug>-designer (council)"`); [COUNCIL.md](COUNCIL.md) holds from there. The hold is Luiz's: a missing `fleet council` never releases it. When he releases it without a council, rename the tab back and go on here.
 
 ## Launch
 
-1. Recheck the record (DOSSIER.md, "Resume from the record"). Launch only when all three approvals are live; otherwise go to the gate the record names. When `fleet council --help` succeeds, also refuse while `fleet council decisions --for <slug> --unacked` lists anything: run the Inbox ([COUNCIL.md](COUNCIL.md)) first, then recheck.
+1. Recheck the record (DOSSIER.md, "Resume from the record"). Launch only when all three approvals are live; otherwise go to the gate the record names. When `fleet council --help` succeeds, also refuse while `fleet council decisions --for <slug> --unacked` lists anything: apply them ([COUNCIL.md](COUNCIL.md), Decisions) first, then recheck.
 2. Land `docs/design/<slug>/`, with any ADRs and `CONTEXT.md` edits, as docs through tuca-mode's Land playbook. The coordinators' workspaces see the design only once it has landed. Done when `<bookmark>@origin` holds the folder.
 3. Run `fleet ls` again. When it fails, the phase goes back to `parked`.
-4. Per coordinator, as one Bash call with `timeout: 300000`, over the join and start waits `fleet team add --help` gives, in that coordinator's repo: `cd <repo>; fleet team add <name> --project <id> --mission "<mission>" --session <slug>`. `--session` opens the Rex session `<slug>` as `fleet team add --help` says. Coordinators never open in `designers` or in the repo's team session. Write the coordinator's row in the dossier's **Launch** table as the call returns, then go on to the next. When the call does not start it:
-   - **Untrusted repo.** The refusal names `--trust`. Ask Luiz with `AskUserQuestion`, showing the exact line you would run: `cd <repo>; fleet team add <name> --project <id> --mission "<mission>" --session <slug> --trust`. On the yes he types, run that line once, unchanged.
-   - **Auto mode refuses** a call, this one or the `--trust` line. Report the refusal and the refused line to Luiz, record the row as `refused`, and do nothing else for that coordinator: no retry, no other route.
-   - **The session belongs to another repo.** The refusal says `session <slug> is the team of <repo>`: `fleet team` binds a session to the first repo that adds to it. Stop that coordinator, record the row as `refused`, and tell Luiz. The coordinators stay in the one session `<slug>` he asked for, never in a second session named for the repo.
+4. Per coordinator, as one Bash call with `timeout: 300000`, over the join and start waits `fleet team add --help` gives, in that coordinator's repo: `cd <repo>; fleet team add <name> --project <id> --mission "<mission>" --session <session>`, where `<session>` is `<slug>`, or under a council the session it names. `--session` opens that Rex session as `fleet team add --help` says. Coordinators never open in `designers` or in the repo's team session. Write the coordinator's row in the dossier's **Launch** table as the call returns, then go on to the next. When the call does not start it:
+   - **Untrusted repo.** The refusal names `--trust`. Ask Luiz with `AskUserQuestion`, showing the exact line you would run: `cd <repo>; fleet team add <name> --project <id> --mission "<mission>" --session <session> --trust`. On the yes he types, run that line once, unchanged.
+   - **Refused**, by auto mode or by `session <session> is the team of <repo>` (`fleet team` binds a session to the first repo that adds to it). Record the row as `refused` and tell Luiz, or the council under one: no retry, no other session or route.
    - **Opening not sent.** The call says `its opening was not sent`: a long opening wraps and outlasts the 30 s check. `rex capture` the coordinator's tab; when the whole opening sits in its input box, press Enter with `rex send-key -b <block> enter`, then record the row as `started`.
    - **Killed midway, or no tab.** Fix what the refusal names and run `add` again (`fleet team add --help` says what each case left behind).
    - **A startup prompt.** Luiz answers it in the Rex app (`fleet team attach <name>`), then run `fleet team start <name>`.
 5. Post the news, which wakes nobody: `fleet news post --from <slug>-designer --to all --kind fyi "spin-off <slug> launched: <coordinators>; design in docs/design/<slug>/"`.
 6. Set the phase to `handed` when every row says `started`. Otherwise tell Luiz which coordinators failed and why.
-7. Land the dossier with its **Launch** rows and phase as a follow-up docs change, as in step 2: the copy landed in step 2 predates the launch. When `fleet council --help` succeeds, re-register the landed dossier: `fleet council register <slug> --dossier <repo>/docs/design/<slug>/dossier.md --repo <repo>`, with `<repo>` the repo's root. Then forget the design workspace: `jj workspace forget design-<slug>`.
+7. Land the dossier with its **Launch** rows and phase as a follow-up docs change, as in step 2: the copy landed in step 2 predates the launch. When `fleet council --help` succeeds, re-register the landed dossier: `fleet council register <slug> --dossier <repo>/docs/design/<slug>/dossier.md --repo <repo>`, with `<repo>` the repo's root.
 
 ## No fleet
 

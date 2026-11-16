@@ -7,7 +7,7 @@ Interview the user relentlessly until you reach a shared understanding. Map this
 
 Work the tree in **rounds**. The **frontier** is every decision whose prerequisites are already settled: the questions you can ask _now_ without guessing at answers you haven't heard yet. Ask the whole frontier in one round: number each question, lay out its choices with what each means for the user, and give your recommended answer with its reason: the trade-off first, in plain words, then the evidence behind it. Then wait for the user's answers before the next round.
 
-With `AskUserQuestion` available, ask the round as [Through a dialog](#through-a-dialog) says. Without it, format a round in the chat like so, each question one plain question with two to four lettered options, and the recommendation by its letter with the trade-off in one plain sentence (sources after it):
+Unless the session runs a fleet dashboard ([On a fleet dashboard](#on-a-fleet-dashboard)), ask the round as [Through a dialog](#through-a-dialog) says when `AskUserQuestion` is available. Without it, format a round in the chat like so, wording each question so "yes" accepts your recommended answer, each question one plain question with two to four lettered options, and the recommendation by its letter with the trade-off in one plain sentence (sources after it):
 
 ```
 ❓ **Q1** - **<a plain title>**: <one plain question that names the thing>
@@ -26,8 +26,6 @@ With `AskUserQuestion` available, ask the round as [Through a dialog](#through-a
 
 ➡️ **b**, because <the trade-off in one plain sentence>
 ```
-
-Word each question so "yes" accepts your recommended answer.
 
 Each round the user answers reshapes the tree: settled decisions push the frontier outward and unblock questions that depended on them. Recompute the frontier and ask the next round. A question whose answer depends on another question still open in this round belongs to a _later_ round, not this one.
 

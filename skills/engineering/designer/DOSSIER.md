@@ -1,8 +1,6 @@
 # The dossier
 
-Read from the designer's [SKILL.md](SKILL.md) when you start the dossier, record a gate, change a version, or resume.
-
-`docs/design/<slug>/dossier.md` is the designer's record and the only source of the phase. A compacted or resumed designer reads it and knows where it stands; launch reads its approvals and nothing else. Write it at three moments, each the moment it happens: an answer from Luiz (**Conversation**, in his words), a gate (**Approvals** and the phase), and a new design version (the versions, **Artifacts** and the **Interfaces** card). Progress between those lives in the design files themselves. Measured on 2026-11-16: designers edited the dossier up to 25 times a session, and each edit re-read a context of 260k to 380k tokens.
+`docs/design/<slug>/dossier.md` is the designer's record and the only source of the phase. A compacted or resumed designer reads it and knows where it stands; launch reads its approvals and nothing else. Write it at three moments, each the moment it happens: an answer from Luiz (**Conversation**, in his words), a gate (**Approvals** and the phase), and a new design version (the versions, **Artifacts** and the **Interfaces** card). Progress between those lives in the design files themselves.
 
 The gates follow a checked model: [references/lifecycle.tla](references/lifecycle.tla) with its config and view. TLC holds the invariants in [references/lifecycle.cfg](references/lifecycle.cfg). Rerun it through the statechart skill when you change how the gates work.
 
@@ -61,12 +59,12 @@ One row per answer at a gate:
   ```sh
   find . -type f ! -path './.scratch/*' ! -name dossier.md ! -name plan.md ! -name team.md -print0 | sort -z | xargs -0 sha256sum | sha256sum
   ```
-- **date** and **Luiz's words**, the answer as SKILL.md's The gates counts it.
+- **date** and **Luiz's words**, the answer as SKILL.md's The gates counts it, or `C-<n>` for a version approved under a council decision.
 - **status**: `live`, or `void: <why>`.
 
 ## Voiding
 
-An edit to an approved file makes a new version and voids its approval. For the design, an edit to any artifact the page links counts too. A new design version voids the plan's and the team's approvals. A new plan version voids the team's. Keep the voided rows: they show what Luiz saw before. Then ask each voided gate again, in order.
+An edit to an approved file makes a new version and voids its approval. For the design, an edit to any artifact the page links counts too. A new design version voids the plan's and the team's approvals. A new plan version voids the team's. Keep the voided rows: they show what Luiz saw before. Then ask each voided gate again, in order, except a plan or team version made only to apply a council decision, which that decision approves.
 
 ## Resume from the record
 
@@ -95,7 +93,7 @@ Update the card with each design version, before its gate. It lives in `dossier.
 
 ## Constraints
 
-One row per council decision you acknowledged: its id (`C-<n>`), the constraint as `fleet council show C-<n>` prints it, and the result you acknowledged, `no change` or `design v<n>`.
+One row per council decision you acknowledged: its id (`C-<n>`), the constraint as the council sent it, and the result you acknowledged, `no change` or `design v<n>`.
 
 ## Decider
 
