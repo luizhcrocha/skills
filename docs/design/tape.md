@@ -257,9 +257,9 @@ environment, run in the store's folder (outside any repo).
   - Measured (2026-10-20, temp dirs, best of 5 runs): SessionStart takes
     42 ms with no spawn, 54 ms with a build that sleeps 5 s, and 64 ms with
     the real `tape build`; the build is still running when the hook returns.
-- Under `TSTACK_ROLE=tape` every tstack-hook handler is silent, memo_wake
+- Under `TSTACK_ROLE=tape` every tstack-hook handler is silent, memo_start
   and every spawn included, so a builder's own calls never start a builder
-  or receive a wake.
+  or receive a start read.
 - The builder takes a non-blocking `flock` on the project's `lock`; if it is
   held, it exits and the running builder picks up the new turns. So there is
   one builder per project per machine, and machines share nothing.

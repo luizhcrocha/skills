@@ -112,8 +112,8 @@ class HookCase(unittest.TestCase):
 
 
 class SessionStartTest(HookCase):
-    def test_injects_the_wake_as_additional_context(self):
-        self.memo("note", "decision", "hooks are one Python dispatcher")
+    def test_injects_the_start_read_as_additional_context(self):
+        self.memo("note", "hooks are one Python dispatcher")
         for source in ("startup", "resume", "clear", "compact"):
             r = self.hook("SessionStart", self.base("SessionStart", source=source))
             self.assertEqual(r.returncode, 0, r.stderr)
@@ -122,23 +122,41 @@ class SessionStartTest(HookCase):
             self.assertEqual(out["hookSpecificOutput"]["hookEventName"], "SessionStart")
             context = out["hookSpecificOutput"]["additionalContext"]
             self.assertTrue(context.startswith("# memo"))
-            self.assertIn("project:acme/hooked", context)
-            self.assertEqual("hooks are one Python dispatcher" in context, source in ("startup", "resume"),
-                             "a recent decision is in the brief wake, not after clear or compact")
-            self.assertEqual("just compacted" in context, source == "compact")
+            self.assertIn("## Repo acme/hooked", context)
+            self.assertIn("hooks are one Python dispatcher", context)
 
-    def test_a_worker_gets_no_wake(self):
-        self.memo("note", "fact", "something")
+    def test_a_worker_gets_no_start_read(self):
+        self.memo("note", "something")
         self.assertSilent(self.hook("SessionStart", self.base("SessionStart", source="startup", agent_id="a1")))
         self.assertSilent(self.hook("SessionStart", self.base("SessionStart", source="startup"),
                                     env={"TSTACK_ROLE": "worker"}))
 
     def test_cwd_falls_back_to_the_project_dir(self):
-        self.memo("note", "gotcha", "found through CLAUDE_PROJECT_DIR")
+        self.memo("note", "found through CLAUDE_PROJECT_DIR")
         payload = self.base("SessionStart", source="startup")
         del payload["cwd"]
         r = self.hook("SessionStart", payload, env={"CLAUDE_PROJECT_DIR": str(self.repo)})
         self.assertIn("found through CLAUDE_PROJECT_DIR", r.stdout)
+
+    def test_the_start_read_never_syncs_nor_starts_a_process(self):
+        """A sync asks 1Password for the SSH key, so no hook may run one (design.md, Who syncs, and when)."""
+        from unittest import mock
+        self.memo("note", "read from the local store")
+        hook = load_hook()
+        calls = []
+
+        def refuse(*args, **kwargs):
+            calls.append(args)
+            raise AssertionError("a sync or a process at session start")
+        with (mock.patch.object(hook.memo(), "sync_bookmark", refuse), mock.patch("subprocess.run", refuse),
+              mock.patch("subprocess.Popen", refuse)):
+            out = hook.dispatch("SessionStart", json.dumps(self.base("SessionStart", source="startup")), self.env)
+        self.assertEqual(calls, [])
+        self.assertIn("read from the local store", out)
+
+    def test_nothing_runs_before_a_compaction(self):
+        self.assertNotIn("PreCompact", json.loads(HOOKS_JSON.read_text())["hooks"])
+        self.assertSilent(self.hook("PreCompact", self.base("PreCompact", trigger="auto")))
 
 
 FAKE_TAPE = """import json, os, sys, time
@@ -158,10 +176,8 @@ class TapeBuildTest(HookCase):
         (self.root / "scripts").mkdir(parents=True)
         (self.root / "scripts" / "memo").symlink_to(MEMO)
         (self.root / "scripts" / "tape").write_text(FAKE_TAPE)
-        (self.root / "scripts" / "memo-dream").write_text(FAKE_TAPE.replace("FAKE_TAPE_LOG", "FAKE_DREAM_LOG"))
         self.runs = self.tmp / "tape-runs.jsonl"
-        self.dreams = self.tmp / "dream-runs.jsonl"
-        self.env.update(CLAUDE_PLUGIN_ROOT=str(self.root), FAKE_TAPE_LOG=str(self.runs), FAKE_DREAM_LOG=str(self.dreams))
+        self.env.update(CLAUDE_PLUGIN_ROOT=str(self.root), FAKE_TAPE_LOG=str(self.runs))
         self.index = self.tmp / "data" / "tstack" / "tape" / "index.db"
 
     def tape_in_use(self):
@@ -195,14 +211,6 @@ class TapeBuildTest(HookCase):
             pass
         self.assertEqual(self.wait_runs(1), [["build", "--on-start", "--cwd", str(self.repo)]])
         self.assertNotIn("tape_build failed", self.log())
-
-    def test_session_start_never_starts_memo_dream(self):
-        """memo-dream dreams at night as a service (`memo-dream night`), not from a session's start."""
-        self.tape_in_use()
-        self.assertEqual(self.hook("SessionStart", self.base("SessionStart", source="startup")).returncode, 0)
-        self.assertEqual(self.wait_runs(1), [["build", "--on-start", "--cwd", str(self.repo)]])
-        time.sleep(0.5)
-        self.assertFalse(self.dreams.exists())
 
     def test_the_build_runs_niced_ten_below_the_session(self):
         self.tape_in_use()
@@ -335,7 +343,6 @@ class TapeBuildTest(HookCase):
 class JJHintsTest(HookCase):
     def setUp(self):
         super().setUp()
-        self.env["MEMO_QUIET"] = "1"
         self.jjrepo = self.tmp / "jjrepo"
         self.jjrepo.mkdir()
         subprocess.run(["jj", "git", "init", "--colocate"], cwd=self.jjrepo, check=True, capture_output=True)
@@ -380,7 +387,6 @@ class JJHintsTest(HookCase):
 
     def test_workers_get_the_hints_and_memo_stays_first(self):
         self.assertIn("# jj", self.context(self.jjrepo, agent_id="w1"))
-        self.env["MEMO_QUIET"] = ""
         context = self.context(self.jjrepo)
         self.assertTrue(context.startswith("# memo"), context[:80])
         self.assertIn("\n\n# jj\n", context)
@@ -468,7 +474,7 @@ class TucaModeTest(HookCase):
                                     env={"TSTACK_ROLE": "worker"}))
 
     def test_it_follows_memo_and_jj(self):
-        self.memo("note", "fact", "tuca order")
+        self.memo("note", "tuca order")
         self.flag("on", "sess-1")
         context = self.context("compact")
         self.assertTrue(context.startswith("# memo"))
@@ -479,74 +485,6 @@ class TucaModeTest(HookCase):
         payload = self.base("SessionStart", source="compact")
         self.hook("SessionStart", payload)
         self.assertCheap("SessionStart (tuca-mode)", "SessionStart", payload)
-
-
-class StopTest(HookCase):
-    def stop(self, env=None, **extra):
-        return self.hook("Stop", self.base("Stop", stop_hook_active=False, **extra), env=env)
-
-    def context(self, result):
-        self.assertEqual(result.returncode, 0, result.stderr)
-        out = json.loads(result.stdout)
-        self.assertEqual(out["hookSpecificOutput"]["hookEventName"], "Stop")
-        return out["hookSpecificOutput"]["additionalContext"]
-
-    def test_real_work_without_a_note_is_reminded_once(self):
-        self.transcribe(said("fix it"), tool_use("Read", file_path="a"), tool_use("Edit", file_path="a"))
-        self.assertIn("memo note", self.context(self.stop()))
-        self.transcribe(tool_use("Write", file_path="b"))
-        self.assertSilent(self.stop())
-        state = json.loads((self.data / "sessions" / "sess-1.memo.json").read_text())
-        self.assertTrue(state["reminded"])
-
-    def test_sessions_are_tracked_apart(self):
-        self.transcribe(tool_use("MultiEdit", file_path="a"))
-        self.context(self.stop())
-        self.context(self.hook("Stop", {**self.base("Stop"), "session_id": "sess-2"}))
-
-    def test_reading_is_not_work_and_the_scan_is_incremental(self):
-        self.transcribe(tool_use("Read", file_path="a"), tool_use("Bash", command="jj log -r @"))
-        self.assertSilent(self.stop())
-        self.transcribe(tool_use("Bash", command="jj --no-pager describe -m 'feat: x'"))
-        self.assertIn("memo note", self.context(self.stop()))
-
-    def test_a_commit_counts_and_a_note_satisfies(self):
-        for command in ("jj commit -m x", "git commit -qm x", "jj desc -r @- -m y"):
-            self.transcript.write_text("")
-            shutil.rmtree(self.data, ignore_errors=True)
-            self.transcribe(tool_use("Bash", command=command))
-            self.assertIn("memo note", self.context(self.stop()), command)
-        self.transcript.write_text("")
-        shutil.rmtree(self.data, ignore_errors=True)
-        self.transcribe(tool_use("Edit", file_path="a"),
-                        tool_use("Bash", command='/x/scripts/memo note gotcha "the index is a cache"'))
-        self.assertSilent(self.stop())
-        self.transcribe(tool_use("Edit", file_path="b"))
-        self.assertSilent(self.stop())
-
-    def test_quoted_tool_names_in_text_are_not_work(self):
-        self.transcribe(said('the transcript says "name":"Edit" and tool_use'))
-        self.assertSilent(self.stop())
-
-    def test_skipped_for_workers_quiet_and_an_active_stop_hook(self):
-        self.transcribe(tool_use("Edit", file_path="a"))
-        self.assertSilent(self.stop(agent_id="worker-1"))
-        self.assertSilent(self.hook("Stop", self.base("Stop"), env={"TSTACK_ROLE": "worker"}))
-        self.assertSilent(self.hook("Stop", self.base("Stop"), env={"MEMO_QUIET": "1"}))
-        self.assertSilent(self.hook("Stop", self.base("Stop", stop_hook_active=True)))
-        self.assertSilent(self.hook("Stop", self.base("Stop"), env={"CLAUDE_CODE_SESSION_ATTENDED": "0"}))
-        self.assertSilent(self.hook("Stop", self.base("Stop"), env={"CLAUDE_CODE_ENTRYPOINT": "sdk-cli"}))
-        self.context(self.stop(env={"CLAUDE_CODE_SESSION_ATTENDED": "1", "CLAUDE_CODE_ENTRYPOINT": "cli"}))
-
-    def test_a_half_written_last_line_waits_for_the_next_run(self):
-        self.transcribe(tool_use("Read", file_path="a"))
-        line = json.dumps(tool_use("Edit", file_path="a"), separators=(",", ":"))
-        with open(self.transcript, "a") as f:
-            f.write(line[:30])
-        self.assertSilent(self.stop())
-        with open(self.transcript, "a") as f:
-            f.write(line[30:] + "\n")
-        self.context(self.stop())
 
 
 class AskNudgeTest(HookCase):
@@ -584,22 +522,12 @@ class AskNudgeTest(HookCase):
         self.assertSilent(self.hook("Stop", self.base("Stop", stop_hook_active=True, last_assistant_message=text)))
 
 
-class PreCompactTest(HookCase):
-    def test_prints_compaction_instructions_as_plain_text(self):
-        r = self.hook("PreCompact", self.base("PreCompact", trigger="auto", custom_instructions=None))
-        self.assertEqual(r.returncode, 0, r.stderr)
-        self.assertIn("Memo candidates", r.stdout)
-        with self.assertRaises(ValueError):
-            json.loads(r.stdout)
-        self.assertSilent(self.hook("PreCompact", self.base("PreCompact", trigger="manual", agent_id="w")))
-
-
 class NeverBreakTest(HookCase):
     """Whatever the input or the state of the machine: exit 0, nothing on stdout."""
 
     def test_bad_input(self):
         for raw in ("not json", "[1, 2]", "null", '{"session_id": ', "\x00\xff", '{"cwd": 7, "source": []}'):
-            for event in ("SessionStart", "Stop", "PreCompact"):
+            for event in ("SessionStart", "Stop"):
                 r = self.hook(event, raw=raw)
                 self.assertEqual(r.returncode, 0, (event, raw, r.stderr))
                 if not raw.startswith('{"cwd"'):  # an object of odd values is still answered
@@ -619,7 +547,7 @@ class NeverBreakTest(HookCase):
                       env={"CLAUDE_PLUGIN_ROOT": str(broken)})
         self.assertSilent(r)
         self.assertIn("memo exploded", self.log())
-        self.assertIn("SessionStart memo_wake failed", self.log())
+        self.assertIn("SessionStart memo_start failed", self.log())
 
     def test_a_missing_memo_script_is_silent(self):
         r = self.hook("SessionStart", self.base("SessionStart", source="startup"),
@@ -642,7 +570,7 @@ class NeverBreakTest(HookCase):
         r = self.hook("Stop", self.base("Stop"), env={"CLAUDE_PLUGIN_DATA": str(blocker / "sub")})
         self.assertSilent(r)
 
-    def test_a_broken_memory_store_still_wakes_or_stays_silent(self):
+    def test_a_broken_memory_store_still_reads_or_stays_silent(self):
         notes = self.repo / ".tstack" / "memo" / "notes"
         notes.mkdir(parents=True)
         (notes / "01ARZ3NDEKTSV4RRFFQ69G5FAV.md").write_text("+++\nnot toml at all ===\n+++\ntext\n")
@@ -651,7 +579,7 @@ class NeverBreakTest(HookCase):
         self.assertEqual(r.returncode, 0)
         self.assertIn("# memo", json.loads(r.stdout)["hookSpecificOutput"]["additionalContext"])
 
-    def test_headless_sessions_still_wake(self):
+    def test_headless_sessions_still_get_the_start_read(self):
         r = self.hook("SessionStart", self.base("SessionStart", source="startup"),
                       env={"CLAUDE_CODE_SESSION_ATTENDED": "0", "CLAUDE_CODE_ENTRYPOINT": "sdk-cli"})
         self.assertIn("# memo", json.loads(r.stdout)["hookSpecificOutput"]["additionalContext"])
@@ -667,32 +595,22 @@ def load_hook():
     return module
 
 
-class QuietCase(HookCase):
-    def setUp(self):
-        super().setUp()
-        self.env["MEMO_QUIET"] = "1"
-
-    def payload(self, event, **extra):
-        return {**self.base(event), **extra}
-
-
-class TapeRoleTest(QuietCase):
+class TapeRoleTest(HookCase):
     """TSTACK_ROLE=tape, a tape builder's own `claude -p` call: every handler of every event stays silent and
-    writes nothing (no wake in the compaction prompt, no state)."""
+    writes nothing (no start read in the compaction prompt, no state)."""
 
     def files(self):
         return sorted(str(p.relative_to(self.tmp)) for p in self.tmp.rglob("*") if p.is_file())
 
     def every_event(self, env):
-        self.memo("note", "decision", "a wake would carry this")
-        self.env.pop("MEMO_QUIET")
+        self.memo("note", "a start read would carry this")
         self.transcribe(said("edit it"), tool_use("Edit", file_path=str(self.repo / "a.py")))
         before = self.files()
         results = {}
         for event in json.loads(HOOKS_JSON.read_text())["hooks"]:
-            payload = self.payload(event, source="startup", stop_hook_active=False, tool_name="Agent",
-                                   tool_input={"subagent_type": "general-purpose", "prompt": "p"},
-                                   tool_use_id="toolu_1", agent_id="ab12" if event.startswith("Subagent") else None)
+            payload = self.base(event, source="startup", stop_hook_active=False, tool_name="Agent",
+                                tool_input={"subagent_type": "general-purpose", "prompt": "p"},
+                                tool_use_id="toolu_1", agent_id="ab12" if event.startswith("Subagent") else None)
             results[event] = self.hook(event, payload, env=env)
         return before, results
 
@@ -704,94 +622,8 @@ class TapeRoleTest(QuietCase):
 
     def test_the_same_events_speak_without_the_role(self):
         before, results = self.every_event({})
-        self.assertIn("a wake would carry this", results["SessionStart"].stdout)
+        self.assertIn("a start read would carry this", results["SessionStart"].stdout)
         self.assertNotEqual(self.files(), before)
-
-
-class DreamReportTest(QuietCase):
-    """memo_dream_report: an attended session's SessionStart says what memo-dream's judge kept since the last report,
-    and which candidates it could not settle."""
-
-    def batch(self, key, date, verdicts=None, n=None, answer=None, judge=None, made=0):
-        """A batch as memo-dream itself saves it, so the hook reads memo-dream's own layout."""
-        from importlib.machinery import SourceFileLoader
-        from importlib.util import module_from_spec, spec_from_loader
-        loader = SourceFileLoader("dream_for_hook", str(ROOT / "scripts" / "memo-dream"))
-        dream = module_from_spec(spec_from_loader("dream_for_hook", loader))
-        loader.exec_module(dream)
-        candidates = [{"kind": "fact", "text": f"t{k}", "turn": 0} for k in range(n or len(verdicts or ()))]
-        for c, v in zip(candidates, verdicts or ()):
-            c["judged"] = {"verdict": v, "reason": "r", "by": "judge",
-                           **({} if v == "drop" else {"kind": "fact", "text": c["text"],
-                                                      "note": None if v == "unwritten" else "01KA" + "0" * 22})}
-            if v == "unwritten":
-                c["judged"].update(verdict="keep", error="memo: 9 pins and 9 open threads already")
-            if v == "supersede":
-                c["judged"]["target"] = "01KA" + "1" * 22
-        dream.Batches(self.env, key).save({"project": key, "date": date, "made": made, "turns": [0, 1],
-                                           "answer": answer, "candidates": candidates,
-                                           **({"judge": judge} if judge else {})})
-
-    def lines(self, payload):
-        result = self.hook("SessionStart", payload)
-        self.assertEqual(result.returncode, 0, result.stderr)
-        text = json.loads(result.stdout)["hookSpecificOutput"]["additionalContext"] if result.stdout else ""
-        return [l for l in text.splitlines() if l.startswith("memo-dream")]
-
-    def test_a_session_hears_what_the_judge_kept_once(self):
-        start = self.payload("SessionStart", source="startup")
-        self.assertEqual(self.lines(start), [])
-        bin_ = f"{ROOT}/scripts/memo-dream"
-        self.batch("coelhorocha/custom-mcp-servers", "2026-10-01", ["keep", "edit", "drop"], judge={"at": 5})
-        self.batch("coelhorocha/custom-mcp-servers", "2026-10-02", ["drop", "unwritten"], judge={"at": 6})
-        self.batch("acme/widget", "2026-10-01", ["keep", "supersede"], judge={"at": 7})
-        self.batch("acme/widget", "2026-10-02", n=4, answer={"at": 0, "verdicts": ["drop"] * 4})
-        self.assertEqual(self.lines(start), [
-            f"memo-dream kept 2 notes (0 dropped, 1 superseding an older note) for acme/widget: `{bin_} log`.",
-            f"memo-dream kept 2 notes (2 dropped, 1 not written) for coelhorocha/custom-mcp-servers: `{bin_} log`."])
-        self.assertEqual(self.lines(start), [], "a report is said once")
-
-    def test_a_batch_saved_after_a_report_is_reported_whatever_its_judge_time(self):
-        """A long run stamps `judge.at` when it starts; a session that reports mid-run must not skip its batches."""
-        start = self.payload("SessionStart", source="startup")
-        bin_ = f"{ROOT}/scripts/memo-dream"
-        self.batch("acme/widget", "2026-10-01", ["keep"], judge={"at": time.time() + 3600})
-        self.assertEqual(len(self.lines(start)), 1)
-        self.batch("acme/widget", "2026-10-02", ["keep", "drop"], judge={"at": 1})
-        self.assertEqual(self.lines(start), [f"memo-dream kept 1 note (1 dropped) for acme/widget: `{bin_} log`."])
-        self.assertEqual(self.lines(start), [])
-
-    def test_a_batch_whose_keepers_are_still_being_written_waits_for_them(self):
-        start = self.payload("SessionStart", source="startup")
-        bin_ = f"{ROOT}/scripts/memo-dream"
-        self.batch("acme/widget", "2026-10-01", ["keep", "drop"], judge={"at": 5}, made=time.time())
-        path = Path(self.env["HOME"], ".local", "state", "tstack", "memo-dream", "acme__widget", "2026-10-01.json")
-        batch = json.loads(path.read_text())
-        batch["candidates"][0]["judged"]["note"] = None
-        path.write_text(json.dumps(batch))
-        self.assertEqual(self.lines(start), [])
-        batch["candidates"][0]["judged"]["note"] = "01KA" + "0" * 22
-        path.write_text(json.dumps(batch))
-        self.assertEqual(self.lines(start), [f"memo-dream kept 1 note (1 dropped) for acme/widget: `{bin_} log`."])
-
-    def test_candidates_the_judge_could_not_settle_are_said_every_session(self):
-        start = self.payload("SessionStart", source="startup")
-        bin_ = f"{ROOT}/scripts/memo-dream"
-        self.batch("coelhorocha/custom-mcp-servers", "2026-10-22", n=2, judge={"at": 9, "failed": "usage limit"})
-        self.batch("coelhorocha/custom-mcp-servers", "2026-10-23", n=3)
-        self.batch("acme/widget", "2026-10-24", n=1, made=time.time())
-        want = [f"memo-dream: 5 candidate notes for coelhorocha/custom-mcp-servers wait for the judge (it could not "
-                f"settle them: usage limit): `{bin_} judge`."]
-        self.assertEqual(self.lines(start), want, "a batch drafted under a day ago may still be being judged")
-        self.assertEqual(self.lines(start), want)
-        self.assertNotIn("Luiz", "".join(want))
-
-    def test_a_worker_and_a_headless_session_hear_nothing(self):
-        self.batch("coelhorocha/custom-mcp-servers", "2026-10-01", ["keep"], judge={"at": 5})
-        self.assertEqual(self.lines(self.payload("SessionStart", source="startup", agent_id="a1")), [])
-        self.env["CLAUDE_CODE_SESSION_ATTENDED"] = "0"
-        self.assertEqual(self.lines(self.payload("SessionStart", source="startup")), [])
-
 
 
 class PushParseTest(unittest.TestCase):
@@ -1079,7 +911,7 @@ class HooksJsonTest(unittest.TestCase):
 class LatencyTest(HookCase):
     def test_hooks_stay_fast(self):
         for n in range(40):
-            self.memo("note", "fact", f"latency fact {n}")
+            self.memo("note", f"latency fact {n}")
         self.transcribe(*[tool_use("Read", file_path=f"f{n}") for n in range(500)])
         for event in ("SessionStart", "Stop"):
             payload = self.base(event, source="startup")
@@ -1099,7 +931,7 @@ class LauncherTest(HookCase):
         return root
 
     def wake(self, root):
-        self.memo("note", "gotcha", "the launcher ran it")
+        self.memo("note", "the launcher ran it")
         return subprocess.run([str(root / "hooks" / "tstack-hook"), "SessionStart"], capture_output=True, text=True,
                               input=json.dumps(self.base("SessionStart", source="startup")), env=self.env, timeout=30)
 

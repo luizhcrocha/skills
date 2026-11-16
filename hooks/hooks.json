@@ -15,14 +15,6 @@
         ]
       }
     ],
-    "PreCompact": [
-      {
-        "matcher": "manual|auto",
-        "hooks": [
-          { "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/tstack-hook\" PreCompact", "timeout": 10 }
-        ]
-      }
-    ],
     "PreToolUse": [
       {
         "matcher": "Bash|Monitor",

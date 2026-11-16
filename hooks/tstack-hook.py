@@ -37,38 +37,14 @@ class Hook:
         state = env.get("XDG_STATE_HOME") or str(Path(env.get("HOME", "/tmp")) / ".local" / "state")
         self.data_dir = Path(env.get("CLAUDE_PLUGIN_DATA") or Path(state) / "tstack")
         self.session_id = str(data.get("session_id") or "")
-        self._states = {}
         cwd = data.get("cwd")
         self.cwd = cwd if isinstance(cwd, str) and os.path.isabs(cwd) else (env.get("CLAUDE_PROJECT_DIR") or os.getcwd())
         # Inside a subagent the input carries agent_id: that is a worker.
         self.is_worker = bool(data.get("agent_id")) or env.get("TSTACK_ROLE") == "worker"
-        self.quiet = env.get("MEMO_QUIET", "") not in ("", "0")
         # `claude -p` and SDK runs: nobody reads a reminder, and the turn it adds
         # would replace the run's final result.
         self.headless = (env.get("CLAUDE_CODE_SESSION_ATTENDED") == "0"
                          or env.get("CLAUDE_CODE_ENTRYPOINT", "").startswith("sdk"))
-
-    def session_file(self, name):
-        safe = re.sub(r"[^A-Za-z0-9_.-]", "_", self.session_id) or "unknown"
-        return self.data_dir / "sessions" / f"{safe}.{name}.json"
-
-    def load_state(self, name):
-        """The session's state `name` (a dict, {} when missing or broken), read once per hook."""
-        if name not in self._states:
-            try:
-                state = json.loads(self.session_file(name).read_text())
-            except (OSError, ValueError):
-                state = {}
-            self._states[name] = state if isinstance(state, dict) else {}
-        return self._states[name]
-
-    def save_state(self, name, state):
-        self._states[name] = state
-        path = self.session_file(name)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = path.with_name(f".{path.name}.{os.getpid()}")
-        tmp.write_text(json.dumps(state))
-        os.replace(tmp, path)
 
 
 def log(hook_dir, text):
@@ -100,8 +76,8 @@ def memo():
 
 # --- handlers ---------------------------------------------------------------
 
-def memo_wake(hook):
-    """SessionStart: the memory this repo's earlier sessions left. Workers do not wake."""
+def memo_start(hook):
+    """SessionStart: the start read, from the local stores only: no git call, no network. Workers get none."""
     if hook.is_worker:
         return None
     return memo().start_text(hook.env, hook.cwd) or None
@@ -128,7 +104,7 @@ def tape_build(hook):
     makes it a no-op, and the project's flock keeps it to one build at a time. The build runs in a session of its
     own, out of the hook's process group, and in a user scope of its own where systemd has one, out of the
     session's; it runs at nice 10, capped at 2G in that scope; its output goes nowhere, so nothing holds the
-    hook's pipes. memo-dream is not started here: it dreams at night as a service (`memo-dream night`)."""
+    hook's pipes."""
     if hook.is_worker or hook.headless:
         return None
     if not memo().tape_index(hook.env).exists() or memo().repo_key(hook.cwd) is None:
@@ -143,139 +119,6 @@ def tape_build(hook):
     subprocess.Popen(argv, env=dict(hook.env), stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
                      stderr=subprocess.DEVNULL, start_new_session=True, preexec_fn=lambda: os.nice(10))
     return None
-
-
-DREAM_KEPT = ("memo-dream kept {kept} note{s} ({dropped} dropped{superseded}{unwritten}) for {project}: "
-              "`{bin} log`.")
-DREAM_STUCK = "memo-dream: {n} candidate note{s} for {project} wait for the judge{why}: `{bin} judge`."
-
-
-def memo_dream_report(hook):
-    """SessionStart: what memo-dream's judge kept since the last report, one line a project, and the candidates it
-    could not settle. It reads the batch files memo-dream writes
-    ($XDG_STATE_HOME/tstack/memo-dream/<owner>__<repo>/<date>.json, each line's `judged` verdict and the batch's
-    `judge`) and keeps the batches it has reported in `reported.json` beside them: no model, no import. A batch is
-    reported once, when every line has a verdict and every keeper its note id or memo's error; a batch drafted under
-    a day ago and not settled yet is left out, since the run that drafted it may still be judging it."""
-    import fcntl
-    if hook.is_worker or hook.headless:
-        return None
-    root = Path(hook.env.get("XDG_STATE_HOME") or Path(hook.env.get("HOME", "/tmp")) / ".local" / "state")
-    root = root / "tstack" / "memo-dream"
-    if not root.is_dir():
-        return None
-    # A set of batches, not a time cursor: a run stamps its batches with the time it started, which can be before
-    # a report another session made while it ran.
-    with open(root / "reported.lock", "a") as lock:
-        fcntl.flock(lock, fcntl.LOCK_EX)
-        try:
-            done = set(json.loads((root / "reported.json").read_text()))
-        except (OSError, ValueError, TypeError):
-            done = set()
-        now = time.time()
-        kept, stuck, seen, fresh = {}, {}, set(), set()
-        for path in sorted(root.glob("*/????-??-??.json")):
-            try:
-                batch = json.loads(path.read_text())
-            except (OSError, ValueError):
-                continue
-            cands = batch.get("candidates") if isinstance(batch, dict) else None
-            if not isinstance(cands, list) or not cands or batch.get("answer"):
-                continue
-            name = f"{path.parent.name}/{path.stem}"
-            project = str(batch.get("project") or path.parent.name)
-            judge = batch.get("judge") if isinstance(batch.get("judge"), dict) else {}
-            verdicts = [c.get("judged") for c in cands if isinstance(c, dict)]
-            if len(verdicts) == len(cands) and all(
-                    isinstance(v, dict) and (v.get("verdict") == "drop" or v.get("note") or v.get("error"))
-                    for v in verdicts):
-                seen.add(name)
-                if name not in done:
-                    fresh.add(name)
-                    k = kept.setdefault(project, [0, 0, 0, 0])
-                    for v in verdicts:
-                        k[0 if v.get("verdict") == "drop" else 1 if v.get("note") else 2] += 1
-                        k[3] += v.get("verdict") == "supersede" and bool(v.get("note"))
-            elif judge.get("failed") or now - (batch.get("made") or 0) > 86400:
-                st = stuck.setdefault(project, [0, None])
-                st[0] += len(cands)
-                st[1] = judge.get("failed") or st[1]
-        if fresh or done - seen:
-            try:
-                tmp = root / f".reported.json.{os.getpid()}"
-                tmp.write_text(json.dumps(sorted((done & seen) | fresh)))
-                os.replace(tmp, root / "reported.json")
-            except OSError:
-                pass
-    bin_ = ROOT / "scripts" / "memo-dream"
-    lines = [DREAM_KEPT.format(kept=k[1], s="" if k[1] == 1 else "s", dropped=k[0], project=p, bin=bin_,
-                               unwritten=f", {k[2]} not written" if k[2] else "",
-                               superseded=f", {k[3]} superseding an older note" if k[3] else "")
-             for p, k in sorted(kept.items())]
-    lines += [DREAM_STUCK.format(n=n, s="" if n == 1 else "s", project=p, bin=bin_,
-                                 why=f" (it could not settle them: {why})" if why else "")
-              for p, (n, why) in sorted(stuck.items())]
-    return "\n".join(lines) or None
-
-
-NUDGE = (
-    "memo: this session changed things and wrote no note. If it produced a decision and its why, "
-    "a gotcha, a stated preference or a thread left unfinished that the next session would pay to "
-    'rediscover, record it now: `memo note <decision|gotcha|preference|fact|open> "<one line>"` '
-    "(skill: memo). If nothing is durable, carry on; this reminder is not repeated."
-)
-_EDIT_TOOLS = {"Edit", "Write", "MultiEdit", "NotebookEdit"}
-_DESCRIBED = re.compile(r"\b(?:jj\s+(?:--?[\w-]+(?:[= ]\S+)?\s+)*(?:describe|desc|commit)|git\s+commit)\b")
-_NOTED = re.compile(r"\bmemo\b[^|;&\n]*?\b(note|supersede|open)\b")
-
-
-def scan_transcript(path, offset):
-    """What the transcript shows from offset on: (new offset, did real work, wrote a note)."""
-    work = noted = False
-    with open(path, "rb") as f:
-        f.seek(offset)
-        chunk = f.read()
-    end = chunk.rfind(b"\n") + 1  # a line still being written is left for the next run
-    for line in chunk[:end].splitlines():
-        if b'"tool_use"' not in line:
-            continue
-        try:
-            content = json.loads(line).get("message", {}).get("content")
-        except (ValueError, AttributeError):
-            continue
-        for block in content if isinstance(content, list) else ():
-            if not isinstance(block, dict) or block.get("type") != "tool_use":
-                continue
-            name, command = block.get("name"), str((block.get("input") or {}).get("command") or "")
-            if name in _EDIT_TOOLS:
-                work = True
-            elif name == "Bash":
-                work = work or bool(_DESCRIBED.search(command))
-                noted = noted or bool(_NOTED.search(command))
-    return offset + end, work, noted
-
-
-def memo_nudge(hook):
-    """Stop: once per session, when it did real work and wrote no note, say so.
-    The context a Stop hook adds gives the agent one more turn to act on it."""
-    if (hook.is_worker or hook.quiet or hook.headless or hook.input.get("stop_hook_active")
-            or not hook.session_id):
-        return None
-    state = hook.load_state("memo")
-    if state.get("reminded") or state.get("noted"):
-        return None
-    transcript = hook.input.get("transcript_path")
-    if not transcript or not os.path.isfile(transcript):
-        return None
-    offset = state.get("offset", 0)
-    if offset > os.path.getsize(transcript):
-        offset = 0
-    offset, work, noted = scan_transcript(transcript, offset)
-    state = {"offset": offset, "work": bool(state.get("work") or work), "noted": noted}
-    remind = state["work"] and not noted
-    state["reminded"] = remind
-    hook.save_state("memo", state)
-    return NUDGE if remind else None
 
 
 ASK = (
@@ -298,22 +141,6 @@ def ask_nudge(hook):
     text = _FENCE.sub("", str(hook.input.get("last_assistant_message") or "")).strip()
     last = _CODE_SPAN.sub("", text.splitlines()[-1]) if text else ""
     return ASK if not last.lstrip().startswith((">", "#")) and _ENDS_ASKING.search(last) else None
-
-
-PRECOMPACT = (
-    "If this conversation holds a durable decision and its reason, a gotcha, a stated user preference "
-    "or an unfinished thread that was not recorded with `memo note`, list each as one line under a "
-    "heading 'Memo candidates' in the summary, so it can be noted after the compaction."
-)
-
-
-def memo_precompact(hook):
-    """PreCompact: what a hook prints here is added to the compaction instructions
-    (it does not reach the agent), so ask the summary to carry what was not noted;
-    the wake that follows a compaction tells the agent to note it."""
-    if hook.is_worker or hook.quiet:
-        return None
-    return PRECOMPACT
 
 
 JJ_HINTS = """\
@@ -1582,9 +1409,8 @@ def _rm_shown(path, home):
 
 
 HANDLERS = {
-    "SessionStart": [memo_wake, jj_hints, tuca_mode, memo_dream_report, tape_build],
-    "Stop": [ask_nudge, memo_nudge],
-    "PreCompact": [memo_precompact],
+    "SessionStart": [memo_start, jj_hints, tuca_mode, tape_build],
+    "Stop": [ask_nudge],
     "PreToolUse": [push_attribution, rm_guard],
 }
 
@@ -1629,7 +1455,6 @@ EMIT = {
     "PreToolUse": None,  # dispatch decides: a Deny refuses, a Note is context, nothing else speaks; tstack never allows
     "SessionStart": _context,
     "Stop": _context,
-    "PreCompact": lambda event, text: text,
     "PostToolUse": _context,
     "UserPromptSubmit": _context,
 }
