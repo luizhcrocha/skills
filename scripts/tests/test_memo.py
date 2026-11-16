@@ -602,6 +602,59 @@ class Bookmark(unittest.TestCase):
     def blob(self, key, path):
         return sh(self.tmp, "git", "--git-dir", str(self.tmp / "remotes" / f"{key}.git"), "show", f"memo:{path}")
 
+    def seed_remote(self, key, files):
+        """Make refs/heads/memo on the remote hold exactly these {path: text} files."""
+        git = ["git", "--git-dir", str(self.tmp / "remotes" / f"{key}.git")]
+        env = {**os.environ, "GIT_INDEX_FILE": str(self.tmp / "seed-index")}
+
+        def run(*args, stdin=None):
+            return subprocess.run(git + list(args), input=stdin, capture_output=True, text=True, env=env,
+                                  check=True).stdout.strip()
+
+        for path, text in files.items():
+            run("update-index", "--add", "--cacheinfo", f"100644,{run('hash-object', '-w', '--stdin', stdin=text)},{path}")
+        commit = run("-c", "user.name=x", "-c", "user.email=x@x", "commit-tree", run("write-tree"), "-m", "seed")
+        run("update-ref", "refs/heads/memo", commit)
+
+    def test_a_remote_file_where_a_record_needs_a_folder_stops_that_store_and_drops_no_path(self):
+        self.memo("box", "note", "a note whose folder is a file on the bookmark")
+        (rel,) = [p for p in self.files("box") if p.startswith("repo/acme/widget/")]
+        folder = rel.removeprefix("repo/acme/widget/").rsplit("/", 1)[0]
+        self.seed_remote("acme/widget", {folder: "a file the bookmark already holds\n", "README": "x\n"})
+        before = self.bookmark("acme/widget")
+        out = self.memo("box", "sync")
+        self.assertEqual(self.bookmark("acme/widget"), before)
+        self.assertIn(folder, out)
+        self.assertIn(folder, self.memo("box", "doctor"))
+
+    def test_a_ref_lock_left_by_a_killed_fetch_is_cleared(self):
+        self.memo("box", "note", "first")
+        self.memo("box", "sync")
+        git_dir = Path(self.envs["box"]["XDG_STATE_HOME"]) / "tstack/memo/git/acme/widget.git"
+        (git_dir / "refs/memo/remote.lock").write_text("")
+        self.memo("mac", "note", "mac note")
+        self.memo("mac", "sync")
+        self.assertIn("fetched 1 file", self.memo("box", "sync"))
+
+    def test_the_pushed_bytes_are_the_files_bytes(self):
+        config = self.tmp / "gitconfig"
+        config.write_text("[core]\n\tautocrlf = input\n")
+        for name in ("box", "mac"):
+            self.envs[name]["GIT_CONFIG_GLOBAL"] = str(config)
+        self.memo("box", "note", "crlf")
+        (rel,) = [p for p in self.files("box") if p.startswith("repo/acme/widget/")]
+        f = self.home("box") / rel
+        f.write_bytes(f.read_bytes().replace(b"\n", b"\r\n"))
+        self.memo("box", "sync")
+        self.memo("mac", "sync")
+        self.assertEqual((self.home("mac") / rel).read_bytes(), f.read_bytes())
+
+    def test_a_callers_git_repository_variables_do_not_reach_the_sync(self):
+        self.memo("box", "note", "a note")
+        self.envs["box"].update(GIT_WORK_TREE=str(self.tmp), GIT_INDEX_FILE=str(self.tmp / "stray-index"),
+                                GIT_DIR=str(self.tmp / "nowhere"))
+        self.assertIn("pushed 1 file", self.memo("box", "sync"))
+
     def test_two_machines_that_sync_twice_hold_the_union(self):
         self.memo("box", "note", "the box writes the first repo note")
         self.memo("box", "note", "--scope", "user", "Luiz reads a page first")
@@ -630,9 +683,9 @@ class Bookmark(unittest.TestCase):
                 self.memo("mac", "sync")
             return real(env, remote, commit, timeout_s)
 
-        with mock.patch.object(memo, "_push", race):
-            out = self.memo("box", "sync")
-        self.assertIn("pushed 1 file to memo", out)
+        remote = memo.Memo(self.envs["box"], str(self.repos["box"] / "acme/widget")).session.remote
+        res = memo.sync_bookmark(remote, self.envs["box"], "box", push=race)
+        self.assertEqual((res.outcome, res.pushed), ("synced", 1))
         git = ["git", "--git-dir", str(self.tmp / "remotes" / "acme/widget.git")]
         head = sh(self.tmp, *git, "rev-parse", "memo")
         self.assertNotEqual(head, raced[0], "the commit built on the old fetch never landed")
@@ -665,8 +718,8 @@ class Bookmark(unittest.TestCase):
         self.memo("far", "note", "this note waits for the next sync")
         before = self.files("far")
         started = time.monotonic()
-        with mock.patch.object(memo, "SYNC_TIMEOUT", 1):
-            out = self.memo("far", "sync")
+        remote = memo.Memo(self.envs["far"], str(self.repos["far"] / "acme/widget")).session.remote
+        out = memo.sync_line(memo.sync_bookmark(remote, self.envs["far"], "far", timeout_s=1), remote.url)
         self.assertLess(time.monotonic() - started, 10)
         self.assertIn("no answer in 1 seconds. 1 file waits here for the next sync.", out)
         self.assertEqual(self.files("far"), before)

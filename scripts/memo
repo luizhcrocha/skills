@@ -19,7 +19,7 @@ import sqlite3
 import sys
 import time
 from pathlib import Path
-from typing import NamedTuple
+from typing import Literal, NamedTuple
 
 # The SessionStart hook loads this file on every session. argparse, calendar, fcntl, signal and subprocess load in
 # the functions that use them, which the start read never calls. tomllib loads only when a file is parsed:
@@ -1698,9 +1698,12 @@ FETCHED = "refs/memo/remote"
 _RECORD_PATH = re.compile(r"^(?:notes|summaries|retired)/(?:[0-9A-HJKMNP-TV-Z]{4}/)?[0-9A-HJKMNP-TV-Z]{26}\.md$")
 
 
+Outcome = Literal["synced", "no-remote", "no-answer", "refused-3-times", "busy", "path-clash"]
+
+
 class SyncResult(NamedTuple):
     remote: str
-    outcome: str  # "synced", "no-remote", "no-answer", "refused-3-times" or "busy"
+    outcome: Outcome
     fetched: int = 0
     pushed: int = 0
     waiting: int = 0
@@ -1714,6 +1717,24 @@ class Waiting(NamedTuple):
 
 class NoAnswer(Exception):
     """The remote did not answer in time, refused the connection, or git is missing. The stores stay as they were."""
+
+
+class PathClash(Exception):
+    """The bookmark holds a file where a local record needs a folder, or the reverse. Adding the record would drop
+    the bookmark's path, so nothing is pushed for the store."""
+
+    def __init__(self, paths):
+        super().__init__(", ".join(paths))
+        self.paths = paths
+
+
+# The variables that point git at a repository (`git rev-parse --local-env-vars`). A sync runs from hooks and
+# from other git commands, which set them; memo's git works on its own directory only.
+_GIT_LOCAL_VARS = frozenset((
+    "GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_CONFIG", "GIT_CONFIG_PARAMETERS", "GIT_CONFIG_COUNT",
+    "GIT_OBJECT_DIRECTORY", "GIT_DIR", "GIT_WORK_TREE", "GIT_IMPLICIT_WORK_TREE", "GIT_GRAFT_FILE",
+    "GIT_INDEX_FILE", "GIT_NO_REPLACE_OBJECTS", "GIT_REPLACE_REF_BASE", "GIT_PREFIX", "GIT_SHALLOW_FILE",
+    "GIT_COMMON_DIR"))
 
 
 def home_remote(env, local):
@@ -1773,21 +1794,34 @@ def _git(env, remote, *args, stdin=None, timeout=None, index=None):
     import subprocess
     argv = ["git", "-c", "core.hooksPath=/dev/null", "-c", "commit.gpgsign=false", "-c", "push.gpgSign=false",
             "-c", "user.name=memo", "-c", "user.email=memo@localhost", "--git-dir", str(remote.git_dir), *args]
-    run_env = {**env, "GIT_TERMINAL_PROMPT": "0", **({"GIT_INDEX_FILE": str(index)} if index else {})}
+    run_env = {k: v for k, v in env.items() if k not in _GIT_LOCAL_VARS and not k.startswith("GIT_CONFIG_KEY_")
+               and not k.startswith("GIT_CONFIG_VALUE_")}
+    run_env.update(GIT_TERMINAL_PROMPT="0", **({"GIT_INDEX_FILE": str(index)} if index else {}))
     try:
         p = subprocess.Popen(argv, env=run_env, stdin=subprocess.PIPE if stdin is not None else subprocess.DEVNULL,
                              stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=True)
     except OSError as e:
-        raise NoAnswer(f"git does not run: {e}") from None
-    try:
-        out, err = p.communicate(stdin, timeout=timeout)
-    except subprocess.TimeoutExpired:
+        raise NoAnswer(f"git does not run: {e}") from e
+    def stop(sig):
         try:
-            os.killpg(p.pid, signal.SIGKILL)
+            os.killpg(p.pid, sig)
         except ProcessLookupError:
             pass
+
+    try:
+        out, err = p.communicate(stdin, timeout=timeout)
+    except subprocess.TimeoutExpired as e:
+        stop(signal.SIGKILL)
         p.communicate()
-        raise NoAnswer(f"no answer in {timeout} seconds") from None
+        raise NoAnswer(f"no answer in {timeout} seconds") from e
+    except KeyboardInterrupt:
+        stop(signal.SIGINT)
+        try:
+            p.wait(2)
+        except subprocess.TimeoutExpired:
+            stop(signal.SIGKILL)
+            p.wait()
+        raise
     return p.returncode, out, err.decode("utf-8", "replace")
 
 
@@ -1821,6 +1855,8 @@ def _tree_paths(env, remote, commit):
 
 
 def _fetch(env, remote, timeout_s):
+    for stale in (remote.git_dir / "refs" / "memo").glob("*.lock"):
+        stale.unlink(missing_ok=True)
     code, _, err = _git(env, remote, "fetch", "--no-tags", "--no-write-fetch-head", "-q", remote.url,
                         f"+refs/heads/memo:{FETCHED}", timeout=timeout_s)
     if code == 0:
@@ -1848,23 +1884,36 @@ def _import(env, remote, commit, tree):
     return len(wanted)
 
 
+def clashes(paths, tree):
+    """The paths that cannot join tree without dropping one of its paths: under a file of tree, or a folder of it."""
+    folders = {p[:i] for p in tree for i, ch in enumerate(p) if ch == "/"}
+    return sorted(p for p in paths if p in folders or any(p[:i] in tree for i, ch in enumerate(p) if ch == "/"))
+
+
 def _commit(env, remote, parent, tree, machine):
     """One commit on top of parent whose tree is the bookmark's and the local files it lacks, or None when it
-    lacks none. The tree starts from the bookmark's, so no path of the bookmark can leave or change."""
+    lacks none. The tree starts from the bookmark's, and a PathClash stops a file that would drop one of its
+    paths, so no path of the bookmark can leave or change."""
     new = {p: f for p, f in local_files(env, remote).items() if p not in tree}
     if not new:
         return None, 0
+    clash = clashes(new, tree)
+    if clash:
+        raise PathClash(clash)
     index = remote.git_dir / f"index.{os.getpid()}"
     try:
         _ok(env, remote, *(("read-tree", parent) if parent else ("read-tree", "--empty")), index=index)
         paths = sorted(new)
-        shas = _ok(env, remote, "hash-object", "-w", "--stdin-paths",
+        shas = _ok(env, remote, "hash-object", "-w", "--no-filters", "--stdin-paths",
                    stdin="".join(f"{new[p]}\n" for p in paths).encode()).decode().split()
         _ok(env, remote, "update-index", "--add", "--index-info", index=index,
             stdin="".join(f"100644 {sha}\t{p}\n" for sha, p in zip(shas, paths)).encode())
         tree_id = _ok(env, remote, "write-tree", index=index).decode().strip()
     finally:
         index.unlink(missing_ok=True)
+    gone = tree - _tree_paths(env, remote, tree_id)
+    if gone:
+        raise PathClash(sorted(gone))
     message = f"memo: {len(new)} record files from {machine or 'a machine with no name'}"
     commit = _ok(env, remote, "commit-tree", "--no-gpg-sign", tree_id, *(("-p", parent) if parent else ()),
                  "-m", message).decode().strip()
@@ -1877,7 +1926,7 @@ def _push(env, remote, commit, timeout_s):
                         timeout=timeout_s)
     if code == 0:
         return True
-    if any(w in err for w in ("[rejected]", "non-fast-forward", "fetch first", "stale info")):
+    if any(w in err for w in ("[rejected]", "non-fast-forward", "fetch first", "stale info", "cannot lock ref")):
         return False
     raise NoAnswer(_git_error(err))
 
@@ -1895,13 +1944,15 @@ def _lock(f, timeout_s):
             time.sleep(0.1)
 
 
-def sync_bookmark(remote, env, machine=None, timeout_s=None):
+def sync_bookmark(remote: Remote | None, env: dict, machine: str | None = None, timeout_s: float | None = None,
+                  push=None) -> SyncResult:
     """Fetch the bookmark, import by union into each of its stores, commit what the bookmark lacks, push without
     force, and repeat after a refused push, SYNC_TRIES times at most. Holds a lock file for the remote. Every
-    outcome but "synced" leaves the local stores whole; none raises for the network."""
+    outcome but "synced" leaves the bookmark as it was; none raises for the network. push replaces _push."""
     if remote is None or not remote.url:
         return SyncResult(remote.key if remote else "", "no-remote")
     timeout_s = SYNC_TIMEOUT if timeout_s is None else timeout_s
+    push = push or _push
     remote.git_dir.parent.mkdir(parents=True, exist_ok=True)
     fetched = 0
     with open(remote.git_dir.with_suffix(".lock"), "a") as lock:
@@ -1917,12 +1968,14 @@ def sync_bookmark(remote, env, machine=None, timeout_s=None):
                 commit, n = _commit(env, remote, parent, tree, machine)
                 if commit is None:
                     return SyncResult(remote.key, "synced", fetched)
-                if _push(env, remote, commit, timeout_s):
+                if push(env, remote, commit, timeout_s):
                     _ok(env, remote, "update-ref", FETCHED, commit)
                     return SyncResult(remote.key, "synced", fetched, n)
             return SyncResult(remote.key, "refused-3-times", fetched, waiting=waiting(remote, env).count)
         except NoAnswer as e:
             return SyncResult(remote.key, "no-answer", fetched, waiting=waiting(remote, env).count, why=str(e))
+        except PathClash as e:
+            return SyncResult(remote.key, "path-clash", fetched, waiting=waiting(remote, env).count, why=str(e))
 
 
 def waiting(remote, env):
@@ -1978,6 +2031,10 @@ def sync_line(res, url):
         return where + f"fetched {_n(res.fetched, 'file')}, pushed {_n(res.pushed, 'file')} to memo"
     if res.outcome == "no-answer":
         return where + f"{url}: {res.why}. {wait}"
+    if res.outcome == "path-clash":
+        return where + (f"{url} holds a file where a record needs a folder, or a folder where it needs a file: "
+                        f"{res.why}. Nothing is pushed for this store until that path is moved on the bookmark. "
+                        f"{wait}")
     if res.outcome == "refused-3-times":
         return where + f"{url} refused {SYNC_TRIES} pushes: other machines pushed first. {wait}"
     return where + f"another sync of this bookmark ran past {SYNC_TIMEOUT} seconds; it is left to the next. {wait}"
@@ -1989,6 +2046,14 @@ def sync_lines(m):
     lines = []
     for r in remotes:
         w = waiting(r, m.env)
+        try:
+            tree = _tree_paths(m.env, r, _fetched(m.env, r))
+        except NoAnswer:
+            tree = set()
+        clash = clashes([p for p in local_files(m.env, r) if p not in tree], tree)
+        if clash:
+            lines.append(f"{r.key:<28} the bookmark holds a file where a record needs a folder, or the reverse; "
+                         f"no sync pushes until it moves: {', '.join(clash)}")
         if w.count:
             lines.append(f"{r.key:<28} {_n(w.count, 'file')} {'waits' if w.count == 1 else 'wait'} for a sync, "
                          f"the oldest from {w.oldest_at}")
