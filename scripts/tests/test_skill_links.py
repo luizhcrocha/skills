@@ -25,6 +25,8 @@ class SkillLinks(unittest.TestCase):
         broken = []
         for skill in skills:
             for md in sorted((ROOT / skill).rglob("*.md")):
+                if "node_modules" in md.parts:
+                    continue
                 for target in relative_links(md):
                     if target and not (md.parent / target).exists():
                         broken.append(f"{md.relative_to(ROOT)} -> {target}")
