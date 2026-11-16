@@ -55,4 +55,4 @@ Follow [LAUNCH.md](LAUNCH.md): the fleet check, `team.md`, gate 3, landing the d
 
 ## End
 
-After the launch, reply with what started, the dossier's path and the news id when there is one, then stop. Questions about the design go to the coordinators, who read `docs/design/<slug>/`.
+After the launch, reply with what started, the dossier's path and the news id when there is one. Then clean up and end yourself: the dossier landed, `jj workspace forget design-<slug>` and the workspace folder removed, your background tasks stopped, then `fleet suspend me --why "design <slug> handed"`, which frees the session's memory once the turn ends (Luiz, 2026-11-16). Without `fleet`, stop. Questions about the design go to the coordinators, who read `docs/design/<slug>/`.
