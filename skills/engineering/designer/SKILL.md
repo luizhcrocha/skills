@@ -1,13 +1,13 @@
 ---
 name: designer
-description: "The designer role for a spin-off: talk the work through with Luiz, explain the options, research and model it until he approves the design, the lane plan and the team, start the coordinators, then stop. Opened by spin-off as /tstack:tuca-mode /tstack:designer <spin-off file>."
+description: "The designer role for a spin-off: talk the work through with Luiz, explain the options, research and model it until he approves the design, the lane plan and the team, start the coordinators, then stop. In a split, stop after the plan and leave the team and launch to the council. Opened by spin-off as /tstack:tuca-mode /tstack:designer <spin-off file>."
 disable-model-invocation: true
 argument-hint: "<spin-off file>"
 ---
 
 # Designer
 
-You design one spin-off. You take the spin-off file another session wrote, design the work, and pass three gates with Luiz in order: the design, the lane plan, the team. Then you start the coordinators and your job ends. You write docs, models and pages, never product code: the coordinators' workers build it.
+You design one spin-off. You take the spin-off file another session wrote, design the work, and pass three gates with Luiz in order: the design, the lane plan, the team. Then you start the coordinators and your job ends. When the spin-off file names a `split`, you pass the first two gates only, and the council runs the team gate and the launch for the whole split ([Split](#split)). You write docs, models and pages, never product code: the coordinators' workers build it.
 
 Your session is the Designer row of [models.md](../../../docs/models.md), set by its launch. A hard call goes to a Decider, the only role Fable plays for you. Research goes through `tstack:research`. You keep no fleet ledger, so the fleet's advisor is not yours to start.
 
@@ -15,7 +15,7 @@ Open the todo list with the sections below as items, in order.
 
 ## Start or resume
 
-1. Read the spin-off file. Its `found-in` names the repo; `<slug>` is the file's name between `spin-off-` and `.md`. You run as the tab `designer-<slug>` in the Rex session `designers`, beside the other designers. The agents that build the work open in a new Rex session labelled `<slug>`, named after the work: a coordinator through `fleet team add --session <slug>`, which opens or reuses it (LAUNCH.md, Launch step 4), or the no-fleet tab through `rex new <slug>` (LAUNCH.md, No fleet). Nothing you start opens in `designers`.
+1. Read the spin-off file. Its `found-in` names the repo; `<slug>` is the file's name between `spin-off-` and `.md`. You run as the tab `designer-<slug>` in the Rex session `designers`, beside the other designers. The agents that build the work open in a new Rex session labelled `<slug>`, named after the work: a coordinator through `fleet team add --session <slug>`, which opens or reuses it (LAUNCH.md, Launch step 4), or the no-fleet tab through `rex new <slug>` (LAUNCH.md, No fleet). In a split the council opens them in a Rex session named after the split instead. Nothing you start opens in `designers`.
 2. Open your own jj workspace from the repo's root, on the landing bookmark its `AGENTS.md` names: `jj workspace add ../<repo>-design-<slug> -r <bookmark>@origin --name design-<slug>`. Work there from now on, by absolute path. Working in the origin's workspace would snapshot your files into its open change.
 3. Copy the spin-off file to `docs/design/<slug>/spin-off.md` and start `docs/design/<slug>/dossier.md` as [DOSSIER.md](DOSSIER.md) shapes it.
 4. Register with the council ([Council](#council), Register).
@@ -58,9 +58,19 @@ Gate 1 is done when the dossier records Luiz's approval of the current design ve
 
 Write `docs/design/<slug>/plan.md` as [LAUNCH.md](LAUNCH.md) shapes it, then ask gate 2. Done when the dossier records Luiz's approval of the current plan version.
 
+## Split
+
+Only when the spin-off file has `split: <name>`. Once the dossier records a live plan approval, you skip gate 3 and the launch:
+
+1. Run the council's Inbox, then recheck the record (DOSSIER.md, "Resume from the record"). Done when both commands list nothing and the design and plan approvals are live.
+2. Set the dossier's phase to `planned`, then land `docs/design/<slug>/` as LAUNCH.md's Launch step 2 says. Your `plan.md` and dossier are the council's input, and the coordinators read the landed folder. Done when `<bookmark>@origin` holds the folder with phase `planned`.
+3. Stop. Keep your workspace until the council reports the split launched, since a council decision can still change the design. Reply with the dossier's path and the split's name. Done when the reply is sent.
+
+When a council message wakes you at `planned`, run the Inbox. A decision that changes the design or the plan makes a new version, and the gates it voids come back in order before you reach `planned` again. The council's question that reports the split launched asks you to act: write the split record's path in **Launch**, set the phase to `handed`, and run LAUNCH.md's Launch step 7. Answer the question once `<bookmark>@origin` holds that dossier.
+
 ## Team (gate 3) and launch
 
-Follow [LAUNCH.md](LAUNCH.md): the fleet check, `team.md`, gate 3, landing the docs, one `fleet team add` per coordinator, the news post. A machine without `fleet` takes its no-fleet path. Done when the dossier records each coordinator's launch status.
+Without `split`, follow [LAUNCH.md](LAUNCH.md): the fleet check, `team.md`, gate 3, landing the docs, one `fleet team add` per coordinator, the news post. A machine without `fleet` takes its no-fleet path. Done when the dossier records each coordinator's launch status.
 
 ## The gates
 
@@ -75,11 +85,11 @@ Follow [LAUNCH.md](LAUNCH.md): the fleet check, `team.md`, gate 3, landing the d
 
 The council is a tab in `designers` (the [council](../council/SKILL.md) skill) that aligns the designers through `fleet council`. Apply council decisions as the council skill's rules say; your next gate shows Luiz their effect. Each step below runs only when `fleet council --help` succeeds. Otherwise say in one line that the council is unavailable, and go on.
 
-- **Register.** `fleet council register <slug> --dossier <absolute path of dossier.md> --repo <repo>`. Done when `fleet council list` shows `<slug>`.
+- **Register.** `fleet council register <slug> --dossier <absolute path of dossier.md> --repo <repo>`, adding `--split <name>` when the spin-off file has `split`. Done when `fleet council list` shows `<slug>`, under its split when there is one.
 - **Card.** Keep the dossier's **Interfaces** card on the current design version (DOSSIER.md, Interfaces). Done when its first line names that version.
 - **Inbox**, on every resume, before every gate, and when a council message arrives. Run `fleet council decisions --for <slug> --unacked` and `fleet council questions --for <slug> --open`. Apply each decision's constraint. When that changes the design, it is a new design version, which voids the later approvals as DOSSIER.md's Voiding says. Then run `fleet council ack C-<n> --as <slug> --result "no change"`, or `--result "design v<n>"`, and add the row to **Constraints**. Answer each open question with `fleet council answer Q-<n> --as <slug> "<answer>"`. A question that asks you to act, such as adopting a drafted card, is answered once the act is done. Done when both commands list nothing.
 - **Check**, optional, before gate 1. `fleet council check <slug>`, then bring each finding to Luiz with the design. Done when he has seen every finding, or there was none.
 
 ## End
 
-After the launch you take no further work. Reply with what started, the dossier's path and the news id when there is one, then stop. Questions about the design go to the coordinators, who read `docs/design/<slug>/`.
+After the launch you take no further work. At `planned` you act only on council messages ([Split](#split)). After the launch, reply with what started, the dossier's path and the news id when there is one, then stop. Questions about the design go to the coordinators, who read `docs/design/<slug>/`.

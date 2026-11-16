@@ -18,8 +18,11 @@ Work this session will do, however large, is `tstack:figure-it-out`'s. Work that
    - `evidence`: file:line pointers, logs, what was tried.
    - `constraints`: the known musts and must-nots.
    - `out-of-scope`: what you keep doing yourself.
+   - `split`, only when the work is one part of a larger effort split across designers: the split's name, lower-case letters, digits and `-`.
 
    Point at files; paste nothing a path can carry. The file is read-only once the designer opens. Done when every section has content or says `none`.
+
+   Decide a split with Luiz before any file: the parts and the split's name. Each part gets its own spin-off file, with its own `<slug>` and the same `split`, and steps 2 and 3 run once per part. Each designer stops after its plan, and the [council](../council/SKILL.md) launches the split once every designer of it has stopped.
 3. **Open the designer's tab.** Inside Rex (`$REX_SESSION` is set), open a tab labelled `designer-<slug>` in the Rex session `designers`. When `rex ls` lists `designers`:
 
    ```sh
@@ -32,5 +35,5 @@ Work this session will do, however large, is `tstack:figure-it-out`'s. Work that
    rex new designers -c <repo> --window designer-<slug> -- claude --name designer-<slug> --model opus --effort high "/tstack:tuca-mode /tstack:designer <spin-off file>"
    ```
 
-   The pair is the Designer row of [models.md](../../../docs/models.md). Outside Rex, give Luiz the launch in nushell instead: `cd <repo>; claude --name designer-<slug> --model opus --effort high "/tstack:tuca-mode /tstack:designer <spin-off file>"`. Done when `rex window ls -s designers` lists `designer-<slug>` or Luiz has the command.
-4. **Return to your task.** You never wait on the designer. It posts to `fleet news` when the coordinators start. Your reply names the spin-off file and the tab `designer-<slug>` in the session `designers`.
+   The pair is the Designer row of [models.md](../../../docs/models.md). Outside Rex, give Luiz the launch in nushell instead: `cd <repo>; claude --name designer-<slug> --model opus --effort high "/tstack:tuca-mode /tstack:designer <spin-off file>"`. Done when `rex window ls -s designers` lists `designer-<slug>` or Luiz has the command, for every part of a split.
+4. **Return to your task.** You never wait on the designer. It posts to `fleet news` when the coordinators start. Your reply names each spin-off file, each tab `designer-<slug>` in the session `designers`, and the split's name when there is one.

@@ -2,6 +2,8 @@
 
 Read from the designer's [SKILL.md](SKILL.md) when you write the plan, check the fleet, write the team, or launch. Record every gate and launch step in the dossier ([DOSSIER.md](DOSSIER.md)).
 
+In a split, the designer writes only `plan.md` from this file. The [council](../council/SKILL.md) runs the fleet check, the team gate and Launch for every design of the split at once (its step "Launch a split"), with the split's own `team.md` and launch record in place of each designer's.
+
 ## plan.md (gate 2)
 
 `docs/design/<slug>/plan.md` lists the lanes in dependency order: a lane comes after the lanes it depends on. Landing order is the manager's, so the plan gives none. Per lane:
@@ -47,7 +49,7 @@ Ask gate 3 only after the fleet check passed on the current plan and the current
    - **A startup prompt.** Luiz answers it in the Rex app (`fleet team attach <name>`), then run `fleet team start <name>`.
 5. Post the news, which wakes nobody: `fleet news post --from designer-<slug> --to all --kind fyi "spin-off <slug> launched: <coordinators>; design in docs/design/<slug>/"`.
 6. Set the phase to `handed` when every row says `started`. Otherwise tell Luiz which coordinators failed and why.
-7. Land the dossier with its **Launch** rows and phase as a follow-up docs change, as in step 2: the copy landed in step 2 predates the launch. When `fleet council --help` succeeds, re-register the landed dossier: `fleet council register <slug> --dossier <repo>/docs/design/<slug>/dossier.md --repo <repo>`, with `<repo>` the repo's root. Then forget the design workspace: `jj workspace forget design-<slug>`.
+7. Land the dossier with its **Launch** rows and phase as a follow-up docs change, as in step 2: the copy landed in step 2 predates the launch. When `fleet council --help` succeeds, re-register the landed dossier: `fleet council register <slug> --dossier <repo>/docs/design/<slug>/dossier.md --repo <repo>`, with `<repo>` the repo's root, adding `--split <name>` in a split. Then forget the design workspace: `jj workspace forget design-<slug>`.
 
 ## No fleet
 
