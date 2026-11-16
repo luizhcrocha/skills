@@ -1,0 +1,3 @@
+change@commit	at	reviewer	verdict	note	patch
+ltoullzxtxzw@0ad0f42a889f	2026-11-16T10:13:16-05:00	opus	FIX	two axes: 3 important (pandoc --embed-resources leaked unpeeked files, silent loopback URL, peek serve crash on fresh state), 14 nits; fixed in 6469cf47	78be36c03c32a098
+ltoullzxtxzw@6469cf47b9be	2026-11-16T10:13:16-05:00	opus	LAND	interdiff re-check: 3 fixes hold (sandbox against raw HTML, YAML css/includes, remote URLs), 0 important, 2 test nits	6ea7fd019cc5dff9

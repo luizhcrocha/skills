@@ -1,0 +1,216 @@
+#!/usr/bin/env python3
+"""peek: show a file on this machine to Luiz on another device of the tailnet.
+
+  peek <file>...   link each file and print its URL (hover it in Rex, press Cmd+Y)
+  peek ls          the linked files and their URLs
+  peek stop        stop the server and remove its tailnet route
+  peek serve       run the server in the foreground (peek starts it on demand)
+
+Each file gets <state>/files/<id>/<name>, a symlink to its absolute path, where
+<id> is a hash of that path: the same file keeps the same URL, and the link
+shows its current content. The server answers only for those links, on
+127.0.0.1, and `tailscale serve` publishes it to the tailnet, never to the
+internet. Markdown is rendered to HTML through pandoc, since Quick Look shows
+nothing for a .md fetched over HTTP. pandoc runs in its sandbox, so a page
+carries no local file the Markdown points to.
+"""
+
+import hashlib
+import html
+import http.server
+import json
+import mimetypes
+import os
+import shutil
+import signal
+import subprocess
+import sys
+import time
+import urllib.error
+import urllib.parse
+import urllib.request
+from pathlib import Path
+
+PORT = int(os.environ.get("TSTACK_PEEK_PORT", "8517"))
+HEALTH = "/_peek"
+
+
+def state_dir():
+    base = os.environ.get("XDG_STATE_HOME") or os.path.expanduser("~/.local/state")
+    return Path(base) / "tstack" / "peek"
+
+
+def files_dir():
+    return state_dir() / "files"
+
+
+def entry_id(path):
+    return hashlib.sha256(str(path).encode()).hexdigest()[:10]
+
+
+def link(path):
+    source = Path(path).expanduser().resolve()
+    if not source.is_file():
+        raise SystemExit(f"peek: not a file: {path}")
+    entry = files_dir() / entry_id(source)
+    entry.mkdir(parents=True, exist_ok=True)
+    target = entry / source.name
+    if target.is_symlink() or target.exists():
+        target.unlink()
+    target.symlink_to(source)
+    return f"{entry.name}/{urllib.parse.quote(source.name)}"
+
+
+def resolve(url_path):
+    parts = urllib.parse.unquote(url_path.split("?", 1)[0]).strip("/").split("/")
+    if len(parts) != 2 or any(p in ("", ".", "..") for p in parts):
+        return None
+    candidate = files_dir() / parts[0] / parts[1]
+    if not candidate.is_symlink():
+        return None
+    source = candidate.resolve()
+    return source if source.is_file() else None
+
+
+def render_markdown(source):
+    pandoc = shutil.which("pandoc")
+    if pandoc:
+        run = subprocess.run(
+            [pandoc, "--standalone", "--sandbox", "--metadata", f"title={source.name}",
+             "--from", "gfm", "--to", "html5", str(source)],
+            capture_output=True, timeout=30,
+        )
+        if run.returncode == 0:
+            return run.stdout
+    text = html.escape(source.read_text(errors="replace"))
+    return f"<!doctype html><meta charset=utf-8><title>{html.escape(source.name)}</title><pre>{text}</pre>".encode()
+
+
+class Handler(http.server.BaseHTTPRequestHandler):
+    def do_GET(self):
+        if self.path == HEALTH:
+            return self.reply(200, b"peek", "text/plain")
+        source = resolve(self.path)
+        if source is None:
+            return self.reply(404, b"not peeked", "text/plain")
+        if source.suffix.lower() in (".md", ".markdown"):
+            return self.reply(200, render_markdown(source), "text/html; charset=utf-8")
+        kind = mimetypes.guess_type(source.name)[0] or "application/octet-stream"
+        if kind.startswith("text/") and "charset" not in kind:
+            kind += "; charset=utf-8"
+        return self.reply(200, source.read_bytes(), kind)
+
+    def reply(self, code, body, kind):
+        self.send_response(code)
+        self.send_header("Content-Type", kind)
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control", "no-store")
+        self.end_headers()
+        self.wfile.write(body)
+
+    def log_message(self, *args):
+        pass
+
+
+def serve():
+    state_dir().mkdir(parents=True, exist_ok=True)
+    with http.server.ThreadingHTTPServer(("127.0.0.1", PORT), Handler) as server:
+        (state_dir() / "server.pid").write_text(str(os.getpid()))
+        server.serve_forever()
+
+
+def server_up():
+    try:
+        with urllib.request.urlopen(f"http://127.0.0.1:{PORT}{HEALTH}", timeout=1) as r:
+            return r.read() == b"peek"
+    except (urllib.error.URLError, OSError):
+        return False
+
+
+def ensure_server():
+    if server_up():
+        return
+    state_dir().mkdir(parents=True, exist_ok=True)
+    with open(state_dir() / "server.log", "ab") as log:
+        subprocess.Popen([sys.executable, os.path.abspath(__file__), "serve"],
+                         stdout=log, stderr=log, stdin=subprocess.DEVNULL, start_new_session=True)
+    for _ in range(50):
+        if server_up():
+            return
+        time.sleep(0.1)
+    raise SystemExit(f"peek: the server did not start; see {state_dir() / 'server.log'}")
+
+
+def tailnet_base():
+    if not shutil.which("tailscale"):
+        return None
+    status = subprocess.run(["tailscale", "status", "--json"], capture_output=True, text=True)
+    if status.returncode != 0:
+        return None
+    name = json.loads(status.stdout).get("Self", {}).get("DNSName", "").rstrip(".")
+    if not name:
+        return None
+    routes = subprocess.run(["tailscale", "serve", "status", "--json"], capture_output=True, text=True)
+    if f'"{name}:{PORT}"' not in routes.stdout:
+        added = subprocess.run(["tailscale", "serve", "--bg", f"--https={PORT}", str(PORT)],
+                               capture_output=True, text=True)
+        if added.returncode != 0:
+            raise SystemExit(f"peek: tailscale serve failed: {added.stderr.strip()}")
+    return f"https://{name}:{PORT}"
+
+
+def base_url():
+    base = tailnet_base()
+    if base:
+        return base
+    print("peek: no tailnet route (tailscale missing or not logged in); these URLs open only on this machine",
+          file=sys.stderr)
+    return f"http://127.0.0.1:{PORT}"
+
+
+def listing():
+    if not files_dir().is_dir():
+        return []
+    out = []
+    for entry in sorted(files_dir().iterdir()):
+        for target in entry.iterdir():
+            out.append((f"{entry.name}/{urllib.parse.quote(target.name)}", os.readlink(target)))
+    return out
+
+
+def stop():
+    pid_file = state_dir() / "server.pid"
+    if pid_file.exists():
+        try:
+            os.kill(int(pid_file.read_text()), signal.SIGTERM)
+        except (ProcessLookupError, ValueError):
+            pass
+        pid_file.unlink()
+    if shutil.which("tailscale"):
+        subprocess.run(["tailscale", "serve", f"--https={PORT}", "off"], capture_output=True)
+
+
+def main(argv):
+    if not argv or argv[0] in ("-h", "--help"):
+        print(__doc__.strip())
+        return 0 if argv else 2
+    command = argv[0]
+    if command == "serve":
+        serve()
+    elif command == "stop":
+        stop()
+    elif command == "ls":
+        base = base_url() if server_up() else f"(stopped) http://127.0.0.1:{PORT}"
+        for rel, source in listing():
+            print(f"{base}/{rel}\t{source}")
+    else:
+        rels = [link(p) for p in argv]
+        ensure_server()
+        base = base_url()
+        for rel in rels:
+            print(f"{base}/{rel}")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))
