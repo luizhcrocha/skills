@@ -4,7 +4,7 @@ Read from the designer's [SKILL.md](SKILL.md) when you start the dossier, record
 
 `docs/design/<slug>/dossier.md` is the designer's record and the only source of the phase. A compacted or resumed designer reads it and knows where it stands; launch reads its approvals and nothing else. Write each entry the moment its event happens.
 
-The gates follow a checked model: [references/lifecycle.tla](references/lifecycle.tla) with its config and view. TLC holds four rules over it: coordinators start only when the record shows the current design, plan and team each approved; a plan approval sits on the current approved design; a team approval sits on the current approved plan; Luiz sees each team version only after a fleet check passed on it, so a change to the design, the plan or the team sends it back through the check. Rerun it through the statechart skill when you change how the gates work.
+The gates follow a checked model: [references/lifecycle.tla](references/lifecycle.tla) with its config and view. TLC holds the invariants in [references/lifecycle.cfg](references/lifecycle.cfg). Rerun it through the statechart skill when you change how the gates work.
 
 ## Shape
 
@@ -61,7 +61,7 @@ One row per answer at a gate:
   ```sh
   find . -type f ! -path './.scratch/*' ! -name dossier.md ! -name plan.md ! -name team.md -print0 | sort -z | xargs -0 sha256sum | sha256sum
   ```
-- **date** and **Luiz's words**, as he typed them in this session. Only that counts as a yes.
+- **date** and **Luiz's words**, the answer as SKILL.md's The gates counts it.
 - **status**: `live`, or `void: <why>`.
 
 ## Voiding

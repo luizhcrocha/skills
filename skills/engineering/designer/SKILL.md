@@ -15,8 +15,8 @@ Open the todo list with the sections below as items, in order.
 
 ## Start or resume
 
-1. Read the spin-off file. Its `found-in` names the repo; `<slug>` is the file's name between `spin-off-` and `.md`. You run as the tab `designer-<slug>` in the Rex session `designers`, beside the other designers. The agents that build the work open in a new Rex session labelled `<slug>`, named after the work: a coordinator through `fleet team add --session <slug>`, which opens or reuses it (LAUNCH.md, Launch step 4), or the no-fleet tab through `rex new <slug>` (LAUNCH.md, No fleet). Nothing you start opens in `designers`.
-2. Open your own jj workspace from the repo's root, on the landing bookmark its `AGENTS.md` names: `jj workspace add ../<repo>-design-<slug> -r <bookmark>@origin --name design-<slug>`. Work there from now on, by absolute path. Working in the origin's workspace would snapshot your files into its open change.
+1. Read the spin-off file. Its `found-in` names the repo; `<slug>` is the file's name between `spin-off-` and `.md`. You run as the tab `designer-<slug>` in the Rex session `designers`, beside the other designers. The agents that build the work open in a new Rex session labelled `<slug>`, named after the work: a coordinator through `fleet team add --session <slug>` (LAUNCH.md, Launch step 4), or the no-fleet tab (LAUNCH.md, No fleet). Nothing you start opens in `designers`.
+2. Open your own jj workspace from the repo's root, on the landing bookmark (tuca-mode's Land playbook, step 1): `jj workspace add ../<repo>-design-<slug> -r <bookmark>@origin --name design-<slug>`. Work there from now on, by absolute path. Working in the origin's workspace would snapshot your files into its open change.
 3. Copy the spin-off file to `docs/design/<slug>/spin-off.md` and start `docs/design/<slug>/dossier.md` as [DOSSIER.md](DOSSIER.md) shapes it.
 4. Register with the council ([Council](#council), Register).
 
@@ -32,7 +32,7 @@ Luiz shapes the design; you do not hand him one to approve. Work in this order:
 2. **Research the gaps** that conversation leaves, the repo's current logs, metrics, traces and alerts among them: unfamiliar code through `tstack:how`, earlier decisions through `tstack:recall`, docs, APIs and facts through `tstack:research`. Never research what he already told you. Done when each gap has an answer, or Luiz has said it can stay open.
 3. **Explain before asking.** Show him, through `tstack:show-me` in the chat, how the domain works today, its moving parts, and two or three real options with their trade-offs in plain words. Each option says how it would be observed and what that costs. He reshapes the options before anything is decided. Record his reshapings in **Conversation**. Done when he has reacted to them.
 4. **Bring in a Decider** (its row in models.md) before you put a call to Luiz when the call takes work or data another team or design owns, reverses an accepted ADR, or has evidence pointing both ways. Give it the question and the evidence. Show its ruling beside the options and log it in the dossier. Its ruling informs Luiz. It never decides for him. Done when every such call has a ruling.
-5. **Ask decisions in small rounds** through `tstack:grilling`. Two of its rules do not apply to you: "Ask the whole frontier in one round" and "Word each question so 'yes' accepts your recommended answer". Ask at most three questions a round, and give each a real choice. Done when every decision the design needs has Luiz's answer.
+5. **Ask decisions in small rounds** through `tstack:grilling`. Two of its rules do not apply to you: its round size and its recommended-yes wording. Ask at most three questions a round, and give each a real choice. Done when every decision the design needs has Luiz's answer.
 6. **Build the design** on what he decided. Start with the data shapes. Each piece goes to the skill that owns it. Invoke that skill, never write its piece yourself. Done when the design page is published:
    - The design page: `tstack:show-me`, published as an Artifact. Its source is `docs/design/<slug>/design.html`. It has an Observability section that answers every question in [Observability](#observability).
    - Terms in `CONTEXT.md`, and ADRs in `docs/adr/` for decisions that bind the fleets: `tstack:domain-modeling`. The dossier links them.
@@ -52,7 +52,7 @@ Infra observability is designed with the work, never added as a last lane. For e
 
 Work that runs nothing writes `none` in the page's Observability section, with the reason. Done when every running piece has all five answers, and Luiz's decisions on them are in the dossier.
 
-Gate 1 is done when the dossier records Luiz's approval of the current design version. A change he asks for is a new version, and the steps above apply to it again from the one it touches.
+Gate 1 is done when the dossier records Luiz's approval of the current design version. A change he asks for voids as DOSSIER.md's Voiding says, and the steps above apply again from the one it touches.
 
 ## Plan (gate 2)
 

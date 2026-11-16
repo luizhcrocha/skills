@@ -18,12 +18,12 @@ Done when every lane has all five and no file appears under two lanes.
 
 `command -v fleet` finds nothing: take [No fleet](#no-fleet). Otherwise run `fleet ls`. When it fails, set the phase to `parked`, tell Luiz in one line that the fleet is down, and end the turn; on his next message run it again. When it answers, check:
 
-- **Names.** Each coordinator's name meets `fleet team add --help`, is lower-case letters, digits and `-`, starts with a letter, has at most 32 characters, and is absent from `fleet ls`.
+- **Names.** Each coordinator's name meets `fleet team add --help` and is absent from `fleet ls`.
 - **Missions.** Each meets the limits in `fleet team add --help`, is plain ASCII, and has no `|`, `*`, `\` or `$`. It points at `docs/design/<slug>/plan.md` and names its lanes instead of restating them.
 - **Files.** No lane's files overlap the lanes of a fleet already running in the same repo (`lanes:` in `fleet ls`, then that fleet's ledger).
 - **Project.** A new project's id in `team.md` is absent from `fleet project list`.
 
-Done when every check passes. A clash changes the team or the plan: a plan change voids its approval, so gate 2 comes back first. A team change, for a clash or at Luiz's word at gate 3, makes a new team version, and that version goes through this check again before gate 3.
+Done when every check passes. A clash changes the team or the plan, which voids as DOSSIER.md's Voiding says. A new team version, for a clash or at Luiz's word at gate 3, goes through this check again before gate 3.
 
 ## team.md (gate 3)
 
@@ -40,7 +40,7 @@ Ask gate 3 only after the fleet check passed on the current plan and the current
 1. Recheck the record (DOSSIER.md, "Resume from the record"). Launch only when all three approvals are live; otherwise go to the gate the record names. When `fleet council --help` succeeds, also refuse while `fleet council decisions --for <slug> --unacked` lists anything: run the Inbox ([Council](SKILL.md#council)) first, then recheck.
 2. Land `docs/design/<slug>/`, with any ADRs and `CONTEXT.md` edits, as docs through tuca-mode's Land playbook. The coordinators' workspaces see the design only once it has landed. Done when `<bookmark>@origin` holds the folder.
 3. Run `fleet ls` again. When it fails, the phase goes back to `parked`.
-4. Per coordinator, as one Bash call with `timeout: 300000`, in that coordinator's repo: `cd <repo>; fleet team add <name> --project <id> --mission "<mission>" --session <slug>`. `--session` opens the coordinator in the Rex session `<slug>`, named after the work, created by the first `add` and reused by the next. Coordinators never open in `designers` or in the repo's team session. Write the coordinator's row in the dossier's **Launch** table as the call returns, then go on to the next. When the call does not start it:
+4. Per coordinator, as one Bash call with `timeout: 300000`, over the join and start waits `fleet team add --help` gives, in that coordinator's repo: `cd <repo>; fleet team add <name> --project <id> --mission "<mission>" --session <slug>`. `--session` opens the Rex session `<slug>` as `fleet team add --help` says. Coordinators never open in `designers` or in the repo's team session. Write the coordinator's row in the dossier's **Launch** table as the call returns, then go on to the next. When the call does not start it:
    - **Untrusted repo.** The refusal names `--trust`. Ask Luiz with `AskUserQuestion`, showing the exact line you would run: `cd <repo>; fleet team add <name> --project <id> --mission "<mission>" --session <slug> --trust`. On the yes he types, run that line once, unchanged.
    - **Auto mode refuses** a call, this one or the `--trust` line. Report the refusal and the refused line to Luiz, record the row as `refused`, and do nothing else for that coordinator: no retry, no other route.
    - **Killed midway, or no tab.** Fix what the refusal names and run `add` again (`fleet team add --help` says what each case left behind).
@@ -51,10 +51,4 @@ Ask gate 3 only after the fleet check passed on the current plan and the current
 
 ## No fleet
 
-On a machine without `fleet` (decision D, 2026-11-14), the plan runs in one new tuca-mode tab under `tstack:orchestrate`, in a new Rex session `<slug>`, named after the work. `team.md` names that tab in place of coordinators: its label, its repo, and the Coordinator pair from models.md. Gate 3 approves that tab. Then run Launch steps 1 and 2 (recheck the record, land the docs) and open the tab. Inside Rex:
-
-```sh
-rex new <slug> -c <repo> --window <label> -- claude --name <label> --model opus --effort medium "/tstack:tuca-mode /tstack:orchestrate docs/design/<slug>/plan.md"
-```
-
-Outside Rex, give Luiz the same launch in nushell: `cd <repo>; claude --name <label> --model opus --effort medium "/tstack:tuca-mode /tstack:orchestrate docs/design/<slug>/plan.md"`. Record the tab as the one row of **Launch**, set the phase to `handed`, run Launch step 7, and stop.
+On a machine without `fleet` (decision D, 2026-11-14), the plan runs in one new tuca-mode tab under `tstack:orchestrate`, in a new Rex session `<slug>`, named after the work. `team.md` names that tab in place of coordinators: its label, its repo, and the Coordinator row of models.md. Gate 3 approves that tab. Then run Launch steps 1 and 2 (recheck the record, land the docs) and open the tab as [spin-off](../spin-off/SKILL.md) step 3 opens one: label `<label>`, Rex session `<slug>`, folder `<repo>`, the Coordinator row, opening `/tstack:tuca-mode /tstack:orchestrate docs/design/<slug>/plan.md`. Record the tab as the one row of **Launch**, set the phase to `handed`, run Launch step 7, and stop.

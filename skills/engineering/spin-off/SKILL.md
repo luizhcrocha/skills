@@ -20,17 +20,17 @@ Work this session will do, however large, is `tstack:figure-it-out`'s. Work that
    - `out-of-scope`: what you keep doing yourself.
 
    Point at files; paste nothing a path can carry. The file is read-only once the designer opens. Done when every section has content or says `none`.
-3. **Open the designer's tab.** Inside Rex (`$REX_SESSION` is set), open a tab labelled `designer-<slug>` in the Rex session `designers`. When `rex ls` lists `designers`:
+3. **Open the designer's tab**: label `designer-<slug>`, Rex session `designers`, folder `<repo>`, the Designer row of [models.md](../../../docs/models.md), opening `/tstack:tuca-mode /tstack:designer <spin-off file>`. `<model>` and `<effort>` below are that row's pair. Inside Rex (`$REX_SESSION` is set), when `rex ls` lists `<session>`:
 
    ```sh
-   rex window new -s designers designer-<slug> -c <repo> --focus=false -- claude --name designer-<slug> --model opus --effort high "/tstack:tuca-mode /tstack:designer <spin-off file>"
+   rex window new -s <session> <label> -c <folder> --focus=false -- claude --name <label> --model <model> --effort <effort> "<opening>"
    ```
 
    When it does not, create the session with the tab in it:
 
    ```sh
-   rex new designers -c <repo> --window designer-<slug> -- claude --name designer-<slug> --model opus --effort high "/tstack:tuca-mode /tstack:designer <spin-off file>"
+   rex new <session> -c <folder> --window <label> -- claude --name <label> --model <model> --effort <effort> "<opening>"
    ```
 
-   The pair is the Designer row of [models.md](../../../docs/models.md). Outside Rex, give Luiz the launch in nushell instead: `cd <repo>; claude --name designer-<slug> --model opus --effort high "/tstack:tuca-mode /tstack:designer <spin-off file>"`. Done when `rex window ls -s designers` lists `designer-<slug>` or Luiz has the command.
-4. **Return to your task.** You never wait on the designer. It posts to `fleet news` when the coordinators start. Your reply names the spin-off file and the tab `designer-<slug>` in the session `designers`.
+   Outside Rex, give Luiz the launch in nushell instead: `cd <folder>; claude --name <label> --model <model> --effort <effort> "<opening>"`. Done when `rex window ls -s <session>` lists `<label>` or Luiz has the command.
+4. **Return to your task.** You never wait on the designer. Your reply names the spin-off file and the tab `designer-<slug>` in the session `designers`.
