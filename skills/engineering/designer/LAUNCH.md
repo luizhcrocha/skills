@@ -18,8 +18,8 @@ Done when every lane has all five and no file appears under two lanes.
 
 `command -v fleet` finds nothing: take [No fleet](#no-fleet). Otherwise run `fleet ls`. When it fails, set the phase to `parked`, tell Luiz in one line that the fleet is down, and end the turn; on his next message run it again. When it answers, check:
 
-- **Names.** Each coordinator's name is lower-case letters, digits and `-`, starts with a letter, has at most 32 characters, and is absent from `fleet ls`: a name is one per machine.
-- **Missions.** Each is one line of plain ASCII text, at most 2,000 characters (`fleet team add --help`), with no `|`, `*`, `\` or `$`. It points at `docs/design/<slug>/plan.md` and names its lanes instead of restating them.
+- **Names.** Each coordinator's name meets `fleet team add --help`, is lower-case letters, digits and `-`, starts with a letter, has at most 32 characters, and is absent from `fleet ls`.
+- **Missions.** Each meets the limits in `fleet team add --help`, is plain ASCII, and has no `|`, `*`, `\` or `$`. It points at `docs/design/<slug>/plan.md` and names its lanes instead of restating them.
 - **Files.** No lane's files overlap the lanes of a fleet already running in the same repo (`lanes:` in `fleet ls`, then that fleet's ledger).
 - **Project.** A new project's id in `team.md` is absent from `fleet project list`.
 
@@ -37,18 +37,17 @@ Ask gate 3 only after the fleet check passed on the current plan and the current
 
 ## Launch
 
-1. Recheck the record (DOSSIER.md, "Resume from the record"). Launch only when all three approvals are live; otherwise go to the gate the record names.
+1. Recheck the record (DOSSIER.md, "Resume from the record"). Launch only when all three approvals are live; otherwise go to the gate the record names. When `fleet council --help` succeeds, also refuse while `fleet council decisions --for <slug> --unacked` lists anything: run the Inbox ([Council](SKILL.md#council)) first, then recheck.
 2. Land `docs/design/<slug>/`, with any ADRs and `CONTEXT.md` edits, as docs through tuca-mode's Land playbook. The coordinators' workspaces see the design only once it has landed. Done when `<bookmark>@origin` holds the folder.
 3. Run `fleet ls` again. When it fails, the phase goes back to `parked`.
 4. Per coordinator, as one Bash call with `timeout: 300000`, in that coordinator's repo: `cd <repo>; fleet team add <name> --project <id> --mission "<mission>" --session <slug>`. `--session` opens the coordinator in the Rex session `<slug>`, named after the work, created by the first `add` and reused by the next. Coordinators never open in `designers` or in the repo's team session. Write the coordinator's row in the dossier's **Launch** table as the call returns, then go on to the next. When the call does not start it:
    - **Untrusted repo.** The refusal names `--trust`. Ask Luiz with `AskUserQuestion`, showing the exact line you would run: `cd <repo>; fleet team add <name> --project <id> --mission "<mission>" --session <slug> --trust`. On the yes he types, run that line once, unchanged.
    - **Auto mode refuses** a call, this one or the `--trust` line. Report the refusal and the refused line to Luiz, record the row as `refused`, and do nothing else for that coordinator: no retry, no other route.
-   - **Killed midway.** The tool killed the run. Run the same `add` again: it starts the file it wrote.
-   - **No tab.** `add` removed its file. Fix what the refusal names, then run `add` again.
+   - **Killed midway, or no tab.** Fix what the refusal names and run `add` again (`fleet team add --help` says what each case left behind).
    - **A startup prompt.** Luiz answers it in the Rex app (`fleet team attach <name>`), then run `fleet team start <name>`.
 5. Post the news, which wakes nobody: `fleet news post --from designer-<slug> --to all --kind fyi "spin-off <slug> launched: <coordinators>; design in docs/design/<slug>/"`.
 6. Set the phase to `handed` when every row says `started`. Otherwise tell Luiz which coordinators failed and why.
-7. Land the dossier with its **Launch** rows and phase as a follow-up docs change, as in step 2: the copy landed in step 2 predates the launch. Then forget the design workspace: `jj workspace forget design-<slug>`.
+7. Land the dossier with its **Launch** rows and phase as a follow-up docs change, as in step 2: the copy landed in step 2 predates the launch. When `fleet council --help` succeeds, re-register the landed dossier: `fleet council register <slug> --dossier <repo>/docs/design/<slug>/dossier.md --repo <repo>`, with `<repo>` the repo's root. Then forget the design workspace: `jj workspace forget design-<slug>`.
 
 ## No fleet
 

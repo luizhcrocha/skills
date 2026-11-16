@@ -46,6 +46,7 @@
     "./skills/engineering/figure-it-out",
     "./skills/engineering/spin-off",
     "./skills/engineering/designer",
+    "./skills/engineering/council",
     "./skills/engineering/create-verification-skill",
     "./skills/engineering/maintain-verification-skill",
     "./skills/engineering/create-formal-verification-skill",

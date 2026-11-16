@@ -24,6 +24,18 @@ spin-off: spin-off.md
 
 ## Artifacts
 
+## Interfaces
+
+card for design v<n>
+
+| kind | id | path |
+| :-- | :-- | :-- |
+
+## Constraints
+
+| id | constraint | result |
+| :-- | :-- | :-- |
+
 ## Decider
 
 ## Launch
@@ -70,6 +82,20 @@ An approval is live only when its version is the current one, its sha256 matches
 ## Conversation
 
 What Luiz said before the design began (Design, step 1): what should change and for whom, what he knows or has decided, what worries him. His words, dated. Later reshapings of the options go here too.
+
+## Interfaces
+
+The card `fleet council check` reads to find where designs meet. Its first line is `card for design v<n>`, the current design version. Then one row per thing the design touches outside itself:
+
+- **kind**: `owns`, `reads`, `emits`, `consumes`, `replaces`, `needs` or `open`.
+- **id**: a typed id, `<type>:<name>`, such as `pg:<schema>.<table>`, `host:<domain>`, `event:<name>`, `adr:<n>`, `zoho:fn/<name>`, `role:<name>` or `repo:<path>`. A trailing `*` matches a prefix.
+- **path**: the repo-relative file that defines it, usually in `docs/design/<slug>/`.
+
+Update the card with each design version, before its gate. It lives in `dossier.md` because the design hash leaves that file out, so a card edit voids no approval. Done when every table, event, host, role and ADR the design touches has a row.
+
+## Constraints
+
+One row per council decision you acknowledged: its id (`C-<n>`), the constraint as `fleet council show C-<n>` prints it, and the result you acknowledged, `no change` or `design v<n>`.
 
 ## Decider
 
