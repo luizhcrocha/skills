@@ -85,13 +85,12 @@ class PeekTest(unittest.TestCase):
 
     def test_a_mermaid_block_arrives_drawn_and_a_broken_one_stays_code(self):
         self.tool("pandoc")
-        mmdc = self.bin_dir / "mmdc"
-        mmdc.write_text(
+        mmdr = self.bin_dir / "mmdr"
+        mmdr.write_text(
             "#!/bin/sh\n"
-            "while [ $# -gt 0 ]; do case $1 in -i) i=$2; shift;; -o) o=$2; shift;; esac; shift; done\n"
-            "grep -q broken \"$i\" && exit 1\n"
-            "echo '<svg class=\"drawn\"></svg>' > \"$o\"\n")
-        mmdc.chmod(0o755)
+            "grep -q broken && exit 1\n"
+            "echo '<svg class=\"drawn\"></svg>'\n")
+        mmdr.chmod(0o755)
         (self.bin_dir / "sh").symlink_to(shutil.which("sh"))
         (self.bin_dir / "grep").symlink_to(shutil.which("grep"))
         self.doc.write_text("# Model\n\n```mermaid\nflowchart LR\n  A --> B\n```\n\n```mermaid\nbroken\n```\n")

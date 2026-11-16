@@ -14,7 +14,8 @@ internet. Quick Look renders only HTML (and images) fetched from a URL; it
 refuses a PDF or an Office file as "cannot be safely displayed" (tested from
 Rex on macOS, 2026-11-16). So the server converts: Markdown to HTML through
 pandoc, in its sandbox, so a page carries no local file the Markdown points to,
-with each ```mermaid block drawn as inline SVG by mmdc when it is installed;
+with each ```mermaid block drawn as inline SVG by mmdr (mermaid-rs-renderer, no
+browser) when it is installed;
 documents (docx, doc, odt, rtf) and spreadsheets (xlsx, xls, ods) to HTML, with
 images inlined, through headless LibreOffice on the serving machine. Without
 LibreOffice a docx falls back to pandoc's HTML, and other files go out as they
@@ -103,26 +104,23 @@ def resolve(url_path):
 MERMAID_BLOCK = re.compile(r"^```mermaid[ \t]*\n(.*?)^```[ \t]*$", re.MULTILINE | re.DOTALL)
 
 
-def mermaid_svg(mmdc, diagram):
-    with tempfile.TemporaryDirectory() as tmp:
-        src, out = Path(tmp) / "d.mmd", Path(tmp) / "d.svg"
-        src.write_text(diagram)
-        try:
-            run = subprocess.run([mmdc, "-q", "-i", str(src), "-o", str(out)],
-                                 capture_output=True, timeout=60)
-        except subprocess.TimeoutExpired:
-            return None
-        return out.read_text() if run.returncode == 0 and out.exists() else None
+def mermaid_svg(mmdr, diagram):
+    try:
+        run = subprocess.run([mmdr, "-e", "svg"], input=diagram.encode(), capture_output=True, timeout=30)
+    except subprocess.TimeoutExpired:
+        return None
+    svg = run.stdout.decode(errors="replace")
+    return svg if run.returncode == 0 and "<svg" in svg else None
 
 
 def draw_mermaid(text):
-    """Each ```mermaid block becomes its SVG, since Quick Look runs no Mermaid; a block mmdc cannot draw stays as code."""
-    mmdc = shutil.which("mmdc")
-    if not mmdc:
+    """Each ```mermaid block becomes its SVG, since Quick Look runs no Mermaid; a block mmdr cannot draw stays as code."""
+    mmdr = shutil.which("mmdr")
+    if not mmdr:
         return text
 
     def draw(match):
-        svg = mermaid_svg(mmdc, match.group(1))
+        svg = mermaid_svg(mmdr, match.group(1))
         return f'\n<div class="mermaid-diagram">\n{svg}\n</div>\n' if svg else match.group(0)
 
     return MERMAID_BLOCK.sub(draw, text)
