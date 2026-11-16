@@ -1,0 +1,80 @@
+#!/usr/bin/env python3
+"""Send /reload-plugins to every Claude Code pane in the local Rex server.
+
+    reload-plugins [--dry-run]
+
+A pane is reloaded only when its input box is empty. A pane with a dialog open
+is skipped, since the typed text would answer it, and so is a pane with unsent
+text in its box, since `rex send` would append to it. A busy session queues the
+command until its turn ends. Without `rex` on PATH, it says so and exits 0.
+"""
+
+import argparse
+import json
+import shutil
+import subprocess
+import sys
+
+DIALOG_MARKERS = ("Enter to select", "Esc to cancel")
+
+
+def is_rule(line: str) -> bool:
+    """A border of the input box; Claude Code may print a label inside the top one."""
+    s = line.strip()
+    return s.startswith("─") and s.count("─") >= 10
+
+
+def classify(screen: str) -> str:
+    """'empty', 'typed', 'shell', 'dialog' or 'other' (not a Claude Code input box)."""
+    lines = [ln for ln in screen.splitlines() if ln.strip()]
+    tail = lines[-20:]
+    if any(m in ln for ln in tail for m in DIALOG_MARKERS):
+        return "dialog"
+    for i in range(len(tail) - 1, 0, -1):
+        if tail[i].startswith("❯") and is_rule(tail[i - 1]):
+            empty = tail[i].strip() == "❯" and i + 1 < len(tail) and is_rule(tail[i + 1])
+            return "empty" if empty else "typed"
+        if tail[i].startswith("!") and is_rule(tail[i - 1]):
+            return "shell"
+    return "other"
+
+
+def rex(*args: str) -> str:
+    return subprocess.run(["rex", *args], capture_output=True, text=True, check=True).stdout
+
+
+def panes():
+    for s in json.loads(rex("ls", "--json"))["sessions"]:
+        sid, label = s["session_id"], s.get("label", "")
+        names = {w["window_id"]: w.get("label", "") for w in json.loads(rex("window", "ls", "-s", sid, "--json")).get("windows", [])}
+        for b in json.loads(rex("block", "ls", "-s", sid, "--json")).get("blocks", []):
+            yield sid, b["block_id"], f"{label}/{names.get(b.get('window_id'), b['block_id'])}"
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    ap.add_argument("--dry-run", action="store_true", help="classify panes, send nothing")
+    args = ap.parse_args()
+    if not shutil.which("rex"):
+        print("reload-plugins: rex is not on PATH; run /reload-plugins in each session yourself")
+        return 0
+    for sid, bid, name in panes():
+        try:
+            state = classify(rex("capture", "-s", sid, "-b", bid))
+        except subprocess.CalledProcessError:
+            continue
+        if state == "other":
+            continue
+        if state == "empty" and not args.dry_run:
+            rex("send", "-s", sid, "-b", bid, "/reload-plugins")
+            rex("send-key", "-s", sid, "-b", bid, "enter")
+        verdict = {"empty": "reloaded" if not args.dry_run else "would reload",
+                   "dialog": "skipped: a dialog is open, reload it after answering",
+                   "typed": "skipped: unsent text in its input box",
+                   "shell": "skipped: its input box is in ! shell mode"}[state]
+        print(f"{name}: {verdict}")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
