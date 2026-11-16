@@ -84,6 +84,15 @@ A split is several designs of one effort, each registered with `--split <name>` 
    Done when `launch.md` has a row for every coordinator, and Luiz has each failure with its reason.
 7. **Hand back**, once every row in `launch.md` says `started`. Until then, retry the failed coordinators as LAUNCH.md's Launch step 4 says, on Luiz's word. Land `docs/design/<name>/` through tuca-mode's Land playbook. Then run `fleet council ask --to <slug>,<slug> --from council "split <name> launched, record at <repo>/docs/design/<name>/launch.md. Record handed as designer SKILL.md's Split says, then answer."` with every slug of the split. Then forget your workspace: `jj workspace forget split-<name>`. Done when `<bookmark>@origin` holds the record and every designer has the question.
 
+## Staffing designers at gate 3
+
+Luiz may call a council on a few related designers waiting at gate 3, to staff them together instead of each one alone. Done for the run when each named designer has its part or Luiz kept their own teams.
+
+1. Read each named designer's `plan.md` and `team.md`. Done when both are read for each.
+2. Spawn one Decider (`model: "fable", effort: "high"`) with those files. It returns one staffing for all of them: the implementer agents, the lanes each takes across the designs, what each waits on, and which designer starts it, with no file under two agents. Done when every lane is in exactly one agent.
+3. Ask Luiz with `AskUserQuestion`: take the staffing, change it, or keep each designer's own team. Done when he has chosen.
+4. Record his choice with `fleet council decide --binds <slug>,<slug> --words "<Luiz's words>" "<the staffing, one line>"` and write each designer's part in the decision's text or a file it names. Send each bound designer one SendMessage line: `council C-<n>: your part of the staffing is in fleet council show C-<n>`. Done when each designer has its line.
+
 ## Questions for every designer
 
 When Luiz wants an answer from every designer, run `fleet council ask --all --from council "<text>"` and send no message. Each designer answers at its next resume or gate. On a later run, `fleet council questions` shows who has answered. Bring the answers to Luiz. Done when he has the `Q-<n>`, and later the answers.

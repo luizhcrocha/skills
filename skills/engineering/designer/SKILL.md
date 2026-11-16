@@ -72,6 +72,8 @@ When a council message wakes you at `planned`, run the Inbox. A decision that ch
 
 Without `split`, follow [LAUNCH.md](LAUNCH.md): the fleet check, `team.md`, gate 3, landing the docs, one `fleet team add` per coordinator, the news post. A machine without `fleet` takes its no-fleet path. Done when the dossier records each coordinator's launch status.
 
+Luiz may call a [council](../council/SKILL.md) on a few related designers waiting at gate 3, to staff them together. When a council's message names your part, make that part your `team.md` as a new team version, then go on from the fleet check with it.
+
 ## The gates
 
 - Before you ask any gate, run the council's Inbox. Before gate 1 you may also run its Check.
