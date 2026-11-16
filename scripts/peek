@@ -10,11 +10,17 @@ Each file gets <state>/files/<id>/<name>, a symlink to its absolute path, where
 <id> is a hash of that path: the same file keeps the same URL, and the link
 shows its current content. The server answers only for those links, on
 127.0.0.1, and `tailscale serve` publishes it to the tailnet, never to the
-internet. Quick Look previews a fetched file by its Content-Type, so office and
-iWork files carry theirs from TYPES (Python's built-in table, all macOS has,
-lacks docx, xlsx and pptx) and Quick Look renders them itself. Markdown, which
-Quick Look shows nothing for, is rendered to HTML through pandoc, in its
-sandbox, so a page carries no local file the Markdown points to.
+internet. Quick Look renders only HTML (and images) fetched from a URL; it
+refuses a PDF or an Office file as "cannot be safely displayed" (tested from
+Rex on macOS, 2026-11-16). So the server converts: Markdown to HTML through
+pandoc, in its sandbox, so a page carries no local file the Markdown points to;
+documents (docx, doc, odt, rtf) and spreadsheets (xlsx, xls, ods) to HTML, with
+images inlined, through headless LibreOffice on the serving machine. Without
+LibreOffice a docx falls back to pandoc's HTML, and other files go out as they
+are, typed from TYPES (Python's built-in table, all macOS has, lacks docx, xlsx
+and pptx). Quick Look picks its renderer from the URL's extension, not the
+Content-Type, so a converted file's URL ends in .html (report.docx.html). A
+conversion is cached until the file changes.
 """
 
 import hashlib
@@ -25,6 +31,8 @@ import mimetypes
 import os
 import shutil
 import signal
+import tempfile
+import threading
 import subprocess
 import sys
 import time
@@ -60,18 +68,34 @@ def link(path):
     if target.is_symlink() or target.exists():
         target.unlink()
     target.symlink_to(source)
-    return f"{entry.name}/{urllib.parse.quote(source.name)}"
+    return f"{entry.name}/{urllib.parse.quote(source.name + view_suffix(source))}"
+
+
+def view_suffix(source):
+    """The extension a converted file adds to its URL: Quick Look picks its
+    renderer from the URL's extension, not from the Content-Type."""
+    suffix = source.suffix.lower()
+    office = shutil.which("soffice") or shutil.which("libreoffice")
+    if (suffix in DOCUMENTS or suffix in SHEETS) and office:
+        return ".html"
+    if suffix == ".docx" and shutil.which("pandoc"):
+        return ".html"
+    return ""
 
 
 def resolve(url_path):
     parts = urllib.parse.unquote(url_path.split("?", 1)[0]).strip("/").split("/")
     if len(parts) != 2 or any(p in ("", ".", "..") for p in parts):
         return None
-    candidate = files_dir() / parts[0] / parts[1]
+    name, view = parts[1], ""
+    for extra in (".html",):
+        if name.endswith(extra) and not (files_dir() / parts[0] / name).is_symlink():
+            name, view = name[: -len(extra)], extra
+    candidate = files_dir() / parts[0] / name
     if not candidate.is_symlink():
         return None
     source = candidate.resolve()
-    return source if source.is_file() else None
+    return (source, view) if source.is_file() else None
 
 
 def render_markdown(source):
@@ -86,6 +110,73 @@ def render_markdown(source):
             return run.stdout
     text = html.escape(source.read_text(errors="replace"))
     return f"<!doctype html><meta charset=utf-8><title>{html.escape(source.name)}</title><pre>{text}</pre>".encode()
+
+
+DOCUMENTS = {".docx", ".doc", ".odt", ".rtf"}
+SHEETS = {".xlsx", ".xlsm", ".xls", ".ods"}
+OFFICE_LOCK = threading.Lock()
+
+
+def cached(source, ext, convert):
+    stat = source.stat()
+    key = entry_id(source)
+    cache = state_dir() / "cache"
+    cache.mkdir(parents=True, exist_ok=True)
+    out = cache / f"{key}-{stat.st_mtime_ns}-{stat.st_size}.{ext}"
+    if out.exists():
+        return out.read_bytes()
+    body = convert(source)
+    if body is None:
+        return None
+    for stale in cache.glob(f"{key}-*"):
+        stale.unlink(missing_ok=True)
+    out.write_bytes(body)
+    return body
+
+
+def office_convert(source, target):
+    office = shutil.which("soffice") or shutil.which("libreoffice")
+    if not office:
+        return None
+    profile = (state_dir() / "office-profile").as_uri()
+    with OFFICE_LOCK, tempfile.TemporaryDirectory() as out:
+        run = subprocess.run(
+            [office, "--headless", "--norestore", f"-env:UserInstallation={profile}",
+             "--convert-to", target, "--outdir", out, str(source)],
+            capture_output=True, timeout=120,
+        )
+        produced = Path(out) / f"{source.stem}.{target.split(':')[0]}"
+        if run.returncode != 0 or not produced.is_file():
+            return None
+        return produced.read_bytes()
+
+
+def pandoc_docx(source):
+    pandoc = shutil.which("pandoc")
+    if not pandoc or source.suffix.lower() != ".docx":
+        return None
+    run = subprocess.run(
+        [pandoc, "--standalone", "--sandbox", "--embed-resources", "--metadata", f"title={source.name}",
+         "--from", "docx", "--to", "html5", str(source)],
+        capture_output=True, timeout=60,
+    )
+    return run.stdout if run.returncode == 0 else None
+
+
+def convert(source, view):
+    suffix = source.suffix.lower()
+    if suffix in (".md", ".markdown"):
+        return render_markdown(source), "text/html; charset=utf-8"
+    if view != ".html":
+        return None
+    if suffix in SHEETS:
+        body = cached(source, "html", lambda s: office_convert(s, "html:HTML (StarCalc):EmbedImages"))
+    elif suffix in DOCUMENTS:
+        body = cached(source, "html", lambda s: office_convert(s, "html:XHTML Writer File:UTF8")
+                      or pandoc_docx(s))
+    else:
+        body = None
+    return None if body is None else (body, "text/html; charset=utf-8")
 
 
 TYPES = {
@@ -116,11 +207,15 @@ class Handler(http.server.BaseHTTPRequestHandler):
     def do_GET(self):
         if self.path == HEALTH:
             return self.reply(200, b"peek", "text/plain")
-        source = resolve(self.path)
-        if source is None:
+        found = resolve(self.path)
+        if found is None:
             return self.reply(404, b"not peeked", "text/plain")
-        if source.suffix.lower() in (".md", ".markdown"):
-            return self.reply(200, render_markdown(source), "text/html; charset=utf-8")
+        source, view = found
+        converted = convert(source, view)
+        if converted is not None:
+            return self.reply(200, *converted)
+        if view:
+            return self.reply(502, f"peek: could not convert {source.name}".encode(), "text/plain")
         return self.reply(200, source.read_bytes(), content_type(source), source.name)
 
     def reply(self, code, body, kind, name=None):
@@ -199,7 +294,8 @@ def listing():
     out = []
     for entry in sorted(files_dir().iterdir()):
         for target in entry.iterdir():
-            out.append((f"{entry.name}/{urllib.parse.quote(target.name)}", os.readlink(target)))
+            view = view_suffix(Path(os.readlink(target)))
+            out.append((f"{entry.name}/{urllib.parse.quote(target.name + view)}", os.readlink(target)))
     return out
 
 
