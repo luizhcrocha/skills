@@ -1,0 +1,27 @@
+---
+title: "memo v2: the life of a note (a slice of 4 linesﬂ°°59¶ß the summary of the three oldest notes keeps another note)"
+---
+stateDiagram-v2
+  state "Legend" as legend {
+    lg0: within
+    lg1: over
+  }
+  class lg0 teal
+  class lg1 orange
+  s0: Not written yet
+  s1: Read word for word at start
+  s2: Corrected or retired: recall still finds it
+  s3: Left out: the store is over budget and the count line says so
+  s4: Behind a summary: counted at start, opened by zoom
+  [*] --> s0
+  s0 --> s1: a session writes the note
+  s1 --> s2: a session retires the note or a session corrects the note with a new line
+  s1 --> s3: a session writes a newer note [the store goes over budget]
+  s1 --> s4: a session writes a newer note [a summary stands for the note]
+  s3 --> s2: a session retires the note or a session corrects the note with a new line
+  s3 --> s4: a session writes the summary of the three oldest notes
+  s4 --> s2: a session retires the note or a session corrects the note with a new line
+  s4 --> s3: a session retires the summary
+  class s0 teal
+  class s1 teal
+  class s3 orange

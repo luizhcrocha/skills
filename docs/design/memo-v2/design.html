@@ -1,0 +1,540 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>memo v2 design</title>
+<style>
+:root {
+  --bg: #fbfaf7; --panel: #ffffff; --ink: #1d1c1a; --muted: #5f5b53; --line: #dcd8ce;
+  --accent: #0f6b5c; --accent-soft: #dcefe9; --warn: #a8480f; --warn-soft: #f8e6d6;
+  --bad: #a3252c; --bad-soft: #f8dfe0; --blue: #2b5c9a; --blue-soft: #dfe9f6;
+  --plum: #6b3f86; --plum-soft: #ece1f3; --sand: #7a6a45; --sand-soft: #efe8d6;
+  --code: #f1eee6;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #171614; --panel: #1f1e1b; --ink: #ece9e2; --muted: #a9a398; --line: #3a3832;
+    --accent: #6fc7b4; --accent-soft: #193a34; --warn: #f0a76a; --warn-soft: #3d2a18;
+    --bad: #f08a8f; --bad-soft: #3f1d1f; --blue: #8fb6ea; --blue-soft: #1c2c44;
+    --plum: #c7a2df; --plum-soft: #33243f; --sand: #d2c08f; --sand-soft: #34301f;
+    --code: #2a2824;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #171614; --panel: #1f1e1b; --ink: #ece9e2; --muted: #a9a398; --line: #3a3832;
+  --accent: #6fc7b4; --accent-soft: #193a34; --warn: #f0a76a; --warn-soft: #3d2a18;
+  --bad: #f08a8f; --bad-soft: #3f1d1f; --blue: #8fb6ea; --blue-soft: #1c2c44;
+  --plum: #c7a2df; --plum-soft: #33243f; --sand: #d2c08f; --sand-soft: #34301f;
+  --code: #2a2824;
+}
+* { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; }
+body { margin: 0; background: var(--bg); color: var(--ink); font: 16px/1.55 ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+main { max-width: 980px; margin: 0 auto; padding: 28px 16px 80px; }
+h1 { font-size: 30px; line-height: 1.2; margin: 0 0 8px; letter-spacing: -0.01em; }
+h2 { font-size: 22px; line-height: 1.25; margin: 48px 0 10px; padding-top: 18px; border-top: 1px solid var(--line); }
+h3 { font-size: 17px; margin: 26px 0 6px; }
+p { margin: 8px 0; }
+.lede { font-size: 18px; color: var(--muted); max-width: 70ch; }
+.meta { color: var(--muted); font-size: 14px; }
+a { color: var(--accent); }
+code, pre { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 13.5px; }
+code { background: var(--code); padding: 1px 5px; border-radius: 4px; }
+pre { background: var(--code); padding: 12px 14px; border-radius: 8px; overflow-x: auto; line-height: 1.45; margin: 10px 0; }
+pre code { background: none; padding: 0; }
+.scroll { overflow-x: auto; }
+table { border-collapse: collapse; width: 100%; margin: 10px 0; font-size: 15px; background: var(--panel); }
+th, td { text-align: left; vertical-align: top; padding: 8px 10px; border: 1px solid var(--line); }
+th { background: var(--code); font-weight: 600; }
+td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+nav { display: flex; flex-wrap: wrap; gap: 6px 14px; margin: 14px 0 0; font-size: 14px; }
+.grid { display: grid; gap: 12px; }
+.g3 { grid-template-columns: repeat(3, 1fr); }
+.g4 { grid-template-columns: repeat(4, 1fr); }
+.g2 { grid-template-columns: repeat(2, 1fr); }
+@media (max-width: 760px) { .g3, .g4, .g2 { grid-template-columns: 1fr; } h1 { font-size: 25px; } }
+.card { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; }
+.card h4 { margin: 0 0 4px; font-size: 15px; }
+.card p { margin: 4px 0; font-size: 14.5px; }
+.tag { display: inline-block; font-size: 12px; font-weight: 600; padding: 1px 8px; border-radius: 999px; margin-bottom: 6px; }
+.t-keep { background: var(--accent-soft); color: var(--accent); }
+.t-work { background: var(--warn-soft); color: var(--warn); }
+.t-hist { background: var(--blue-soft); color: var(--blue); }
+.t-user { background: var(--plum-soft); color: var(--plum); }
+.t-mach { background: var(--sand-soft); color: var(--sand); }
+.t-bad { background: var(--bad-soft); color: var(--bad); }
+.big { font-size: 26px; font-weight: 700; font-variant-numeric: tabular-nums; line-height: 1.1; }
+.small { font-size: 13.5px; color: var(--muted); }
+.bar { display: flex; height: 34px; border-radius: 6px; overflow: hidden; border: 1px solid var(--line); }
+.bar > div { display: flex; align-items: center; justify-content: center; font-size: 11.5px; font-weight: 600; white-space: nowrap; overflow: hidden; color: var(--ink); border-right: 2px solid var(--bg); }
+.bar > div:last-child { border-right: 0; }
+.barrow { display: grid; grid-template-columns: 150px 1fr; gap: 10px; align-items: center; margin: 8px 0; }
+@media (max-width: 760px) { .barrow { grid-template-columns: 1fr; gap: 2px; } }
+.legend { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 13px; color: var(--muted); margin: 4px 0 0; }
+.sw { display: inline-block; width: 11px; height: 11px; border-radius: 2px; margin-right: 5px; vertical-align: -1px; }
+.c-dec { background: var(--bad-soft); } .c-open { background: var(--warn-soft); } .c-glob { background: var(--plum-soft); }
+.c-pin { background: var(--sand-soft); } .c-oth { background: var(--code); }
+.c-head { background: var(--code); } .c-user { background: var(--plum-soft); } .c-mach { background: var(--sand-soft); }
+.c-group { background: var(--blue-soft); } .c-repo { background: var(--accent-soft); }
+.callout { border-left: 4px solid var(--accent); background: var(--accent-soft); padding: 10px 14px; border-radius: 0 8px 8px 0; margin: 14px 0; }
+.callout.warn { border-color: var(--warn); background: var(--warn-soft); }
+svg { display: block; max-width: 100%; height: auto; }
+svg text { font-family: ui-sans-serif, system-ui, sans-serif; fill: var(--ink); }
+svg .box { fill: var(--panel); stroke: var(--line); stroke-width: 1.5; }
+svg .keep { fill: var(--accent-soft); stroke: var(--accent); }
+svg .over { fill: var(--warn-soft); stroke: var(--warn); }
+svg .gone { fill: var(--code); stroke: var(--muted); }
+svg .arr { stroke: var(--muted); stroke-width: 1.5; fill: none; }
+svg .lbl { font-size: 12px; fill: var(--muted); }
+svg .ttl { font-size: 13.5px; font-weight: 600; }
+svg .sub { font-size: 11.5px; fill: var(--muted); }
+ol.steps { padding-left: 22px; } ol.steps li { margin: 6px 0; }
+.rec { font-weight: 600; color: var(--accent); }
+footer { margin-top: 50px; color: var(--muted); font-size: 14px; border-top: 1px solid var(--line); padding-top: 14px; }
+</style>
+</head>
+<body>
+<main>
+
+<header>
+  <h1>memo v2: knowledge only, four scopes, a fixed start read</h1>
+  <p class="lede">A design for your review, third revision. Nothing is built. It follows the direction you approved on 2026-11-16 and the seven points you decided the same day. No decision is open, and no step of the design or of its migration is work for you.</p>
+  <p class="meta">Files: <code>docs/design/memo-v2/</code> in the workspace <code>skills-memo-v2</code>. Terms: <code>CONTEXT.md</code>. Decisions that bind: ADRs 0004 to 0007.</p>
+  <nav>
+    <a href="#problem">The problem</a><a href="#session">What changes for a session</a><a href="#scopes">Scopes</a><a href="#read">The start read</a><a href="#summaries">Summaries</a><a href="#write">Writing</a><a href="#travel">How notes travel</a><a href="#model">The checked model</a><a href="#migration">Migration</a><a href="#measures">How to know it works</a><a href="#decisions">Your decisions</a>
+  </nav>
+</header>
+
+<h2 id="problem">The problem</h2>
+<p>Memory exists so that a new session starts knowing what earlier sessions learned, at a low cost. Today it costs too much, and a session cannot trust it.</p>
+
+<div class="grid g4">
+  <div class="card"><span class="tag t-bad">cost</span><div class="big">46.5 KB</div><p>read at every session start in custom-mcp-servers, about 11k tokens, and growing.</p></div>
+  <div class="card"><span class="tag t-bad">volume</span><div class="big">117 a day</div><p>notes written there over 35 days. One session wrote 181.</p></div>
+  <div class="card"><span class="tag t-bad">trust</span><div class="big">201 pairs</div><p>of look-alike notes, and 399 notes that are status. Nothing rechecks a note.</p></div>
+  <div class="card"><span class="tag t-bad">rot</span><div class="big">60 of 60</div><p>slots for pins and open threads are full. The median thread is 30 days old, and new ones are refused.</p></div>
+</div>
+
+<p>The cause is one store used as three things.</p>
+
+<div class="grid g3">
+  <div class="card"><span class="tag t-keep">knowledge</span><h4>Stays in memo</h4><p>What will still be true in a month and is not already in code, docs, commits or a plan.</p></div>
+  <div class="card"><span class="tag t-work">work in progress</span><h4>Goes to its owner</h4><p>A designer's dossier, a fleet's ledger, or an issue. You see what waits on you in <code>fleet waiting</code>.</p></div>
+  <div class="card"><span class="tag t-hist">history</span><h4>Is already in tape</h4><p>tape records every turn. memo stops repeating it.</p></div>
+</div>
+
+<h2 id="session">What changes for a session</h2>
+
+<div class="barrow"><div><strong>Today</strong><div class="small">custom-mcp-servers, 46,517 bytes</div></div>
+  <div class="bar" role="img" aria-label="Today's start read: decisions of the last 7 days 22.5 KB, open threads 11 KB, global 8.7 KB, pins 2.5 KB, the rest 1.8 KB">
+    <div class="c-dec" style="flex:22.5">decisions, 7 days · 22.5 KB</div><div class="c-open" style="flex:11">open threads · 11</div><div class="c-glob" style="flex:8.7">global · 8.7</div><div class="c-pin" style="flex:2.5"></div><div class="c-oth" style="flex:1.8"></div>
+  </div></div>
+<div class="barrow"><div><strong>memo v2</strong><div class="small">every repository, at most 14,000 bytes</div></div>
+  <div class="bar" role="img" aria-label="The v2 start read: header 0.6 KB, user 3 KB, machine 1.9 KB, groups 2.5 KB, repo 6 KB" style="width:30.1%">
+    <div class="c-head" style="flex:0.6"></div><div class="c-user" style="flex:3">user</div><div class="c-mach" style="flex:1.9"></div><div class="c-group" style="flex:2.5">grp</div><div class="c-repo" style="flex:6">repo · 6</div>
+  </div></div>
+<div class="legend">
+  <span><span class="sw c-pin"></span>pins 2.5 KB</span><span><span class="sw c-oth"></span>usage and headings 1.8 KB</span>
+  <span><span class="sw c-head"></span>header 0.6 KB</span><span><span class="sw c-user"></span>user 3 KB</span><span><span class="sw c-mach"></span>machine 1.9 KB</span><span><span class="sw c-group"></span>groups 2.5 KB</span><span><span class="sw c-repo"></span>repo 6 KB</span>
+</div>
+<p class="small">Both bars are drawn to the same scale. The v2 read is 30% of today's in custom-mcp-servers.</p>
+
+<div class="scroll"><table>
+<tr><th></th><th>Today</th><th>memo v2</th></tr>
+<tr><td>Read at start</td><td>Pins, every open thread, a week of decisions, gotcha titles. No size limit</td><td>For each scope: the newest notes and the notes that summaries keep, word for word. 14,000 bytes at most, about 4k tokens, about 44 notes</td></tr>
+<tr><td>What a note is</td><td>One of five kinds, one of them an open thread. May be pinned</td><td>Knowledge. No kinds, no pins</td></tr>
+<tr><td>Where it goes</td><td>The repo, or global</td><td>Exactly one scope: repo, machine, group or user</td></tr>
+<tr><td>Where notes are</td><td>A repo's notes in its working tree, committed with the code. Global notes in a local folder</td><td>In local stores outside any checkout. A <code>memo</code> bookmark carries each store, apart from the code history: the repository's remote for its own notes, the dotfiles' remote for the machine, group and user notes</td></tr>
+<tr><td>Old notes at start</td><td>Hidden under summaries that are not shown</td><td>The notes a summary keeps, word for word. One line counts the others and names their most distinctive words</td></tr>
+<tr><td>Unfinished work</td><td>An <code>open</code> note that someone must close</td><td>Not in memo. It goes to its owner</td></tr>
+<tr><td>A write is refused</td><td>Over 280 characters, a secret, or the cap</td><td>Over 280 characters or a secret. Never for space</td></tr>
+<tr><td>Reminders to write</td><td>A Stop nudge, a PreCompact request, nightly notes by memo-dream</td><td>None</td></tr>
+<tr><td>Correcting</td><td><code>memo supersede</code></td><td><code>memo supersede</code>, and <code>memo retire</code> to take a line out with no replacement</td></tr>
+</table></div>
+
+<h3>The admission rule</h3>
+<p>A line becomes a note when both answers are yes. Will it still be true in a month? Is it absent from the code, the docs, the commits and every plan?</p>
+<div class="scroll"><table>
+<tr><th>The line</th><th>Where it goes</th></tr>
+<tr><td>"Chose TOML front blocks over YAML because <code>tomllib</code> is in the standard library"</td><td><span class="tag t-keep">a note</span> when no doc or commit says it</td></tr>
+<tr><td>"The migration landed as 43d10bc8"</td><td><span class="tag t-hist">nothing</span> <code>jj log</code> holds it</td></tr>
+<tr><td>"PreCompact wording still untested, waiting on a real compaction"</td><td><span class="tag t-work">a work item</span> the owner's dossier, ledger or issue</td></tr>
+<tr><td>"Never push without a landing turn"</td><td><span class="tag t-mach">a rule</span> AGENTS.md or CLAUDE.md, which every session already reads</td></tr>
+</table></div>
+<p>memo cannot check a judgement. The rule is in the skill and in the header of every start read, nothing presses a session to write, and <code>memo note</code> answers a commit hash or a look-alike with one line of advice.</p>
+
+<h2 id="scopes">Scopes</h2>
+<p>Every note belongs to exactly one scope. The question that picks it is "who else must read this?".</p>
+
+<div class="grid g4">
+  <div class="card"><span class="tag t-keep">repo</span><h4>One repository, any machine</h4><p>Carried by the <code>memo</code> bookmark of that repository's remote, apart from the code history. The default for <code>memo note</code>.</p></div>
+  <div class="card"><span class="tag t-mach">machine</span><h4>One computer, any repository</h4><p>Carried by the <code>memo</code> bookmark of the dotfiles' remote, in <code>machine/&lt;name&gt;/</code>.</p></div>
+  <div class="card"><span class="tag t-hist">group</span><h4>Repositories that work together</h4><p>Carried by the same bookmark, in <code>group/&lt;name&gt;/</code>. You defined two groups.</p></div>
+  <div class="card"><span class="tag t-user">user</span><h4>You, everywhere</h4><p>Carried by the same bookmark, in <code>user/</code>.</p></div>
+</div>
+
+<div class="scroll">
+<svg viewBox="0 0 900 250" role="img" aria-label="A session in the skills repository on cr-sede-pc reads four stores: user, machine cr-sede-pc, group tooling, and repo skills. A session in another repository on the same machine reads the same user and machine stores and its own repo store." style="min-width:680px;margin-top:14px">
+  <defs><marker id="ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="currentColor" style="color:var(--muted)"/></marker></defs>
+  <rect class="box" x="10" y="20" width="250" height="70" rx="8"/><text class="ttl" x="24" y="45">A session in skills</text><text class="sub" x="24" y="64">on cr-sede-pc, in group tooling</text><text class="sub" x="24" y="80">reads 4 stores</text>
+  <rect class="box" x="10" y="150" width="250" height="70" rx="8"/><text class="ttl" x="24" y="175">A session in another repository</text><text class="sub" x="24" y="194">on cr-sede-pc, in no group</text><text class="sub" x="24" y="210">reads 3 stores</text>
+  <rect x="640" y="8" width="250" height="44" rx="8" style="fill:var(--plum-soft);stroke:var(--plum)"/><text class="ttl" x="654" y="27">user</text><text class="sub" x="654" y="43">dotfiles' memo bookmark, user/</text>
+  <rect x="640" y="62" width="250" height="44" rx="8" style="fill:var(--sand-soft);stroke:var(--sand)"/><text class="ttl" x="654" y="81">machine cr-sede-pc</text><text class="sub" x="654" y="97">dotfiles' memo bookmark, machine/</text>
+  <rect x="640" y="116" width="250" height="44" rx="8" style="fill:var(--blue-soft);stroke:var(--blue)"/><text class="ttl" x="654" y="135">group tooling</text><text class="sub" x="654" y="151">dotfiles' memo bookmark, group/</text>
+  <rect x="640" y="170" width="250" height="34" rx="8" style="fill:var(--accent-soft);stroke:var(--accent)"/><text class="ttl" x="654" y="192">repo skills <tspan class="sub">memo bookmark of its remote</tspan></text>
+  <rect x="640" y="212" width="250" height="34" rx="8" style="fill:var(--accent-soft);stroke:var(--accent)"/><text class="ttl" x="654" y="234">repo of the other repository</text>
+  <path class="arr" marker-end="url(#ah)" d="M260 45 L636 30"/><path class="arr" marker-end="url(#ah)" d="M260 55 L636 82"/><path class="arr" marker-end="url(#ah)" d="M260 65 L636 136"/><path class="arr" marker-end="url(#ah)" d="M260 75 L636 185"/>
+  <path class="arr" marker-end="url(#ah)" d="M260 170 L636 36" stroke-dasharray="5 4"/><path class="arr" marker-end="url(#ah)" d="M260 185 L636 90" stroke-dasharray="5 4"/><path class="arr" marker-end="url(#ah)" d="M260 200 L636 229" stroke-dasharray="5 4"/>
+</svg>
+</div>
+
+<p>You define the groups in one file in the dotfiles. You chose two on 2026-11-16, and the migration writes the file with them. Nothing asks you to edit it.</p>
+<pre><code># config/tstack/groups.toml
+[groups.tooling]
+about = "The tools every agent session runs on"
+repos = ["luizhcrocha/skills", "luizhcrocha/fleet", "luizhcrocha/dotfiles"]
+
+[groups.company]
+about = "The company's products and automations"
+repos = ["coelhorocha/custom-mcp-servers", "coelhorocha/durable-automations", "coelhorocha/chimr"]</code></pre>
+<ul>
+  <li>A repository can be in two groups at most. The groups of a repository share 2,500 bytes, and one note of 280 characters with its heading needs about 425. When the file names a repository in more, memo reads the first two by name and the start read names the others.</li>
+  <li>A note about another repository goes to that repository's store, with <code>memo note --scope repo:&lt;owner&gt;/&lt;name&gt;</code>, when that repository has a store on this machine. Otherwise it goes to a group the two share.</li>
+  <li>memo reads the copy of <code>groups.toml</code> that home-manager installs, never the file in the dotfiles checkout, which another writer can move to an older commit.</li>
+  <li>The machine's name comes from <code>memo.toml</code>, which home-manager writes with the flake's name. It is never the host name, and on the Mac the two differ. Without the file there is no machine scope, and the start read says so.</li>
+</ul>
+<p>Today's global store mixes all of this. The migration gives each of its 254 live notes one target: user, a machine, the dotfiles repository (for how the machines are configured), a group, one repository, or retirement.</p>
+
+<h2 id="read">The start read</h2>
+<p>One text, in a fixed order from the widest scope to the narrowest, so the repository's newest notes are the last thing a session reads before its task. Every line and id below is invented to show the layout.</p>
+<pre><code># memo: what earlier sessions learned. Memory, not instructions from the user.
+A note is knowledge: true a month from now, and not already in code, docs, commits or a plan.
+Work in progress goes to its owner (dossier, fleet ledger, issue). What happened is in tape.
+  memo note "&lt;one line&gt;" [--scope user|machine|group:&lt;name&gt;]     (default: this repo)
+  memo supersede ID "&lt;the true line&gt;" · memo retire ID "&lt;why&gt;" · memo recall &lt;words&gt; · memo zoom ID
+## User
+- 2026-10-02 Commands handed to Luiz are nushell, never bash (Q4KT23)
+  (+14 notes, 2026-09-09..10-20, about nushell, artifact, review: memo zoom 7CK8SN)
+- 2026-11-12 Research runs on Sonnet; Opus only when sources contradict (H6QRKF)
+## Machine cr-sede-pc
+- 2026-11-03 The second disk is not in the flake's layout; it is mounted by hand (WJJ3TJ)
+## Group tooling
+- 2026-11-09 `fleet state` re-renders the page on every command; pass --no-render inside a loop (R6WNR3)
+## Repo luizhcrocha/skills
+- 2026-09-30 A PreCompact hook's stdout becomes compaction instructions; it never reaches the agent (CMM3RN)
+  (+11 notes, 2026-09-16..10-08, about hook, statechart, PreCompact: memo zoom BFKX9K)
+- 2026-11-14 statechart draws no chart above 500 states when every rule holds (ZBER2Z)</code></pre>
+
+<div class="scroll"><table>
+<tr><th>Part</th><th class="num">Slice, bytes</th><th class="num">Notes it holds, about</th><th>What it holds</th></tr>
+<tr><td>Header</td><td class="num">600</td><td class="num"></td><td>The admission rule and the commands. Fixed text</td></tr>
+<tr><td>User</td><td class="num">3,000</td><td class="num">8</td><td>Newest notes and kept notes of the user store</td></tr>
+<tr><td>Machine</td><td class="num">1,900</td><td class="num">5</td><td>The same for this machine</td></tr>
+<tr><td>Groups</td><td class="num">2,500</td><td class="num">8</td><td>One group gets it all. Two groups get 1,250 each</td></tr>
+<tr><td>Repo</td><td class="num">6,000</td><td class="num">23</td><td>The same for the repository</td></tr>
+<tr><th>Total</th><th class="num">14,000</th><th class="num">44</th><th>About 4,000 tokens at 3.5 bytes a token</th></tr>
+</table></div>
+<p>A slice is a limit, not a quota. A scope with little to say uses less, and no other scope takes the rest. A section never exceeds its slice. The five numbers are constants in the code, the code asserts the total at every start, and a test fails on any path over it. A fleet worker reads nothing, as today.</p>
+<ul>
+  <li><strong>A store over its slice.</strong> The oldest notes that no summary stands for leave the read first, and one line counts what is left out. A note that a summary keeps was chosen once, and a burst of new notes does not push it out. It leaves only when the kept notes alone do not fit, which the tasks over the summaries end.</li>
+  <li><strong>The count line.</strong> <code>(+11 notes, 2026-09-16..10-08, about hook, statechart, PreCompact: memo zoom BFKX9K)</code> gives the number of notes a summary hides, their dates, and up to 3 of their most distinctive words. memo counts words in the index, with no model: a word scores by the hidden notes that have it, weighed against how common it is in the store. The line can print only words that the hidden notes contain.</li>
+  <li><strong>Time.</strong> A record file is never edited, so its name says whether the index is current. At start memo lists file names and parses only new files. On 4,101 notes the names took 1.5 ms, a stat of each file 12 ms, and a read of each file 45 ms.</li>
+  <li><strong>Subfolders.</strong> A record sits in <code>notes/&lt;first 4 characters of its id&gt;/</code>, one folder for 12.4 days. A commit that adds one note to a flat folder of 42,000 writes 1.94 MB of git tree objects, against 0.07 MB with the subfolders.</li>
+</ul>
+
+<h2 id="summaries">Summaries quote, and the count line names what they hide</h2>
+<p>You approved older notes shown "as summaries", OptMem's way, and asked for a faithfulness check before the start read relies on them. The check ran on 2026-11-16, with tape's method: an Opus Reviewer compared 30 of the 259 summaries in custom-mcp-servers with the exact lines each was written from. Interactive sessions on Opus or Fable wrote those summaries.</p>
+
+<div class="grid g4">
+  <div class="card"><span class="tag t-bad">invented</span><div class="big">8 of 30</div><p>state something their sources do not. 4 clearly, 4 in a small way.</p></div>
+  <div class="card"><span class="tag t-work">overstated</span><div class="big">3</div><p>show progress further along than the source.</p></div>
+  <div class="card"><span class="tag t-work">wrong copy</span><div class="big">1</div><p>names a decision card that no source names.</p></div>
+  <div class="card"><span class="tag t-keep">the bar</span><div class="big">1 of 30</div><p>tape's bar. tape's Haiku summaries had 5.</p></div>
+</div>
+<p>A pending job reads as cancelled. A rule about deletions reads as a rule about deploys. One invented line was copied into the level-2 summary above it. The errors sit where a short item loses its qualifier ("pending", "without Luiz's yes") and where a prefix such as "Luiz:" spreads over items that do not carry it.</p>
+
+<div class="callout"><strong>So a summary quotes and never rewrites.</strong> It names the notes it stands for and, among them, the few to keep in the start read. The read prints those notes word for word and one line that counts the others. Every line a session reads at start is then a line some session wrote on purpose, and a corrected note stops being read the moment it is corrected. This is ADR 0007. You decided it on 2026-11-16 and added the words on the count line.</div>
+
+<div class="scroll">
+<svg viewBox="0 0 900 190" role="img" aria-label="Twelve notes become a summary that keeps three of them word for word and counts the other nine. Later, several summaries become a higher summary that keeps three of the notes already kept." style="min-width:680px">
+  <text class="lbl" x="10" y="16">12 older notes</text>
+  <g>
+    <rect class="keep" x="10" y="24" width="64" height="16" rx="3"/><rect class="box" x="10" y="44" width="64" height="16" rx="3"/><rect class="box" x="10" y="64" width="64" height="16" rx="3"/><rect class="box" x="10" y="84" width="64" height="16" rx="3"/>
+    <rect class="box" x="80" y="24" width="64" height="16" rx="3"/><rect class="keep" x="80" y="44" width="64" height="16" rx="3"/><rect class="box" x="80" y="64" width="64" height="16" rx="3"/><rect class="box" x="80" y="84" width="64" height="16" rx="3"/>
+    <rect class="box" x="150" y="24" width="64" height="16" rx="3"/><rect class="box" x="150" y="44" width="64" height="16" rx="3"/><rect class="keep" x="150" y="64" width="64" height="16" rx="3"/><rect class="box" x="150" y="84" width="64" height="16" rx="3"/>
+  </g>
+  <path class="arr" marker-end="url(#ah)" d="M224 62 L300 62"/><text class="lbl" x="228" y="54">a session</text><text class="lbl" x="228" y="78">picks 3</text>
+  <text class="lbl" x="310" y="16">in the start read: 4 lines</text>
+  <rect class="keep" x="310" y="24" width="250" height="18" rx="3"/><text class="sub" x="318" y="37">kept note, word for word</text>
+  <rect class="keep" x="310" y="46" width="250" height="18" rx="3"/><text class="sub" x="318" y="59">kept note, word for word</text>
+  <rect class="keep" x="310" y="68" width="250" height="18" rx="3"/><text class="sub" x="318" y="81">kept note, word for word</text>
+  <rect class="gone" x="310" y="90" width="250" height="18" rx="3"/><text class="sub" x="318" y="103">(+9, about deploy, R2: memo zoom ID)</text>
+  <path class="arr" marker-end="url(#ah)" d="M570 62 L646 62"/><text class="lbl" x="574" y="54">months</text><text class="lbl" x="574" y="78">later</text>
+  <text class="lbl" x="656" y="16">a higher summary: 4 lines for 144 notes</text>
+  <rect class="keep" x="656" y="24" width="234" height="18" rx="3"/><text class="sub" x="664" y="37">the best of the kept notes</text>
+  <rect class="keep" x="656" y="46" width="234" height="18" rx="3"/><rect class="keep" x="656" y="68" width="234" height="18" rx="3"/>
+  <rect class="gone" x="656" y="90" width="234" height="18" rx="3"/><text class="sub" x="664" y="103">(+141 notes: memo zoom ID)</text>
+  <text class="lbl" x="10" y="140">Detail fades with age, as in OptMem: the newest notes are all read, an older group shows its best 3 of 12,</text>
+  <text class="lbl" x="10" y="158">and a still older period shows its best 3 of 144. Nothing is deleted: memo zoom opens any summary, and memo recall searches every note.</text>
+</svg>
+</div>
+<p>The price is compression. About 4 lines stand for 12 notes, where one rewritten line stood for 16. The whole read holds about 44 notes. That is what 4k tokens buy, and <code>memo recall</code> is the way to the rest. You kept the group of 12.</p>
+
+<h3>The second test: Haiku compressing</h3>
+<p>The two shapes ran side by side on 30 groups of 12 notes and on 8 runs of 144, with Haiku compressing and one Opus judge that did not know which output was which. The numbers are in <code>evidence/compress-2026-11-16.md</code>, with no note text.</p>
+<div class="scroll"><table>
+<tr><th>Measure</th><th class="num">Level 1: rewrite</th><th class="num">Level 1: quote</th><th class="num">Level 2: rewrite</th><th class="num">Level 2: quote</th></tr>
+<tr><td>Outputs with a false statement</td><td class="num">5 of 30</td><td class="num">0 of 30</td><td class="num">5 of 8</td><td class="num">0 of 8</td></tr>
+<tr><td>Outputs with a stale note and nothing false</td><td class="num">0</td><td class="num">1</td><td class="num">2</td><td class="num">2</td></tr>
+<tr><td>Facts conveyed, of the 8 the judge listed</td><td class="num">4.37</td><td class="num">2.87</td><td class="num">3.62</td><td class="num">2.50</td></tr>
+<tr><td>Bytes of the output</td><td class="num">277</td><td class="num">654</td><td class="num">275</td><td class="num">631</td></tr>
+</table></div>
+<p>Quoted notes state nothing false. Their one fault is a kept note that a later note contradicts. So a compaction task over summaries, whose list spans months, tells the session to retire or supersede such a note before it answers. The rewritten line carries more facts in fewer bytes. The words on the count line pay part of that back: they tell a session what the hidden notes are about.</p>
+
+<h2 id="write">Writing</h2>
+<pre><code>memo note "&lt;line&gt;" [--scope S] [--ref R]...
+  a fleet worker                       refused, as today: its coordinator notes for it
+  over 280 characters, or a secret     refused, with the count over; retry at once
+  the same text is already live        "already noted as ID", nothing written
+  otherwise                            the note is written
+  then advice, never a refusal:        a look-alike note and the command for a repeat or a correction;
+                                       a commit hash or a landing word and the admission rule;
+                                       for --scope user, a group or another repository, who will read the line
+  the store is over its slice          one compaction task is printed</code></pre>
+<p>A compaction task lists the oldest group of notes outside a summary and asks the session to name up to 3 that a session a month from now most needs. It never blocks a write. A fleet worker gets none. A task over summaries lists the notes that those summaries keep, and it also tells the session to retire or supersede a note that a later note in the list contradicts.</p>
+
+<h3>A note's life</h3>
+<div class="scroll">
+<svg viewBox="0 0 900 380" role="img" aria-label="State chart of a note's life: not written, read word for word, behind a summary, left out while the store is over budget, corrected or retired." style="min-width:700px">
+  <rect class="box" x="20" y="20" width="170" height="52" rx="8"/><text class="ttl" x="34" y="43">Not written yet</text>
+  <rect class="keep" x="330" y="20" width="240" height="52" rx="8"/><text class="ttl" x="344" y="43">Read word for word at start</text><text class="sub" x="344" y="60">among the newest, or kept by a summary</text>
+  <rect class="keep" x="620" y="160" width="260" height="56" rx="8"/><text class="ttl" x="634" y="183">Behind a summary</text><text class="sub" x="634" y="201">counted at start, opened by memo zoom</text>
+  <rect class="over" x="300" y="290" width="300" height="56" rx="8"/><text class="ttl" x="314" y="313">Left out while the store is over its slice</text><text class="sub" x="314" y="331">the count line says so</text>
+  <rect class="gone" x="20" y="160" width="230" height="56" rx="8"/><text class="ttl" x="34" y="183">Corrected or retired</text><text class="sub" x="34" y="201">memo recall still finds it</text>
+  <path class="arr" marker-end="url(#ah)" d="M190 46 L326 46"/><text class="lbl" x="200" y="38">a session writes it</text>
+  <path class="arr" marker-end="url(#ah)" d="M570 56 C680 70 740 110 750 156"/><text class="lbl" x="660" y="96">newer notes arrive and</text><text class="lbl" x="660" y="111">a summary stands for it</text>
+  <path class="arr" marker-end="url(#ah)" d="M450 72 L450 286"/><text class="lbl" x="458" y="150">newer notes arrive,</text><text class="lbl" x="458" y="165">no summary yet</text>
+  <path class="arr" marker-end="url(#ah)" d="M604 312 C690 300 740 260 750 220"/><text class="lbl" x="772" y="262">a session answers</text><text class="lbl" x="772" y="277">the compaction task</text>
+  <path class="arr" marker-end="url(#ah)" d="M690 216 C660 262 630 284 604 300" stroke-dasharray="5 4"/><text class="lbl" x="560" y="250">the summary</text><text class="lbl" x="560" y="265">is retired</text>
+  <path class="arr" marker-end="url(#ah)" d="M330 60 C260 80 190 120 150 156"/><text class="lbl" x="150" y="106">supersede or retire</text>
+  <path class="arr" marker-end="url(#ah)" d="M300 312 C220 300 160 260 140 220"/>
+  <path class="arr" marker-end="url(#ah)" d="M620 188 L254 188"/>
+</svg>
+</div>
+<p class="small">Teal states are inside the budget. The orange state is the time between a burst of writes and the compaction tasks that follow. A note behind a summary stays there when the store goes over its slice, because the summary stays in the read. A note leaves the live set only by <code>memo supersede</code> or <code>memo retire</code>, and never comes back.</p>
+
+<h2 id="travel">How notes travel between machines</h2>
+<div class="callout"><strong>One rule makes every merge safe.</strong> Every note, summary and retirement is a new file with a unique name, and no command edits or deletes a file. So a store is a set that only grows, and two copies merge by set union of their file names. Any number of sessions on any number of machines can write at once. Two writers never touch the same path, so no merge has anything to resolve inside a file.</div>
+
+<h3>Every store travels on a <code>memo</code> bookmark</h3>
+<p>You decided on 2026-11-16 that notes stay out of every code history. A repository's notes are not in its working tree, so they are in no diff, no pull request and no code search. The remote backs them up and shares them on a bookmark named <code>memo</code>, whose history shares no commit with the code. The machine, group and user stores travel the same way, on the <code>memo</code> bookmark of the dotfiles' remote, as the folders <code>user/</code>, <code>machine/&lt;name&gt;/</code> and <code>group/&lt;name&gt;/</code> beside the dotfiles' own notes.</p>
+
+<div class="scroll">
+<svg viewBox="0 0 900 215" role="img" aria-label="On each machine memo reads and writes local stores outside any checkout. A sync fetches the memo bookmark of a remote, the repository's or the dotfiles', into memo's own git directory, imports the files the store lacks, commits the files the bookmark lacks and pushes without force. The other machine does the same. No checkout is touched." style="min-width:700px">
+  <text class="lbl" x="10" y="16">cr-sede-pc</text>
+  <rect class="keep" x="10" y="26" width="190" height="60" rx="8"/><text class="ttl" x="22" y="49">local stores</text><text class="sub" x="22" y="67">home/, outside any checkout</text>
+  <rect class="box" x="250" y="26" width="170" height="60" rx="8"/><text class="ttl" x="262" y="49">memo's git directory</text><text class="sub" x="262" y="67">bare, memo's own</text>
+  <rect class="box" x="455" y="80" width="200" height="50" rx="8"/><text class="ttl" x="467" y="103">origin, memo</text><text class="sub" x="467" y="119">no commit shared with the code</text>
+  <text class="lbl" x="700" y="16">another machine</text>
+  <rect class="box" x="700" y="26" width="180" height="60" rx="8"/><text class="ttl" x="712" y="49">memo's git directory</text><text class="sub" x="712" y="67">bare, memo's own</text>
+  <rect class="keep" x="700" y="126" width="180" height="60" rx="8"/><text class="ttl" x="712" y="149">local stores</text><text class="sub" x="712" y="167">home/, outside any checkout</text>
+  <path class="arr" marker-start="url(#ah)" marker-end="url(#ah)" d="M204 56 L246 56"/><text class="lbl" x="204" y="46">union</text>
+  <path class="arr" marker-start="url(#ah)" marker-end="url(#ah)" d="M420 60 C435 68 447 82 455 96"/><text class="lbl" x="426" y="50">fetch, push</text>
+  <path class="arr" marker-start="url(#ah)" marker-end="url(#ah)" d="M655 96 C670 85 685 70 700 62"/><text class="lbl" x="664" y="112">fetch, push</text>
+  <path class="arr" marker-start="url(#ah)" marker-end="url(#ah)" d="M790 90 L790 122"/><text class="lbl" x="798" y="110">union</text>
+  <text class="lbl" x="10" y="130">A sync fetches the bookmark, writes the files the store lacks,</text>
+  <text class="lbl" x="10" y="148">commits the files the bookmark lacks, and pushes without force.</text>
+  <text class="lbl" x="10" y="166">A refused push means another machine pushed first: fetch and push again.</text>
+  <text class="lbl" x="10" y="184">No checkout is touched: not its .git, its working copy, its hooks or its jj operation log.</text>
+  <text class="lbl" x="10" y="202">Sessions read and write the local stores only. The SessionStart hook makes no git or network call.</text>
+</svg>
+</div>
+
+<p>A fetch and a push use your SSH key, and 1Password asks you to approve each use. An agent cannot approve, and an unattended push stalls. So memo syncs only where a push that you approve already happens. No hook, no timer and no <code>memo note</code> runs a sync.</p>
+<div class="scroll"><table>
+<tr><th>Moment</th><th>Who runs it</th><th>What syncs</th><th>Why the approval is there</th></tr>
+<tr><td>A landing</td><td>The landing session, in the land playbook, right after <code>jj git push --bookmark</code> succeeds</td><td>That repository's store, and the machine, group and user stores</td><td>You have just approved the landing push in 1Password</td></tr>
+<tr><td><code>entropic-update</code></td><td>You, on each machine</td><td><code>memo sync --all</code>: every store on the machine</td><td>You are at the terminal, and the update pushes <code>nix</code> itself</td></tr>
+</table></div>
+<p>The design adds no approval to those you already give. You can run <code>memo sync</code> yourself, and nothing asks you to.</p>
+
+<div class="scroll"><table>
+<tr><th>Case</th><th>What happens</th></tr>
+<tr><td>Offline, or nobody approves</td><td>The fetch or the push stops after 20 seconds at most. memo prints one line, exits 0 and changes nothing. The notes stay in the local store, and the next sync sends them</td></tr>
+<tr><td>Notes wait a long time</td><td>Nothing prompts anybody. They leave with the next landing or update, and <code>memo doctor</code> counts them</td></tr>
+<tr><td>A repository with no remote</td><td>The store is local. No sync, no backup. <code>memo doctor</code> says so</td></tr>
+<tr><td>The remote has no <code>memo</code> bookmark yet</td><td>The first push creates it, as a commit with no parent</td></tr>
+<tr><td>A new clone on another machine</td><td>The local store is empty until the first sync there, which the first landing or the next <code>entropic-update</code> runs</td></tr>
+<tr><td>An agent's own jj workspace</td><td>It reads and writes the same local store, found by the repository's origin. The sync needs no <code>.git</code> of the workspace. <code>jj new</code> or <code>jj rebase</code> in any workspace cannot take a note off the disk, because no note is in a working copy</td></tr>
+<tr><td>Two machines push at once</td><td>The remote refuses the second push. That machine fetches, imports and pushes again, 3 times at most</td></tr>
+<tr><td>A note must go for good</td><td>By hand: rewrite the bookmark and delete the file on each machine. memo never deletes</td></tr>
+</table></div>
+<p>The commit is built from the bookmark's own tree plus the new files, so a sync can never remove a path there. It is unsigned on purpose: your git signs commits through 1Password, and a signature would be a second approval. A prototype of the steps ran against a local remote on 2026-11-16.</p>
+
+<h3>What a push of <code>memo</code> triggers</h3>
+<div class="scroll"><table>
+<tr><th>Repository</th><th>CI found</th><th>Does a push of <code>memo</code> start anything?</th></tr>
+<tr><td>luizhcrocha/skills, fleet, dotfiles</td><td>No workflow, webhook, ruleset or protected branch</td><td>No</td></tr>
+<tr><td>coelhorocha/custom-mcp-servers</td><td>3 workflows. Their push triggers name <code>master</code> only</td><td>No</td></tr>
+<tr><td>coelhorocha/durable-automations</td><td>1 workflow. Push and pull request on <code>master</code> only</td><td>No</td></tr>
+<tr><td>coelhorocha/chimr</td><td>5 workflows. Their push triggers name tags, <code>master</code>, or a branch named <code>none</code></td><td>No</td></tr>
+</table></div>
+<p>None of the six has a webhook, a protected branch, a Pages site or a check from an outside CI service. For a push, GitHub runs the workflow files of the pushed commit, and the tree of <code>memo</code> has none, so the answer holds for a workflow added later. Two effects remain. GitHub shows its "Compare &amp; pull request" banner after the push of a new branch. A plain <code>git clone</code> downloads the bookmark's history with the code, about 10 to 20 MB for a year of notes at today's rate.</p>
+
+<h3>What the dotfiles hold</h3>
+<p>The dotfiles hold no note in their working tree and get no commit for memo. The first revision kept the machine, group and user stores in a folder <code>memo/</code> on <code>nix</code>. You moved them to the bookmark, so memo has one way to exchange files, and no note file sits in a checkout that another writer can move.</p>
+<ul>
+  <li><code>config/tstack/groups.toml</code>, and the home-manager lines that install it and <code>memo.toml</code>. <code>memo.toml</code> names the machine and the dotfiles' remote.</li>
+  <li>One step in <code>bin/entropic-update</code>, after the pull: <code>memo sync --all</code>. The update finds memo on the PATH or in the plugin folder that Claude Code installed, as <code>bin/memo-dream-night</code> finds the plugin today. A new machine that has neither skips the step and says so.</li>
+  <li>The <code>memo</code> bookmark on their remote.</li>
+</ul>
+
+<h2 id="model">The checked model</h2>
+<p>A TLA+ model of one store on two machines, checked with TLC through the statechart skill. Sessions write notes, write summaries, correct and retire. Machines exchange files directly, or through a bookmark that takes a push only from a machine that holds every file of the bookmark. After each step each machine's start read is computed again. The model ran again on 2026-11-16 after two changes: the new rule for a store over its slice, and the bookmark. Moving the machine, group and user stores to a bookmark changes no rule, and the four runs gave the same results after it.</p>
+<div class="scroll"><table>
+<tr><th>Rule</th><th>In words</th></tr>
+<tr><td><code>WithinBudget</code></td><td>The start read of a scope never holds more lines than its slice</td></tr>
+<tr><td><code>OnlyLiveNotes</code></td><td>Every line read word for word is a live note: nothing corrected, retired or rewritten</td></tr>
+<tr><td><code>NeverTwice</code></td><td>No live note is told twice</td></tr>
+<tr><td><code>Accounted</code></td><td>A live note is read, or counted by one summary, or left out only while the store is over budget</td></tr>
+<tr><td><code>NewestWordForWord</code></td><td>The newest live note is always read word for word</td></tr>
+<tr><td><code>KeptNotesStay</code></td><td>While a store is over its slice, a note that a summary keeps never leaves to make room for a note outside a summary</td></tr>
+<tr><td><code>NoBrokenSummary</code></td><td>A summary shown is not retired and still has every summary under it</td></tr>
+<tr><td><code>WriteNeverRefused</code></td><td>No state refuses a write for space</td></tr>
+<tr><td><code>SameFilesSameRead</code></td><td>Two machines that hold the same files read the same lines</td></tr>
+<tr><td><code>SettledMeansEqual</code></td><td>When nothing is left to do, every machine and every bookmark holds the same files</td></tr>
+<tr><td><code>FilesOnlyGrow</code></td><td>No step removes a file, from a machine or from a bookmark</td></tr>
+</table></div>
+<div class="grid g4">
+  <div class="card"><span class="tag t-keep">holds</span><h4>One machine</h4><p>33 states. Every rule holds. The chart of a note's life above is drawn from this run.</p></div>
+  <div class="card"><span class="tag t-keep">holds</span><h4>Two machines, plain union</h4><p>7,776 states. Every rule holds, also when two machines wrote summaries over the same notes.</p></div>
+  <div class="card"><span class="tag t-keep">holds</span><h4>Two machines and a bookmark</h4><p>52,491 states. Every rule holds. No order of fetches and pushes loses a file, and a refused push never leaves a file on one machine for good.</p></div>
+  <div class="card"><span class="tag t-bad">breaks</span><h4>Two machines, today's rule</h4><p><code>NeverTwice</code> breaks in 11 steps. Replayed on today's <code>scripts/memo</code>: after a merge it printed two summaries of the same notes and two of those notes beside them.</p></div>
+</div>
+<p class="small">The defect in today's code has not shown, because no store is merged between machines today. v2 takes the summary that stands for the most notes first. <code>KeptNotesStay</code> breaks in 7 steps under the first revision's rule for a store over its slice, so the rule tests the change.</p>
+
+<h2 id="migration">Migration</h2>
+<div class="scroll"><table>
+<tr><th>Store</th><th class="num">Notes</th><th class="num">Live</th><th class="num">Summaries</th><th class="num">Open threads</th><th class="num">Pins</th></tr>
+<tr><td>custom-mcp-servers</td><td class="num">4,100</td><td class="num">3,933</td><td class="num">259</td><td class="num">49</td><td class="num">11</td></tr>
+<tr><td>skills</td><td class="num">133</td><td class="num">113</td><td class="num">1</td><td class="num">6</td><td class="num">0</td></tr>
+<tr><td>global</td><td class="num">278</td><td class="num">254</td><td class="num">49</td><td class="num">7</td><td class="num">3</td></tr>
+<tr><td>durable-automations</td><td class="num">168</td><td class="num">144</td><td class="num">3</td><td class="num">20</td><td class="num">0</td></tr>
+<tr><td>dotfiles</td><td class="num">110</td><td class="num">94</td><td class="num">0</td><td class="num">7</td><td class="num">2</td></tr>
+<tr><td>fleet</td><td class="num">30</td><td class="num">29</td><td class="num">0</td><td class="num">3</td><td class="num">0</td></tr>
+<tr><td>chimr</td><td class="num">30</td><td class="num">29</td><td class="num">0</td><td class="num">4</td><td class="num">0</td></tr>
+</table></div>
+<p class="small">The first revision counted the first three stores. The four others are the rest of the two groups, counted for this revision: 34 more open threads and 2 more pins.</p>
+<p>No note is rewritten and no note is lost. The v2 code reads the old files where they are, so it can land before any data moves, and the start read is inside its budget from that moment.</p>
+<ol class="steps">
+  <li><strong>Snapshot.</strong> Each store is copied to a local archive, which <code>memo recall</code> searches. For custom-mcp-servers and global it is the only backup.</li>
+  <li><strong>Groups.</strong> The migration writes <code>groups.toml</code> with the two groups you chose.</li>
+  <li><strong>An agent pass over the 96 open threads and 16 pins.</strong> One Researcher for each store reads every item against the repository, <code>jj log</code>, the ledgers and the dossiers, and one Decider rules on what they cannot place. Each item gets one end: a plain knowledge note in the right scope, a retirement with the evidence that it is done, a line in its owner's record, or a retirement as "unplaced". The owner is found from the session id in the note: a fleet's ledger for a coordinator's note (a note event, which opens no card), a designer's dossier for a designer's. The pass opens no card, files no issue, proposes no AGENTS.md line and never writes an outcome it did not find. Unplaced items are listed in a local report file.</li>
+  <li><strong>Re-filing global.</strong> Each of its 254 live notes gets one target. In doubt the narrower scope wins. What nobody can place is retired as "unplaced".</li>
+  <li><strong>First picks.</strong> Researchers answer the compaction tasks of every store except custom-mcp-servers, with the admission rule as the test: about 250 tasks. custom-mcp-servers starts fresh: its old notes stay in the archive, where <code>memo recall</code> finds them and no start read shows them.</li>
+  <li><strong>Each repository's store leaves the working tree.</strong> Its records are copied to the local home, and one change removes <code>.tstack/memo/</code> from the tree. The first landing or the next <code>entropic-update</code> creates the <code>memo</code> bookmark.</li>
+  <li><strong>The dotfiles.</strong> <code>groups.toml</code> and <code>memo.toml</code> through home-manager, the <code>memo sync --all</code> step in <code>entropic-update</code>, and the memo-dream timer removed.</li>
+  <li><strong>The land playbook.</strong> Its push step gains <code>memo sync</code>, and <code>land-check</code> loses its rules for memo notes.</li>
+  <li><strong>Measure.</strong> On the day and 14 days later, by the fleet that builds memo v2.</li>
+</ol>
+<div class="callout"><strong>What you do.</strong> Nothing that is new. You approve landing pushes in 1Password and run <code>entropic-update</code>, as today, and the notes travel with both. You read no triage page, edit no file and answer no question. The cost: a thread retired as "unplaced" may still have mattered, and nobody is told. <code>memo recall</code> finds it.</div>
+
+<h2 id="measures">How to know it works</h2>
+<div class="scroll"><table>
+<tr><th>Target</th><th>Today</th><th>After</th><th>Measured by</th></tr>
+<tr><td>Size of the start read</td><td>46,517 bytes in custom-mcp-servers, 16,456 in skills</td><td>At most 14,000 bytes everywhere, about 4k tokens</td><td>An assertion at every start, a test, <code>memo doctor</code></td></tr>
+<tr><td>Time of the start read</td><td>The hook took 42 ms in October</td><td>At most 50 ms on 4,101 notes and 100 ms on 42,000. No stat or read of a file the index has, no git or network call</td><td>A test that counts <code>stat</code> calls and fails on any started process, and a timed run</td></tr>
+<tr><td>Writes refused for space</td><td>9, some dropped</td><td>0</td><td>The refusal has no such reason</td></tr>
+<tr><td>Write rate in custom-mcp-servers</td><td>117 a day</td><td>About 20 a day after two weeks</td><td><code>memo doctor</code></td></tr>
+<tr><td>Notes that are knowledge</td><td>Not measured. 10% are status</td><td>At least 45 of 50</td><td>An Opus Reviewer's audit of 50 random new notes</td></tr>
+<tr><td>Look-alike pairs</td><td>5 for every 100 notes</td><td>Under 1 for every 100 new notes</td><td><code>memo doctor</code></td></tr>
+<tr><td>Sessions still find what they need</td><td>Not measured</td><td>18 of 20 needles, in at most 3 commands, and no fewer than today</td><td>The needle test, tape's method, on moments where a session used memory</td></tr>
+<tr><td>Recall at scale</td><td>Not measured. The old custom-mcp-servers store has 201 look-alike pairs, and a search prints each note of a pair</td><td>For the 20 needle questions: no look-alike among the first 5 results, and the answer among them for at least 18</td><td>The recall test. <code>memo recall</code> folds a result under the result it repeats</td></tr>
+<tr><td>Faithfulness of summaries</td><td>8 of 30 invent. With Haiku, 5 of 30 rewritten lines state something false</td><td>Not applicable: the read quotes note files, and a test proves it</td><td>A property test: every line read is the text of a live note file, and every word of a count line is in a hidden note</td></tr>
+<tr><td>Syncs started by a hook or a timer</td><td>Not applicable</td><td>0</td><td>A test: the hook module never calls the sync</td></tr>
+<tr><td>Cards, questions or pages put in front of you by memo or its migration</td><td>The earlier revisions asked for a triage page, a list to read and six syncs to run</td><td>0</td><td><code>fleet waiting</code> before and after the pass, and the pass's report file</td></tr>
+</table></div>
+
+<h3>The failure modes that matter most</h3>
+<div class="scroll"><table>
+<tr><th>What can go wrong</th><th>What prevents it</th></tr>
+<tr><td>The start read grows again</td><td>Every part has a slice, the code asserts the total, a test fails on any path over it</td></tr>
+<tr><td>Sessions keep writing status and work</td><td>The rule in the skill and the header, no nudges, advice at write time, the audit at day 14</td></tr>
+<tr><td>Sessions stop writing knowledge, since nothing reminds them</td><td>Nothing prevents it. The needle test at day 14 and the write rate show it. This is the risk the design accepts</td></tr>
+<tr><td>A note goes to too wide a scope</td><td>The default is the repo, and <code>--scope user</code> says who will read the line</td></tr>
+<tr><td>Company material reaches the dotfiles through a group or user note</td><td>The skill forbids clients and cases outside the repo scope. Only the audit checks it</td></tr>
+<tr><td>Compaction tasks are ignored</td><td>The read stays inside its slice and shows the count. <code>memo tasks</code> clears a backlog</td></tr>
+<tr><td>A small slice costs a task for almost every write</td><td>Under about 1,900 bytes a store holds 3 to 5 notes. The small stores get few writes, and a repository reads two groups at most</td></tr>
+<tr><td>A burst of new notes hides the notes that summaries keep</td><td>In a store over its slice the oldest notes outside a summary leave first. The model checks it</td></tr>
+<tr><td>A summary keeps a note that a later note contradicts</td><td>A task over summaries tells the session to retire or supersede it</td></tr>
+<tr><td>The migration's pass retires a thread that still mattered</td><td>Nothing prevents it. The pass never invents an outcome, the report file lists every unplaced item, and <code>memo recall</code> finds it</td></tr>
+<tr><td>A sync stalls on a 1Password approval that nobody gives</td><td>No hook and no timer runs a sync. A fetch or a push stops after 20 seconds, and the notes stay in the local store</td></tr>
+<tr><td>A push of <code>memo</code> starts CI or a deploy</td><td>No workflow of the six repositories matches it, and the tree of <code>memo</code> holds no workflow file</td></tr>
+<tr><td>Two machines push the same bookmark at once</td><td>The remote refuses the second push, and that machine fetches and pushes again. No push is forced</td></tr>
+<tr><td>The start read gets slow as a store grows</td><td>It lists file names and parses only new files</td></tr>
+</table></div>
+
+<h2 id="decisions">Your decisions</h2>
+<h3>Decided on 2026-11-16: all seven</h3>
+<div class="scroll"><table>
+<tr><th>#</th><th>Decision</th><th>What the design does</th></tr>
+<tr><td>1</td><td>A summary quotes notes</td><td><span class="rec">ADR 0007 stands,</span> and the count line names up to 3 words of the notes it hides, taken from the index with no model</td></tr>
+<tr><td>2</td><td>Two groups</td><td><span class="rec"><code>tooling</code></span> (skills, fleet, dotfiles) and <span class="rec"><code>company</code></span> (custom-mcp-servers, durable-automations, chimr)</td></tr>
+<tr><td>3</td><td>A repository's notes live on a <code>memo</code> bookmark of its remote</td><td>A local store in memo's home folder, synced by union after a landing, in <code>entropic-update</code>, or by hand. Never in a hook</td></tr>
+<tr><td>4</td><td>The quote tree stays 12 wide</td><td>A summary covers up to 12 items and keeps up to a quarter</td></tr>
+</table></div>
+
+<div class="scroll"><table>
+<tr><th>#</th><th>Decision</th><th>What the design does</th></tr>
+<tr><td>5</td><td>custom-mcp-servers starts fresh</td><td>Its 4,101 old notes are a local archive that <code>memo recall</code> finds and no start read shows</td></tr>
+<tr><td>6</td><td>memo v2 switches at once, and nothing in it is work for you</td><td>An agent pass gives every open thread and pin an end, with no page and no card. memo v2 does not wait for <code>fleet waiting</code> to list paused designers</td></tr>
+<tr><td>7</td><td>The machine, group and user stores move to the dotfiles' <code>memo</code> bookmark</td><td>One sync for every store. No <code>memo/</code> folder on <code>nix</code> and no memo commit in <code>entropic-update</code>, which keeps <code>memo sync --all</code></td></tr>
+</table></div>
+
+<h3>What still needs you</h3>
+<p>Decision 6 asked for an audit of every step that had you maintain notes. Each one is now an agent's, or gone: the triage page, the list of user notes to read, the edit of <code>groups.toml</code>, the six first syncs, the <code>memo doctor</code> findings, and the start-read lines about waiting notes. Four things cannot be autonomous.</p>
+<div class="scroll"><table>
+<tr><th>What</th><th>Why it cannot be autonomous</th><th>What it costs you</th></tr>
+<tr><td>A fetch or a push</td><td>The SSH key is yours, and no agent can approve its use in 1Password</td><td>No approval beyond those you give today: a landing's push, and <code>entropic-update</code>. If memo's push after a landing asks for a second click, the sync leaves the land playbook</td></tr>
+<tr><td>Defining a group</td><td>Which repositories work together is your knowledge</td><td>Nothing waits on it. A repository in no group reads no group</td></tr>
+<tr><td>Removing a note for good, after a leaked secret</td><td>It rewrites a bookmark's history, and a forced push is on the pause list</td><td>Rare: memo refuses a line that matches a secret pattern</td></tr>
+<tr><td>Renaming a repository on its remote</td><td>memo cannot tell that two names are one repository</td><td>The repository reads no group until <code>groups.toml</code> names the new origin</td></tr>
+</table></div>
+
+<h3>Changed on the advisor's review</h3>
+<p>These are not your calls. The second revision took each point of the advisor's review, and you can reverse any of them.</p>
+<div class="scroll"><table>
+<tr><th>Point</th><th>What the design does now</th></tr>
+<tr><td>A store over its slice</td><td>The oldest notes outside a summary leave first. A kept note stays</td></tr>
+<tr><td>A stale kept note</td><td>A task over summaries tells the session to retire or supersede it</td></tr>
+<tr><td>Record files</td><td>In subfolders named by the first 4 characters of the id, one for 12.4 days</td></tr>
+<tr><td><code>groups.toml</code></td><td>Read from the copy that home-manager installs, never from the dotfiles checkout</td></tr>
+<tr><td>The machine's name</td><td>From <code>memo.toml</code> only. Never the host name, and never a silent fallback</td></tr>
+<tr><td>A machine without memo</td><td><code>entropic-update</code> skips the memo step and says so</td></tr>
+<tr><td>A note about another repository</td><td><code>--scope repo:&lt;owner&gt;/&lt;name&gt;</code>, or the group</td></tr>
+<tr><td>Groups for one repository</td><td>Two at most</td></tr>
+<tr><td>Reporting</td><td><code>memo doctor</code> prints what <code>memo stats</code> and <code>memo scopes</code> printed. The nightly check and memo-dream are gone. The budget split is five constants</td></tr>
+<tr><td>Session start time</td><td>File names only, with a target in measures.md</td></tr>
+<tr><td>Recall at scale</td><td>A fold of look-alikes, and a measure</td></tr>
+</table></div>
+<p>Each decision, with what each option costs, is in <code>decisions.md</code>. It also lists the defaults that nobody questioned: a look-alike never stops a write, and the small stores get first picks.</p>
+
+<h3>What I was not sure of</h3>
+<ul>
+  <li>Whether one 1Password approval covers the landing push and memo's push a moment later. One landing on a real remote answers it. If not, the sync leaves the land playbook and notes travel with <code>entropic-update</code> only.</li>
+  <li>How the pass finds a thread's owner. It uses the session id in the note, the fleets' ledgers and tape. How a ledger and tape record that id was not checked. Where the lookup finds nothing, the item has no owner and still gets an end.</li>
+  <li>How many of the 96 open threads end as "unplaced". The pass's report gives the number.</li>
+  <li>The time <code>memo sync --all</code> adds to <code>entropic-update</code>, with one fetch for each remote.</li>
+  <li>The token count. 14,000 bytes is 4,000 tokens at 3.5 bytes a token and 3,300 at the 4.2 that today's read shows. No tokenizer counted either.</li>
+  <li>One reviewer, one run, one store for the faithfulness check, and one judge, one run for the Haiku test. Both results are far from the bar, but each is one measurement.</li>
+  <li>The simulation keeps the first notes offered, because it cannot judge. It measures sizes and counts, not the quality of a pick.</li>
+  <li>Whether the words on a count line lead a session to the right <code>memo zoom</code>. They come from a word count.</li>
+</ul>
+
+<footer>
+  memo v2 design, 2026-11-16. Files in <code>docs/design/memo-v2/</code>: design.md, sketch.md, model.md and model/, migration.md, measures.md, decisions.md, evidence/. Nothing is pushed.
+</footer>
+</main>
+</body>
+</html>

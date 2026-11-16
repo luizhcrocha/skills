@@ -1,0 +1,48 @@
+---
+title: "Two machines exchange one store's files (today's rule for the summaries in effect)"
+---
+stateDiagram-v2
+  state "Legend" as legend {
+    lg0: Breaks NeverTwice
+    lg1: Path to the NeverTwice bug
+  }
+  class lg0 breaks
+  class lg1 bugPath
+  s0: A holds notes none. B holds notes none. B reads notes none
+  s1: A holds notes 1. B holds notes none. B reads notes none
+  s2: A holds notes 1, 2. B holds notes none. B reads notes none
+  s3: A holds notes 1, 2, 3. B holds notes none. B reads notes none
+  s4: A holds notes 1, 2, 3, 4. B holds notes none. B reads notes none
+  s5: A holds notes 1, 2, 3, 4. B holds notes 1, 2, 3, 4. B reads notes 1, 2, 3, 4
+  s6: A holds notes 1, 2, 3, 4 and summaries 10. B holds notes 1, 2, 3, 4. B reads notes 1, 2, 3, 4
+  s7: A holds notes 1, 2, 3, 4 and summaries 10. B holds notes 1, 2, 3, 4 and summaries 11. B reads notes 1, 2, 3, 4
+  s8: A holds notes 1, 2, 3, 4 and summaries 10. B holds notes 1, 2, 3, 4, 5 and summaries 11. B reads notes 1, 4, 5 and the count of summary 11 (notes 1-2), over budget
+  s9: A holds notes 1, 2, 3, 4 and summaries 10. B holds notes 1, 2, 3, 4, 5 and summaries 11, 12. B reads notes 3, 5 and the count of summary 12 (notes 3-4), over budget
+  s10: A holds notes 1, 2, 3, 4 and summaries 10. B holds notes 1, 2, 3, 4, 5 and summaries 11, 12, 21. B reads notes 1, 5 and the count of summary 21 (notes 1-4)
+  s11: A holds notes 1, 2, 3, 4 and summaries 10. B holds notes 1, 2, 3, 4, 5 and summaries 10, 11, 12, 21. B reads notes 1, 3, 5 and the count of summary 21 (notes 1-4)
+  [*] --> s0
+  s0 --> s1: a session on A writes note 1
+  s1 --> s2: a session on A writes note 2
+  s2 --> s3: a session on A writes note 3
+  s3 --> s4: a session on A writes note 4
+  s4 --> s5: B receives the files of A
+  s5 --> s6: a session on A writes summary 10 of notes 2-3
+  s6 --> s7: a session on B writes summary 11 of notes 1-2
+  s7 --> s8: a session on B corrects note 2 with note 5
+  s8 --> s9: a session on B writes summary 12 of notes 3-4
+  s9 --> s10: a session on B writes summary 21 of notes 1-4
+  s10 --> s11: B receives the files of A
+  classDef breaks fill:#ffecee,stroke:#e72e3b,stroke-width:2.5px,color:#cd2834
+  class s0 bugPath
+  class s1 bugPath
+  class s2 bugPath
+  class s3 bugPath
+  class s4 bugPath
+  class s5 bugPath
+  class s6 bugPath
+  class s7 bugPath
+  class s8 bugPath
+  class s9 bugPath
+  class s10 bugPath
+  class s11 breaks
+  class s11 bugPath
