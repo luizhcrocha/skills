@@ -35,7 +35,7 @@ def legacy_sources(M, m):
     """(name in the archive, folder) of the v1 stores this session reads: the checkout's and the global one."""
     out = []
     if m.session.repo is not None:
-        out += [(M._flat(m.session.repo.scope.name), d) for d in m.session.repo.legacy if d.is_dir()]
+        out += [(M.flat(m.session.repo.scope.name), d) for d in m.session.repo.legacy if d.is_dir()]
     if M.legacy_global(m.env).is_dir():
         out.append(("global", M.legacy_global(m.env)))
     return out
@@ -121,25 +121,10 @@ def global_file(M, env, ident):
     return None
 
 
-def _parse_target_scope_shim(M, m, text):
-    """Until scripts/memo exposes parse_target_scope: the scope a refile may write, or a usage Refusal. Delete this
-    function, and its call in target_of, once memo has it."""
-    scope = M.target_scope(m, text)
-    if scope.kind != "repo" or text in (None, "", "repo"):
-        return scope
-    name = M.parse_scope(text).name
-    if name.startswith("/"):
-        if ".." in Path(name).parts or not M.repo_dir(m.env, name).is_dir():
-            raise M.Refusal("usage", f"memo: {name} has no store on this machine")
-    elif not re.fullmatch(r"[a-z0-9][a-z0-9._-]*/[a-z0-9][a-z0-9._-]*", name):
-        raise M.Refusal("usage", f"memo: {text!r} is not a scope: repo:<owner>/<name>, in lower case")
-    return scope
-
-
 def target_of(M, m, text):
-    if hasattr(M, "parse_target_scope"):
-        return M.parse_target_scope(m, text)
-    return _parse_target_scope_shim(M, m, text)
+    if text in (None, "", "repo", "machine", "group"):
+        return M.target_scope(m, text)
+    return M.parse_target_scope(m.env, text, m.session.repo.scope.name if m.session.repo else None)
 
 
 def ended(M, m, token, action, arg):

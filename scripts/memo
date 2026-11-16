@@ -561,7 +561,6 @@ def flat(key: str) -> str:
     return key.strip("/").replace("_", "_u").replace("/", "__")
 
 
-_flat = flat  # memo-migrate's name for it, until that script calls flat
 
 
 def unflat(name: str) -> str:
