@@ -71,21 +71,21 @@ home-manager writes `xdg.configFile` into `xdg.configHome`, which is `~/.config`
 
 ## (c) The memo step in `bin/entropic-update`
 
-The step goes right after the pull, as [design.md](design.md#what-the-dotfiles-hold) places it: after the `fi` that ends the pull block (line 147) and before the `flake.lock` section. It uses the script's own helpers: `section` (defined in the script), and `warn` and `info` from `bin/lib/init.sh`. The script runs under `set -euo pipefail`, so every command that may fail ends in `|| true` or `|| warn`. It finds memo as `bin/memo-dream-night` finds the plugin today: `memo` on the PATH inside a Claude session, else the tstack install that `installed_plugins.json` names, which is how Luiz's terminal finds it.
+The step goes after the switch: after the line that restarts an idle Rex server (`$DARWIN || "$SCRIPT_DIR/entropic-rex-restart-idle"`, line 424) and before the binary cache section. [design.md](design.md#what-the-dotfiles-hold) placed it right after the pull, but there a new machine's first update runs it before the switch installs `memo.toml`: memo then knows no `home_remote` and no machine name, says so, and leaves the user, machine and group stores local until the next update. After the switch, the first update installs `memo.toml` and syncs in the same run. A build that fails ends the run before the step, and the notes wait for the next update, as they do offline. It uses the script's own helpers: `section` (defined in the script), and `warn` and `info` from `bin/lib/init.sh`. The script runs under `set -euo pipefail`, so every command that may fail ends in `|| true` or `|| warn`. It finds memo as `bin/memo-dream-night` finds the plugin today: `memo` on the PATH inside a Claude session, else the tstack install that `installed_plugins.json` names, which is how Luiz's terminal finds it.
 
 ```diff
-@@ bin/entropic-update, after the pull @@
-   git pull --ff-only origin "$BRANCH"
-   if [[ -n "$(git status --porcelain --untracked-files=no)" ]]; then
-     warn "the checkout has local changes; the rebuild below includes them (tracked files only)"
-   fi
- fi
+@@ bin/entropic-update, after the switch @@
+ # A switch never restarts a running Rex server (a restart ends its sessions):
+ # this moves it to the new build only if it has none.
+ $DARWIN || "$SCRIPT_DIR/entropic-rex-restart-idle"
  
 +# ── memo: the notes of every store on this machine ──────────────────────────
 +# tstack's memo keeps its notes outside every checkout and carries each store
 +# on a `memo` bookmark: a repository's own remote for its notes, this repo's
 +# remote for the machine, group and user notes. A fetch and a push need the SSH
 +# key, so only a run someone is at syncs them: a landing, and this update.
++# After the switch, so a machine's first update has memo.toml (machine name,
++# home_remote) before it syncs.
 +# memo is on the PATH inside a Claude session; from a terminal it is in the
 +# plugin folder that installed_plugins.json names (as bin/memo-dream-night
 +# found the plugin). A machine without tstack yet skips the step. Offline or
@@ -103,7 +103,7 @@ The step goes right after the pull, as [design.md](design.md#what-the-dotfiles-h
 +  info "no memo on this machine yet: the memo step is skipped"
 +fi
 +
- # ── flake.lock: bump, and later commit ───────────────────────────────────────
+ # ── the binary cache ─────────────────────────────────────────────────────────
 ```
 
 The usage text gains one paragraph, after the one on the binary cache:
@@ -113,7 +113,7 @@ The usage text gains one paragraph, after the one on the binary cache:
  post-build hook uploads what this run built as it goes; the push adds the
  rest. Skipped on the Mac.
 +
-+After the pull it runs tstack's \`memo sync --all\`, which fetches and pushes
++After the switch it runs tstack's \`memo sync --all\`, which fetches and pushes
 +the \`memo\` bookmark of every repository that has notes on this machine, and
 +this repo's, which carries the machine, group and user notes. A machine
 +without tstack skips it.
