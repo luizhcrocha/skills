@@ -83,6 +83,25 @@ class PeekTest(unittest.TestCase):
         self.assertNotIn(b"bmV2ZXIgc2VydmVk", body)
         self.assertNotIn(b"never%20served", body)
 
+    def test_a_mermaid_block_arrives_drawn_and_a_broken_one_stays_code(self):
+        self.tool("pandoc")
+        mmdc = self.bin_dir / "mmdc"
+        mmdc.write_text(
+            "#!/bin/sh\n"
+            "while [ $# -gt 0 ]; do case $1 in -i) i=$2; shift;; -o) o=$2; shift;; esac; shift; done\n"
+            "grep -q broken \"$i\" && exit 1\n"
+            "echo '<svg class=\"drawn\"></svg>' > \"$o\"\n")
+        mmdc.chmod(0o755)
+        (self.bin_dir / "sh").symlink_to(shutil.which("sh"))
+        (self.bin_dir / "grep").symlink_to(shutil.which("grep"))
+        self.doc.write_text("# Model\n\n```mermaid\nflowchart LR\n  A --> B\n```\n\n```mermaid\nbroken\n```\n")
+        [url] = self.peek(str(self.doc))
+        status, kind, body = self.get(url)
+        self.assertEqual(status, 200)
+        self.assertIn(b'<svg class="drawn">', body)
+        self.assertNotIn(b"A --&gt; B", body)
+        self.assertIn(b"broken", body)
+
     def tool(self, *names):
         for name in names:
             found = shutil.which(name)

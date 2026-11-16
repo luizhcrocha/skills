@@ -13,7 +13,8 @@ shows its current content. The server answers only for those links, on
 internet. Quick Look renders only HTML (and images) fetched from a URL; it
 refuses a PDF or an Office file as "cannot be safely displayed" (tested from
 Rex on macOS, 2026-11-16). So the server converts: Markdown to HTML through
-pandoc, in its sandbox, so a page carries no local file the Markdown points to;
+pandoc, in its sandbox, so a page carries no local file the Markdown points to,
+with each ```mermaid block drawn as inline SVG by mmdc when it is installed;
 documents (docx, doc, odt, rtf) and spreadsheets (xlsx, xls, ods) to HTML, with
 images inlined, through headless LibreOffice on the serving machine. Without
 LibreOffice a docx falls back to pandoc's HTML, and other files go out as they
@@ -29,6 +30,7 @@ import http.server
 import json
 import mimetypes
 import os
+import re
 import shutil
 import signal
 import tempfile
@@ -98,18 +100,46 @@ def resolve(url_path):
     return (source, view) if source.is_file() else None
 
 
+MERMAID_BLOCK = re.compile(r"^```mermaid[ \t]*\n(.*?)^```[ \t]*$", re.MULTILINE | re.DOTALL)
+
+
+def mermaid_svg(mmdc, diagram):
+    with tempfile.TemporaryDirectory() as tmp:
+        src, out = Path(tmp) / "d.mmd", Path(tmp) / "d.svg"
+        src.write_text(diagram)
+        try:
+            run = subprocess.run([mmdc, "-q", "-i", str(src), "-o", str(out)],
+                                 capture_output=True, timeout=60)
+        except subprocess.TimeoutExpired:
+            return None
+        return out.read_text() if run.returncode == 0 and out.exists() else None
+
+
+def draw_mermaid(text):
+    """Each ```mermaid block becomes its SVG, since Quick Look runs no Mermaid; a block mmdc cannot draw stays as code."""
+    mmdc = shutil.which("mmdc")
+    if not mmdc:
+        return text
+
+    def draw(match):
+        svg = mermaid_svg(mmdc, match.group(1))
+        return f'\n<div class="mermaid-diagram">\n{svg}\n</div>\n' if svg else match.group(0)
+
+    return MERMAID_BLOCK.sub(draw, text)
+
+
 def render_markdown(source):
+    text = source.read_text(errors="replace")
     pandoc = shutil.which("pandoc")
     if pandoc:
         run = subprocess.run(
             [pandoc, "--standalone", "--sandbox", "--metadata", f"title={source.name}",
-             "--from", "gfm", "--to", "html5", str(source)],
-            capture_output=True, timeout=30,
+             "--from", "gfm", "--to", "html5"],
+            input=draw_mermaid(text).encode(), capture_output=True, timeout=120,
         )
         if run.returncode == 0:
             return run.stdout
-    text = html.escape(source.read_text(errors="replace"))
-    return f"<!doctype html><meta charset=utf-8><title>{html.escape(source.name)}</title><pre>{text}</pre>".encode()
+    return f"<!doctype html><meta charset=utf-8><title>{html.escape(source.name)}</title><pre>{html.escape(text)}</pre>".encode()
 
 
 DOCUMENTS = {".docx", ".doc", ".odt", ".rtf"}
@@ -166,7 +196,7 @@ def pandoc_docx(source):
 def convert(source, view):
     suffix = source.suffix.lower()
     if suffix in (".md", ".markdown"):
-        return render_markdown(source), "text/html; charset=utf-8"
+        return cached(source, "md.html", render_markdown), "text/html; charset=utf-8"
     if view != ".html":
         return None
     if suffix in SHEETS:
