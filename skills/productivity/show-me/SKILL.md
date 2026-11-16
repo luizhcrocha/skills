@@ -43,7 +43,7 @@ src/
 └── transport/      # sends API requests
 ```
 
-- Show component interaction, control flow, or data flow with Mermaid:
+- Show component interaction, control flow, or data flow with Mermaid. Label an edge `A -->|label| B`, never `A -- label --> B`: `mermaid-ascii` (the terminal renderer) reads the second form as a node.
 
 ```mermaid
 sequenceDiagram
