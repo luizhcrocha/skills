@@ -258,8 +258,8 @@ def atomic_write(path, content):
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.parent / f".tmp-{os.getpid()}-{os.urandom(4).hex()}"
     try:
-        with open(tmp, "w", encoding="utf-8") as f:
-            f.write(content)
+        with open(tmp, "wb") as f:
+            f.write(content if isinstance(content, bytes) else content.encode("utf-8"))
             f.flush()
             os.fsync(f.fileno())
         os.replace(tmp, path)
@@ -1622,6 +1622,326 @@ def start_text(env, cwd):
     return text
 
 
+# --- the bookmark: the exchange with a `memo` bookmark --------------------------------------------------
+
+SYNC_TIMEOUT = 20
+SYNC_TRIES = 3
+FETCHED = "refs/memo/remote"
+_RECORD_PATH = re.compile(r"^(?:notes|summaries|retired)/(?:[0-9A-HJKMNP-TV-Z]{4}/)?[0-9A-HJKMNP-TV-Z]{26}\.md$")
+
+
+class SyncResult(NamedTuple):
+    remote: str
+    outcome: str  # "synced", "no-remote", "no-answer", "refused-3-times" or "busy"
+    fetched: int = 0
+    pushed: int = 0
+    waiting: int = 0
+    why: str = ""
+
+
+class Waiting(NamedTuple):
+    count: int
+    oldest_at: str  # "" when count is 0
+
+
+class NoAnswer(Exception):
+    """The remote did not answer in time, refused the connection, or git is missing. The stores stay as they were."""
+
+
+def home_remote(env, local):
+    """The dotfiles' bookmark: their own repo store at the root of its tree, and user/, machine/<name>/ and
+    group/<name>/ beside it. None when memo.toml names no home_remote."""
+    key = normalize_remote(local.home_remote or "")
+    return Remote(local.home_remote, key, git_dir_of(env, key), True) if key else None
+
+
+def _subdirs(base):
+    try:
+        with os.scandir(base) as it:
+            return sorted(e.name for e in it if e.is_dir(follow_symlinks=False) and not e.name.startswith("."))
+    except (FileNotFoundError, NotADirectoryError):
+        return []
+
+
+def store_roots(env, remote):
+    """(prefix in the bookmark's tree, local folder) for each store the bookmark carries that this machine has.
+    Only home/: a legacy folder is never synced, so a v1 global note cannot reach user/ before the migration
+    re-files it."""
+    roots = [("", repo_dir(env, remote.key))]
+    if remote.home:
+        home = memo_home(env)
+        roots.append(("user/", home / "user"))
+        for kind in ("machine", "group"):
+            roots += [(f"{kind}/{n}/", home / kind / n) for n in _subdirs(home / kind) if _NAME_RE.match(n)]
+    return roots
+
+
+def local_files(env, remote):
+    """{path in the bookmark's tree: local file} for every record file of the stores the bookmark carries."""
+    out = {}
+    for prefix, base in store_roots(env, remote):
+        for rel in list_names(base):
+            if _RECORD_PATH.match(rel):
+                out[prefix + rel] = base / rel
+    return out
+
+
+def local_file_of(env, remote, path):
+    """The local file for a path of the bookmark's tree, or None for a path that is no record of a store."""
+    base, rest = repo_dir(env, remote.key), path
+    if remote.home:
+        parts = path.split("/")
+        if parts[0] == "user":
+            base, rest = memo_home(env) / "user", "/".join(parts[1:])
+        elif parts[0] in ("machine", "group") and len(parts) > 2 and _NAME_RE.match(parts[1]):
+            base, rest = memo_home(env) / parts[0] / parts[1], "/".join(parts[2:])
+    return base / rest if _RECORD_PATH.match(rest) else None
+
+
+def _git(env, remote, *args, stdin=None, timeout=None, index=None):
+    """git on memo's own bare directory, with no hook, no signature and no prompt. (code, stdout bytes, stderr).
+    Raises NoAnswer when the time limit passes, after killing git and its ssh."""
+    import signal
+    import subprocess
+    argv = ["git", "-c", "core.hooksPath=/dev/null", "-c", "commit.gpgsign=false", "-c", "push.gpgSign=false",
+            "-c", "user.name=memo", "-c", "user.email=memo@localhost", "--git-dir", str(remote.git_dir), *args]
+    run_env = {**env, "GIT_TERMINAL_PROMPT": "0", **({"GIT_INDEX_FILE": str(index)} if index else {})}
+    try:
+        p = subprocess.Popen(argv, env=run_env, stdin=subprocess.PIPE if stdin is not None else subprocess.DEVNULL,
+                             stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=True)
+    except OSError as e:
+        raise NoAnswer(f"git does not run: {e}") from None
+    try:
+        out, err = p.communicate(stdin, timeout=timeout)
+    except subprocess.TimeoutExpired:
+        try:
+            os.killpg(p.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        p.communicate()
+        raise NoAnswer(f"no answer in {timeout} seconds") from None
+    return p.returncode, out, err.decode("utf-8", "replace")
+
+
+def _ok(env, remote, *args, **kw):
+    code, out, err = _git(env, remote, *args, **kw)
+    if code != 0:
+        raise NoAnswer(f"git {args[0]} failed: {_git_error(err)}")
+    return out
+
+
+def _git_error(text):
+    """git's own reason: its first fatal or error line, else its last line."""
+    lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
+    told = [ln.split(":", 1)[1].strip() for ln in lines if ln.startswith(("fatal:", "error:"))]
+    return (told or lines or ["no message"])[0 if told else -1].rstrip(".")
+
+
+def _fetched(env, remote):
+    """The commit of the last fetched bookmark, or None."""
+    if not (remote.git_dir / "HEAD").exists():
+        return None
+    code, out, _ = _git(env, remote, "rev-parse", "-q", "--verify", f"{FETCHED}^{{commit}}")
+    return out.decode().strip() if code == 0 else None
+
+
+def _tree_paths(env, remote, commit):
+    if commit is None:
+        return set()
+    out = _ok(env, remote, "ls-tree", "-r", "-z", "--full-tree", "--name-only", commit)
+    return {p.decode("utf-8", "surrogateescape") for p in out.split(b"\0") if p}
+
+
+def _fetch(env, remote, timeout_s):
+    code, _, err = _git(env, remote, "fetch", "--no-tags", "--no-write-fetch-head", "-q", remote.url,
+                        f"+refs/heads/memo:{FETCHED}", timeout=timeout_s)
+    if code == 0:
+        return _fetched(env, remote)
+    if "couldn't find remote ref" in err:
+        _git(env, remote, "update-ref", "-d", FETCHED)
+        return None
+    raise NoAnswer(_git_error(err))
+
+
+def _import(env, remote, commit, tree):
+    """Write into the local stores every record file of the bookmark that they lack. The count written."""
+    have = local_files(env, remote)
+    wanted = [(p, local_file_of(env, remote, p)) for p in sorted(tree - set(have))]
+    wanted = [(p, f) for p, f in wanted if f is not None and not f.exists()]
+    if not wanted:
+        return 0
+    out = _ok(env, remote, "cat-file", "--batch", stdin="".join(f"{commit}:{p}\n" for p, _ in wanted).encode())
+    at = 0
+    for _, target in wanted:
+        end = out.index(b"\n", at)
+        size = int(out[at:end].split()[2])
+        atomic_write(target, out[end + 1:end + 1 + size])
+        at = end + 1 + size + 1
+    return len(wanted)
+
+
+def _commit(env, remote, parent, tree, machine):
+    """One commit on top of parent whose tree is the bookmark's and the local files it lacks, or None when it
+    lacks none. The tree starts from the bookmark's, so no path of the bookmark can leave or change."""
+    new = {p: f for p, f in local_files(env, remote).items() if p not in tree}
+    if not new:
+        return None, 0
+    index = remote.git_dir / f"index.{os.getpid()}"
+    try:
+        _ok(env, remote, *(("read-tree", parent) if parent else ("read-tree", "--empty")), index=index)
+        paths = sorted(new)
+        shas = _ok(env, remote, "hash-object", "-w", "--stdin-paths",
+                   stdin="".join(f"{new[p]}\n" for p in paths).encode()).decode().split()
+        _ok(env, remote, "update-index", "--add", "--index-info", index=index,
+            stdin="".join(f"100644 {sha}\t{p}\n" for sha, p in zip(shas, paths)).encode())
+        tree_id = _ok(env, remote, "write-tree", index=index).decode().strip()
+    finally:
+        index.unlink(missing_ok=True)
+    message = f"memo: {len(new)} record files from {machine or 'a machine with no name'}"
+    commit = _ok(env, remote, "commit-tree", "--no-gpg-sign", tree_id, *(("-p", parent) if parent else ()),
+                 "-m", message).decode().strip()
+    return commit, len(new)
+
+
+def _push(env, remote, commit, timeout_s):
+    """True when the remote took the commit; False when it refused it because another machine pushed first."""
+    code, _, err = _git(env, remote, "push", "-q", "--no-verify", remote.url, f"{commit}:refs/heads/memo",
+                        timeout=timeout_s)
+    if code == 0:
+        return True
+    if any(w in err for w in ("[rejected]", "non-fast-forward", "fetch first", "stale info")):
+        return False
+    raise NoAnswer(_git_error(err))
+
+
+def _lock(f, timeout_s):
+    import fcntl
+    deadline = time.monotonic() + timeout_s
+    while True:
+        try:
+            fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            return True
+        except BlockingIOError:
+            if time.monotonic() >= deadline:
+                return False
+            time.sleep(0.1)
+
+
+def sync_bookmark(remote, env, machine=None, timeout_s=None):
+    """Fetch the bookmark, import by union into each of its stores, commit what the bookmark lacks, push without
+    force, and repeat after a refused push, SYNC_TRIES times at most. Holds a lock file for the remote. Every
+    outcome but "synced" leaves the local stores whole; none raises for the network."""
+    if remote is None or not remote.url:
+        return SyncResult(remote.key if remote else "", "no-remote")
+    timeout_s = SYNC_TIMEOUT if timeout_s is None else timeout_s
+    remote.git_dir.parent.mkdir(parents=True, exist_ok=True)
+    fetched = 0
+    with open(remote.git_dir.with_suffix(".lock"), "a") as lock:
+        if not _lock(lock, timeout_s):
+            return SyncResult(remote.key, "busy", waiting=waiting(remote, env).count)
+        try:
+            if not (remote.git_dir / "HEAD").exists():
+                _ok(env, remote, "init", "-q", "--bare")
+            for _ in range(SYNC_TRIES):
+                parent = _fetch(env, remote, timeout_s)
+                tree = _tree_paths(env, remote, parent)
+                fetched += _import(env, remote, parent, tree)
+                commit, n = _commit(env, remote, parent, tree, machine)
+                if commit is None:
+                    return SyncResult(remote.key, "synced", fetched)
+                if _push(env, remote, commit, timeout_s):
+                    _ok(env, remote, "update-ref", FETCHED, commit)
+                    return SyncResult(remote.key, "synced", fetched, n)
+            return SyncResult(remote.key, "refused-3-times", fetched, waiting=waiting(remote, env).count)
+        except NoAnswer as e:
+            return SyncResult(remote.key, "no-answer", fetched, waiting=waiting(remote, env).count, why=str(e))
+
+
+def waiting(remote, env):
+    """The record files that the last fetched bookmark lacks. No network."""
+    try:
+        tree = _tree_paths(env, remote, _fetched(env, remote))
+    except NoAnswer:
+        tree = set()
+    ids = sorted(Path(p).stem for p in local_files(env, remote) if p not in tree)
+    return Waiting(len(ids), ulid_date(ids[0]) if ids else "")
+
+
+def sync_targets(m, every):
+    """(the bookmarks `memo sync` exchanges, the repository keys whose store has no remote). The session's repo and
+    the dotfiles' bookmark, or with every, each repository with a store on this machine. A repository's url is the
+    one its sessions recorded beside memo's git directory."""
+    env, s = m.env, m.session
+    remotes, local_only = {}, []
+    if every:
+        base = memo_home(env) / "repo"
+        for owner in _subdirs(base):
+            for name in _subdirs(base / owner):
+                key = f"{owner}/{name}"
+                if owner == "_local":
+                    local_only.append("/" + name.replace("__", "/"))
+                    continue
+                url = _read(git_dir_of(env, key).with_suffix(".origin"))
+                if url:
+                    remotes[key] = Remote(url, key, git_dir_of(env, key))
+                else:
+                    local_only.append(key)
+    elif s.repo is not None:
+        if s.remote is not None:
+            remotes[s.remote.key] = s.remote
+        else:
+            local_only.append(s.repo.scope.name)
+    home = home_remote(env, s.local)
+    if home is not None:
+        remotes[home.key] = home
+        if home.key in local_only:
+            local_only.remove(home.key)
+    return list(remotes.values()), local_only
+
+
+def _n(n, word):
+    return f"{n:,} {word}" if n == 1 else f"{n:,} {word}s"
+
+
+def sync_line(res, url):
+    where = f"{res.remote:<28} "
+    wait = f"{_n(res.waiting, 'file')} {'waits' if res.waiting == 1 else 'wait'} here for the next sync."
+    if res.outcome == "synced":
+        return where + f"fetched {_n(res.fetched, 'file')}, pushed {_n(res.pushed, 'file')} to memo"
+    if res.outcome == "no-answer":
+        return where + f"{url}: {res.why}. {wait}"
+    if res.outcome == "refused-3-times":
+        return where + f"{url} refused {SYNC_TRIES} pushes: other machines pushed first. {wait}"
+    return where + f"another sync of this bookmark ran past {SYNC_TIMEOUT} seconds; it is left to the next. {wait}"
+
+
+def sync_lines(m):
+    """`memo doctor`'s lines on the exchange: files that wait for a sync, and stores that have no remote."""
+    remotes, local_only = sync_targets(m, every=False)
+    lines = []
+    for r in remotes:
+        w = waiting(r, m.env)
+        if w.count:
+            lines.append(f"{r.key:<28} {_n(w.count, 'file')} {'waits' if w.count == 1 else 'wait'} for a sync, "
+                         f"the oldest from {w.oldest_at}")
+    lines += [f"repo:{k:<23} no remote: this store exists on this machine only" for k in local_only]
+    if m.session.local.home_remote is None:
+        lines.append("user, machine and group stores: memo.toml names no home_remote, so they exist on this machine "
+                     "only")
+    return lines
+
+
+def cmd_sync(m, a, out):
+    _must_write(m)
+    remotes, local_only = sync_targets(m, a.all)
+    for r in remotes:
+        print(sync_line(sync_bookmark(r, m.env, m.session.local.machine), r.url), file=out, flush=True)
+    for k in local_only:
+        print(f"{k:<28} no remote: the store stays on this machine", file=out)
+    if m.session.local.home_remote is None:
+        print("memo.toml names no home_remote: the user, machine and group stores stay on this machine", file=out)
+
+
 # --- the command line ---------------------------------------------------------------------------------
 
 def _refusal_log(m, reason, text):
@@ -1953,10 +2273,6 @@ def doctor_lines(m, days):
     return lines + (findings or ["no finding"])
 
 
-def sync_lines(m):
-    return []
-
-
 def cmd_doctor(m, a, out):
     for line in doctor_lines(m, a.days):
         print(line, file=out)
@@ -2011,6 +2327,8 @@ def build_parser():
     s.add_argument("--scope")
     s.add_argument("--dry-run", action="store_true")
     add("reindex", cmd_reindex, "rebuild the index from the files")
+    s = add("sync", cmd_sync, "exchange the notes with the `memo` bookmarks: this repository's and the dotfiles'")
+    s.add_argument("--all", action="store_true", help="every bookmark with a store on this machine")
     s = add("doctor", cmd_doctor, "the stores read here with their slices and use, the measures and every finding")
     s.add_argument("--days", type=int, default=14)
     s = add("migrate", cmd_migrate, "the one-time move from memo v1 (docs/design/memo-v2/migration.md)")

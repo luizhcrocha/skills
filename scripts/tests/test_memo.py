@@ -416,5 +416,168 @@ class StartRead(CliCase):
         print(f"\nstart read on 42,000 notes: {sorted(runs)} ms", file=sys.stderr)
 
 
+class Bookmark(unittest.TestCase):
+    """memo sync against bare repositories in a temporary folder, with two machines' stores (design.md, Every store
+    travels on a `memo` bookmark)."""
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.tmp = Path(self._tmp.name).resolve()
+        for key in ("acme/widget", "me/dotfiles"):
+            sh(self.tmp, "git", "init", "-q", "--bare", str(self.tmp / "remotes" / f"{key}.git"))
+        self.envs, self.repos = {}, {}
+        for name in ("box", "mac"):
+            self.machine(name)
+        memo._repo_cache.clear()
+
+    def url(self, key):
+        return f"file://{self.tmp / 'remotes' / key}.git"
+
+    def machine(self, name, origin=None):
+        root = self.tmp / name
+        env = {"HOME": str(root / "home"), "XDG_DATA_HOME": str(root / "data"), "XDG_CACHE_HOME": str(root / "cache"),
+               "XDG_STATE_HOME": str(root / "state"), "XDG_CONFIG_HOME": str(root / "cfg"),
+               "PATH": os.environ.get("PATH", ""), "CLAUDE_CODE_SESSION_ID": f"sess-{name}"}
+        cfg = root / "cfg" / "tstack"
+        cfg.mkdir(parents=True)
+        (cfg / "memo.toml").write_text(f'machine = "{name}"\nhome_remote = "{self.url("me/dotfiles")}"\n')
+        (cfg / "groups.toml").write_text('[groups.tooling]\nabout = "t"\nrepos = ["acme/widget", "me/dotfiles"]\n')
+        for key in ("acme/widget", "me/dotfiles"):
+            repo = root / "src" / key
+            repo.mkdir(parents=True)
+            sh(repo, "git", "init", "-q")
+            sh(repo, "git", "remote", "add", "origin", origin or self.url(key))
+        self.envs[name], self.repos[name] = env, root / "src"
+
+    def memo(self, name, *args, repo="acme/widget"):
+        out = io.StringIO()
+        with contextlib.redirect_stderr(io.StringIO()) as err:
+            code = memo.main(list(args), env=self.envs[name], cwd=str(self.repos[name] / repo), out=out)
+        self.assertEqual(code, 0, err.getvalue())
+        return out.getvalue()
+
+    def home(self, name):
+        return Path(self.envs[name]["XDG_DATA_HOME"]) / "tstack" / "memo" / "home"
+
+    def files(self, name):
+        home = self.home(name)
+        return {str(p.relative_to(home)) for p in home.rglob("*.md")}
+
+    def bookmark(self, key):
+        git = ["git", "--git-dir", str(self.tmp / "remotes" / f"{key}.git")]
+        return set(sh(self.tmp, *git, "ls-tree", "-r", "--name-only", "memo").split())
+
+    def blob(self, key, path):
+        return sh(self.tmp, "git", "--git-dir", str(self.tmp / "remotes" / f"{key}.git"), "show", f"memo:{path}")
+
+    def test_two_machines_that_sync_twice_hold_the_union(self):
+        self.memo("box", "note", "the box writes the first repo note")
+        self.memo("box", "note", "--scope", "user", "Luiz reads a page first")
+        self.memo("mac", "note", "the mac writes another repo note")
+        self.memo("mac", "note", "--scope", "group", "both repos ship from one flake")
+        self.memo("mac", "note", "--scope", "machine", "the mac has no systemd")
+        for _ in range(2):
+            for name in ("box", "mac"):
+                self.memo(name, "sync")
+        self.assertEqual(self.files("box"), self.files("mac"))
+        self.assertEqual(len(self.files("box")), 5)
+        widget = {p.removeprefix("repo/acme/widget/") for p in self.files("box") if p.startswith("repo/acme/widget/")}
+        self.assertEqual(self.bookmark("acme/widget"), widget)
+        self.assertEqual(len(self.bookmark("me/dotfiles")), 3)
+        self.assertIn("the mac writes another repo note", memo.start_text(self.envs["box"],
+                                                                         str(self.repos["box"] / "acme/widget")))
+
+    def test_a_push_on_an_old_fetch_is_refused_and_the_next_try_gets_through_without_force(self):
+        self.memo("box", "note", "the box is second to push")
+        self.memo("mac", "note", "the mac pushes while the box builds its commit")
+        real, raced = memo._push, []
+
+        def race(env, remote, commit, timeout_s):
+            if not raced and remote.key == "acme/widget":
+                raced.append(commit)
+                self.memo("mac", "sync")
+            return real(env, remote, commit, timeout_s)
+
+        with mock.patch.object(memo, "_push", race):
+            out = self.memo("box", "sync")
+        self.assertIn("pushed 1 file to memo", out)
+        git = ["git", "--git-dir", str(self.tmp / "remotes" / "acme/widget.git")]
+        head = sh(self.tmp, *git, "rev-parse", "memo")
+        self.assertNotEqual(head, raced[0], "the commit built on the old fetch never landed")
+        self.assertEqual(len(sh(self.tmp, *git, "rev-list", "memo").split()), 2, "the box's commit is on the mac's")
+        self.assertEqual(len(self.bookmark("acme/widget")), 2)
+
+    def test_no_sync_removes_or_changes_a_path_of_the_bookmark(self):
+        self.memo("box", "note", "a note deleted by hand comes back")
+        self.memo("box", "sync")
+        (path,) = self.bookmark("acme/widget")
+        local = self.home("box") / "repo/acme/widget" / path
+        before = self.blob("acme/widget", path)
+        local.unlink()
+        self.memo("box", "note", "a second note")
+        self.memo("box", "sync")
+        self.assertTrue(local.is_file())
+        self.assertEqual(len(self.bookmark("acme/widget")), 2)
+        local.write_text("edited by hand")
+        self.memo("box", "note", "a third note")
+        self.memo("box", "sync")
+        self.assertEqual(self.blob("acme/widget", path), before)
+        self.assertEqual(local.read_text(), "edited by hand", "the local file stays")
+
+    def test_a_remote_that_does_not_answer_leaves_the_store_and_exits_zero_in_time(self):
+        self.machine("far", origin="ssh://memo-test.invalid/acme/widget.git")
+        ssh = self.tmp / "silent-ssh"
+        ssh.write_text("#!/bin/sh\nexec sleep 30\n")
+        ssh.chmod(0o755)
+        self.envs["far"].update(GIT_SSH_COMMAND=str(ssh))
+        self.memo("far", "note", "this note waits for the next sync")
+        before = self.files("far")
+        started = time.monotonic()
+        with mock.patch.object(memo, "SYNC_TIMEOUT", 1):
+            out = self.memo("far", "sync")
+        self.assertLess(time.monotonic() - started, 10)
+        self.assertIn("no answer in 1 seconds. 1 file waits here for the next sync.", out)
+        self.assertEqual(self.files("far"), before)
+        self.assertIn("1 file waits for a sync", self.memo("far", "doctor"))
+
+    def test_the_dotfiles_bookmark_carries_four_kinds_of_store_and_each_file_lands_in_its_own(self):
+        self.memo("box", "note", "--scope", "user", "a user note")
+        self.memo("box", "note", "--scope", "machine", "a machine note")
+        self.memo("box", "note", "--scope", "group", "a group note")
+        self.memo("box", "note", "a dotfiles note", repo="me/dotfiles")
+        self.memo("box", "sync", repo="me/dotfiles")
+        self.assertEqual({p.split("/")[0] for p in self.bookmark("me/dotfiles")},
+                         {"user", "machine", "group", "notes"})
+        self.memo("mac", "sync", repo="me/dotfiles")
+        kinds = {p.split("/notes/")[0] for p in self.files("mac")}
+        self.assertEqual(kinds, {"user", "machine/box", "group/tooling", "repo/me/dotfiles"})
+        self.assertEqual(self.files("box"), self.files("mac"))
+
+    def test_sync_all_takes_every_repository_with_a_store_and_doctor_counts_what_waits(self):
+        self.memo("box", "note", "a widget note")
+        self.assertIn("1 file waits for a sync", self.memo("box", "doctor"))
+        plain = self.tmp / "plain"
+        plain.mkdir()
+        with contextlib.redirect_stderr(io.StringIO()):
+            self.assertEqual(memo.main(["sync", "--all"], env=self.envs["box"], cwd=str(plain), out=io.StringIO()), 0)
+        self.assertEqual(len(self.bookmark("acme/widget")), 1)
+        self.assertNotIn("for a sync", self.memo("box", "doctor"))
+
+    def test_a_store_with_no_remote_stays_local_and_a_worker_does_not_sync(self):
+        self.machine("lone", origin="")
+        sh(self.repos["lone"] / "acme/widget", "git", "remote", "remove", "origin")
+        (Path(self.envs["lone"]["XDG_CONFIG_HOME"]) / "tstack" / "memo.toml").write_text('machine = "lone"\n')
+        self.memo("lone", "note", "a note with nowhere to go")
+        out = self.memo("lone", "sync")
+        self.assertIn("no remote", out)
+        self.assertIn("no home_remote", out)
+        self.assertIn("exists on this machine only", self.memo("lone", "doctor"))
+        with contextlib.redirect_stderr(io.StringIO()):
+            code = memo.main(["sync"], env={**self.envs["box"], "TSTACK_ROLE": "worker"},
+                             cwd=str(self.repos["box"] / "acme/widget"), out=io.StringIO())
+        self.assertEqual(code, memo.EXIT_ROLE)
+
+
 if __name__ == "__main__":
     unittest.main()
