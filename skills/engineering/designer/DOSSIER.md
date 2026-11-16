@@ -2,7 +2,7 @@
 
 Read from the designer's [SKILL.md](SKILL.md) when you start the dossier, record a gate, change a version, or resume.
 
-`docs/design/<slug>/dossier.md` is the designer's record and the only source of the phase. A compacted or resumed designer reads it and knows where it stands; launch reads its approvals and nothing else. Write each entry the moment its event happens.
+`docs/design/<slug>/dossier.md` is the designer's record and the only source of the phase. A compacted or resumed designer reads it and knows where it stands; launch reads its approvals and nothing else. Write it at three moments, each the moment it happens: an answer from Luiz (**Conversation**, in his words), a gate (**Approvals** and the phase), and a new design version (the versions, **Artifacts** and the **Interfaces** card). Progress between those lives in the design files themselves. Measured on 2026-11-16: designers edited the dossier up to 25 times a session, and each edit re-read a context of 260k to 380k tokens.
 
 The gates follow a checked model: [references/lifecycle.tla](references/lifecycle.tla) with its config and view. TLC holds the invariants in [references/lifecycle.cfg](references/lifecycle.cfg). Rerun it through the statechart skill when you change how the gates work.
 
