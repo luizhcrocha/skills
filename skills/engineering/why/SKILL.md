@@ -70,6 +70,6 @@ Present the synthesizer's output with light edits for clarity or conversation co
 
 The structure is the synthesizer's: The Question, The Code in Question, What We Found, What We Can Reasonably Infer, Competing Hypotheses, What We Don't Know, Sources Consulted (one line per category, the empty and skipped ones with their reason), Confidence Summary. When the question precedes changing this code, add a **Preserve / Change / Avoid / Risk** set drawn from the findings, ready for planning.
 
-A durable rationale the answer established (a decision and its reason, not recorded anywhere a later session reads) becomes a memo note of kind `decision` (the `memo` skill), unless memo already has it.
+A durable rationale the answer established (a decision and its reason, not recorded anywhere a later session reads) becomes a memo note (the `memo` skill), unless memo already has it.
 
 **Recency bias** is the failure to watch for: the newest change is rarely the whole reason. The current shape is usually an accretion of earlier decisions; trace back.

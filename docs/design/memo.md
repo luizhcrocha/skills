@@ -1,7 +1,7 @@
 # memo: tstack's memory
 
-Status: draft for review. Replaces claude-mem (D5 in [tstack-plan](../tstack-plan.md)).
-Open choices are marked **[choose]**; everything else is the proposal.
+Status: memo v1, replaced by memo v2 ([memo-v2/design.md](memo-v2/design.md), approved 2026-11-16).
+This file stays as the record of v1, which replaced claude-mem (D5 in [tstack-plan](../tstack-plan.md)).
 
 ## What it is for
 

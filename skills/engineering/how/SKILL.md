@@ -36,4 +36,4 @@ Present the explainer's output with light edits for clarity or context from the 
 
 ## 6. Keep the gotchas
 
-Every non-obvious Gotcha the explanation surfaced (surprising behavior, a trap, a historical artifact that still bites) becomes a memo note of kind `gotcha` (the `memo` skill), one self-contained line each, unless memo already has it. The explanation itself stays in the chat.
+Every non-obvious Gotcha the explanation surfaced (surprising behavior, a trap, a historical artifact that still bites) becomes a memo note when it passes memo's admission rule (the `memo` skill), one self-contained line each, unless memo already has it. The explanation itself stays in the chat.

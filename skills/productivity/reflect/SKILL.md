@@ -1,6 +1,6 @@
 ---
 name: reflect
-description: Mine this session's transcript for durable learnings through three reviewers and a synthesizer, then land the approved skill edits as a jj change in the tstack repo and the rest as memo notes.
+description: Mine this session's transcript for durable learnings through three reviewers and a synthesizer, then land the approved skill edits as a jj change in the tstack repo, the approved facts as memo notes and the approved backlog rows as issues.
 disable-model-invocation: true
 ---
 
@@ -46,7 +46,7 @@ Sanity-check the synthesizer's Accepted list. For any item that would be enforce
 
 ## 5. Apply
 
-Present the synthesizer's full Accepted / Rejected / Backlog output to Luiz and wait for explicit approval. He picks the subset to apply and may redirect routings. Skill changes affect every future session: nothing is applied before his answer.
+Present the synthesizer's full Accepted / Rejected / Backlog output to Luiz and wait for explicit approval. He approves Accepted and Backlog rows one by one, and may redirect routings. Skill changes affect every future session, and a backlog row becomes an issue that people read, often in a public repo: nothing is applied or filed before his answer.
 
 Skill edits land as **one jj change in the repo that owns the skill**, in a jj workspace of its own, never in a workspace another session uses. For tstack skills that repo is `~/repos/luizhcrocha/skills`:
 
@@ -58,11 +58,11 @@ cd ~/repos/luizhcrocha/skills; jj workspace add ../skills-reflect -r 'trunk()' -
 
 - Trivial skill edit (a one-line bullet, a tightened sentence, a stale fact corrected): make it directly.
 - Substantive skill edit (a new section, a new table, more than ~10 lines), `tune description: <skill path>`, or `new skill: <kebab-name>`: write it under `tstack:writing-for-agents` (SKILL-MECHANICS.md for descriptions and invocation) and tuca-mode's Authoring a skill playbook. A new skill is registered the way the repo's `AGENTS.md` or `CLAUDE.md` says (plugin.json, the top-level and bucket READMEs).
-- `memo <kind>`: a durable project fact, gotcha or decision that is not a skill edit becomes a memo note in the project it is about (`tstack:memo`).
+- `memo <scope>`: a durable project fact, gotcha or decision that is not a skill edit becomes a memo note in the scope of the project it is about (`tstack:memo`).
 
 In the tstack workspace, run `just test-changed` (the suites your change touches, `just validate` among them for prose), describe the change in the repo's style (`jj log` shows it; `tstack:unslop` for the words) naming what each edit fixes, then `jj new`. Never push or move a bookmark: the change is for Luiz to review, and landing it is his call or a Land run he asks for.
 
-Backlog items do not wait for approval: each becomes a memo `open` note in the owning repo's workspace (the pattern, what was hit, the suggested mechanism, one line), so it ships inside the same change. An item whose mechanism is a lint rule then goes to `tstack:lint-evolve`, with the note's id as its evidence.
+Backlog rows are work, not knowledge, so none becomes a memo note. Only the rows Luiz approved go anywhere. An approved row whose mechanism is a lint rule goes to `tstack:lint-evolve`, with this session's id as its evidence. Every other approved row becomes an issue in the owning repo's tracker (`tstack:to-issues`): the pattern, what was hit, the suggested mechanism. A row he did not approve is dropped.
 
 ## 6. Summarize for Luiz
 
@@ -71,5 +71,6 @@ Short list, no preamble:
 - Change: `<change id>` in `<workspace path>`, with the `just test-changed` result.
 - Edits applied: `<skill path>`. What changed, one line each.
 - New skills: `<skill path>`. One line each (rare).
-- Memo notes: `<id>` `<kind>`, one line each, backlog `open` notes included.
-- Dropped: one line per rejected finding and the synthesizer's reason.
+- Memo notes: `<id>` and its scope, one line each.
+- Backlog: for each approved row, the issue filed or the lint-evolve run started, one line each.
+- Dropped: one line per rejected finding and the synthesizer's reason, and one line per backlog row Luiz did not approve.

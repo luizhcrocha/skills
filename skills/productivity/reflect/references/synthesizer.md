@@ -42,7 +42,7 @@ Output exactly the format below. No preamble, no narration. One sentence per cel
 | <failure mode in a skill the parent used> | <change to that skill's body> | <skill path + section> |
 | <skill existed but didn't trigger> | <tune the skill's description so it fires next time> | <tune description: <skill path>> |
 | <new pattern, no existing skill is a real home> | <draft a new skill> | <new skill: <kebab-name>> |
-| <durable fact about the project that no skill should carry> | <the one-line note> | <memo <decision|gotcha|fact|preference>> |
+| <durable fact about the project that no skill should carry> | <the one-line note> | <memo <scope>> |
 
 One row per finding. The user approves row by row.
 
@@ -54,4 +54,8 @@ For each rejected finding:
 
 ## Backlog
 
-For each item, describe the pattern, what was hit, and the suggested mechanism. The parent files each as a memo `open` note.
+| Pattern | What was hit | Mechanism | Routing |
+|---|---|---|---|
+| <the recurring pattern> | <where this session hit it> | <the lint rule, script, test, hook or check that would enforce it> | <issue: <owner/repo>> or <lint-evolve> |
+
+One row per item. The user approves these rows with the Accepted ones, row by row. The parent files an issue or starts lint-evolve only for an approved row.

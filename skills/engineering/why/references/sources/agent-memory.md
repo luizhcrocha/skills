@@ -4,11 +4,11 @@
 
 What earlier agent sessions learned and decided, often the only record of a decision made in a session that never reached a doc.
 
-- **memo**: deliberate one-line notes kept in the repo (`.tstack/memo/`), each of a kind: `decision` (a choice and its reason), `gotcha`, `preference`, `fact`, `open`; plus summaries that fold several notes into one line. Global notes live outside the repo.
+- **memo**: deliberate one-line notes of knowledge (a choice and its reason, a trap, a preference, a fact), each in one scope: a repository, a machine, a group of repositories, or the user. The stores live outside every checkout. Summaries quote the notes they keep. Notes from before memo v2 also carry a kind (`decision`, `gotcha`, `preference`, `fact`, `open`), and an old summary has a rewritten line of its own.
 - **The claude-mem archive**: automatic observations and session summaries from before memo (archived 2026-09-30, read-only).
 - **Fleet ledgers**: the `state.json` of coordinator sessions, whose `decisions` hold questions put to Luiz with the options, his answer and how it was resolved.
 
-A memo `decision` note is written on purpose and states its reason: close to Direct evidence. claude-mem observations are machine narration: treat them as circumstantial unless one quotes the user or a decision.
+A memo note that states a choice and its reason is written on purpose: close to Direct evidence. An old summary's rewritten line is a model's paraphrase: check it against the notes it covers (`memo zoom`). claude-mem observations are machine narration: treat them as circumstantial unless one quotes the user or a decision.
 
 ## How to search it
 
@@ -17,12 +17,12 @@ Read only. Never write a note, open the archive writable, or run a state command
 **memo** (on the Bash PATH through the tstack plugin):
 
 ```
-memo recall <words>          # the project's and the global notes
-memo recall <words> --all    # every repo indexed on this machine
+memo recall <words>          # the stores this session reads
+memo recall <words> --all    # every store on this machine
 memo zoom <ID>               # what a summary covers
 ```
 
-A note marked `superseded by` is history: report both, the newer one as current. The notes are files, so their history is in the repo too (`jj log -r '::@' -- .tstack/memo`): the change that added a note usually carries the work it came from.
+A superseded or retired note is history: report it with what replaced it or why it was retired, and the newer note as current. Notes written before memo v2 sit in the repo's history up to the change that removed `.tstack/memo/` (`jj log -r '::@' -- .tstack/memo`), and the change that added such a note usually carries the work it came from.
 
 **The claude-mem archive**, when `~/.local/share/claude-mem-archive/claude-mem.db` exists (the `recall` skill's third source), opened read-only:
 
@@ -50,8 +50,8 @@ A decided row (`status: decided`) with its `why`, `answer` and `resolution` reco
 
 ## What good evidence looks like here
 
-- A memo `decision` note naming the target: "Chose X over Y because Z"
-- A `gotcha` note describing the trap the target's code avoids
+- A memo note naming the target: "Chose X over Y because Z"
+- A memo note describing the trap the target's code avoids
 - A claude-mem `decision` observation or session summary whose `learned` field names the choice, dated just before the change
 - A ledger decision whose question and answer match the target's shape
 
@@ -66,6 +66,6 @@ A decided row (`status: decided`) with its `why`, `answer` and `resolution` reco
 
 For each relevant item:
 - Store (memo / claude-mem / ledger) and ID (memo `Q4KT23`, claude-mem `#6622`, ledger path and decision id)
-- Kind and date
+- Scope (memo), kind (claude-mem, or an old memo note) and date
 - The line, quoted (paraphrased, for company content)
 - Whether it is a deliberate decision record or narration

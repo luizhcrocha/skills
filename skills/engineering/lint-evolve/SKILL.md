@@ -17,10 +17,10 @@ Collect every instance of the lesson: the bad code as it happened (repo, path, l
 
 | source | where the instance is | ref |
 |---|---|---|
-| reflect | a Backlog item, filed as a memo `open` note | `reflect:<memo id>` |
+| reflect | a Backlog item, filed as an issue or handed here | `reflect:<session id>` |
 | review | a finding in the report, with its `Caught by: lint`, and the diff it quotes | `review:<repo> <change id>` |
 | comment-sicko | a `MUST KILL` flag from `/no-comments` | `comment-sicko:<repo> <path>:<line>` |
-| memo | a `gotcha` note (`memo recall <words>`) | `memo:<id>` |
+| memo | a note that names the trap (`memo recall <words>`) | `memo:<id>` |
 | automate-me | a `mechanical: yes` pattern with its sessions | `automate-me:<session id>` |
 | a repo, a skill, a session | the code, a lang-* rule, a transcript | `repo:<name> <path>:<line>`, `skill:<name> <file>`, `session:<id>` |
 

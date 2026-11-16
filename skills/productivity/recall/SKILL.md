@@ -19,7 +19,7 @@ Search each source below that bears on the question, then reply with a short ans
 
 ### Sources, in order
 
-1. **memo**, the deliberate notes and summaries. `memo recall <words>` searches the project and global stores (`--all`: every repo indexed on this machine); `memo zoom <ID>` expands a summary into what it covers. A result marked `superseded by` is history: cite the note that replaced it. `--live` leaves those out, and `--limit` then counts only live hits.
+1. **memo**, the deliberate notes and summaries. `memo recall <words>` searches the stores this session reads (`--all`: every store on this machine); `memo zoom <ID>` expands a summary into what it covers. A superseded or retired result is history: cite the note that replaced it, or the reason it was retired. `--live` leaves those out, and `--limit` then counts only live hits.
 2. **tape**, the automatic record of every session turn on this machine (tstack's `bin/tape`). Run `tape build` (it reads only the turns finished since the last build), then `tape search <words>`; `tape zoom <id>` opens that turn's digest, `--raw` its transcript. Each line is built from the transcript with no model (prompt head, files edited, reply head), so it can be quoted. Work done inside subagents may not show: a miss here is not an absence. Cite as `tape <id>`.
 3. **`jj log`**: descriptions carry the why of each change. Search them with a revset, e.g. `jj log -r 'description(substring-i:"hook")' --no-graph -T 'change_id.short() ++ " " ++ description.first_line() ++ "\n"'`; `jj show <change>` for one change. In a plain git repo, `git log --grep=<word> -i --oneline`.
 4. **claude-mem archive**, the automatic observations of sessions before memo, when the file exists (`~/.local/share/claude-mem-archive/claude-mem.db`, archived 2026-09-30; claude-mem is retired). Open it **read-only** and never write to it:
@@ -88,7 +88,7 @@ Verify what the mining surfaced against the repo as it is now:
 
 - `jj log -r 'trunk()..' --no-graph -T 'change_id.short() ++ " " ++ if(empty, "(empty) ", "") ++ working_copies ++ " " ++ bookmarks ++ " " ++ description.first_line() ++ "\n"'` for unlanded work and the workspace holding it, `jj log -r 'trunk()' -n 1` for what landed last, `jj st`.
 - `gh pr list --state open --author @me` and `gh pr view <n>` for the PRs named; run `gh` from the main workspace (a secondary jj workspace has no `.git`). No GitHub remote: skip it and say so.
-- `memo open` for the open threads.
+- `fleet waiting` (when `fleet` is on PATH) for the decisions and inputs that wait on Luiz, and the dossier of each designer that worked in the window (`docs/design/<slug>/dossier.md`) for a paused design and its gate.
 - Fleet ledgers when a coordinator ran in the window: `fleet ls` (when `fleet` is on PATH), or the `decisions` of a `state.json` under the session scratchpads (the `why` skill's `references/sources/agent-memory.md` shows where).
 
 A change a transcript calls landed is landed only if `trunk()` contains it; a claim of "tests green" is a claim until a check shows it.

@@ -9,7 +9,7 @@ Not a separate source, a **cross-cutting angle**. Incidents often motivate defen
 - **Observability** (Axiom, Cloudflare): alerts, monitors and dashboards created as postmortem action items; the log or metric window of the incident
 - **Error tracking** (error logs in Axiom, Workers exceptions): error classes whose first-seen/last-seen window aligns with the target's ship date, stack traces through the target
 - **Product analytics** (BigQuery, Amplitude, Hex): product-analytics events that classify an error condition (client-reported failures, user-visible retry events, etc.) often spike during an incident window. A drop in that event count after the target PR ships is circumstantial support that the target code resolved the user-visible symptom, even when observability and error-tracking signal is noisy.
-- **Agent memory** (memo, the claude-mem archive, fleet ledgers): `gotcha` and `decision` notes naming the incident, and sessions that worked it
+- **Agent memory** (memo, the claude-mem archive, fleet ledgers): memo notes naming the incident, and sessions that worked it
 
 If you find an incident link, fetch the full postmortem. Postmortems typically have an "Action Items" section that ties directly to code changes. When multiple sources corroborate (an alert appears in a Jira ticket, which appears in a Quip postmortem, which appears in a Slack thread that links to the target PR, and the error-event count drops after the fix), the evidence is especially strong.
 
