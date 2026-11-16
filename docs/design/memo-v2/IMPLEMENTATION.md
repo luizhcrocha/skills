@@ -36,6 +36,21 @@ The migration ran in dry run, then for real, on copies of the six repositories' 
 
 The start read on a generated store of 42,000 notes takes 33 to 38 ms with the index current (target: 100 ms). The first read after the store's file names change takes about 180 ms: it reloads every row to compute the section again.
 
+## Review fixes
+
+The review's lane MEMO (2026-11-16), each Important finding test first, in four changes above the implementation state:
+
+| Change | What it holds |
+| :-- | :-- |
+| The newest note | `View.front`: the newest live note is a root of its own, read word for word even when a summary stands for it after the notes past it were retired, and no summary's lines show or count it. The model's `Front`, a new `newest.cfg`, and every config may retire a newest note ([model.md](model.md), Results) |
+| Writes and reads | `parse_target_scope(env, text, here)`, public for memo-migrate: `repo:` takes `<owner>/<name>` in lower case or the absolute path of a local store. Archives and other checkouts' old folders are read only (`Store.frozen`): a supersede writes in this repository's store or `--scope`, a retire is refused. `--ref` goes through the secret check. `import` checks every row before it writes and dates in UTC. An unreadable folder is skipped and named by doctor. `reindex` drops the cached sections, keyed by `RENDER` |
+| Sync | A path clash (a bookmark file where a record needs a folder, or the reverse) stops that store's sync with outcome `path-clash`, and doctor names it. `--no-filters`, the caller's repository variables dropped, stale `refs/memo/*.lock` cleared, `cannot lock ref` retried, Ctrl-C forwarded. `sync_bookmark` takes `push` and `timeout_s`, which the tests pass instead of patching memo |
+| Small rules | The review's nits and standards; see that change's description |
+
+Choices: `MAX_BYTES` is 840, not 1,120: at 1,120 the newest line does not fit a group's slice of 1,250 bytes over budget, beside the unread-groups line (now at most 200 bytes), the heading and the over line. The sync drops only the variables `git rev-parse --local-env-vars` lists, not every `GIT_*`, so `GIT_SSH_COMMAND` and `GIT_CONFIG_GLOBAL` still reach git. `_flat` stays as a name of `flat` until memo-migrate calls `flat`; `flat` now writes `_` as `_u`, so local stores made before it need a move (none exist outside dry runs).
+
+Not done: the scope-kind switches are not centralized, and only the functions these changes touched gained annotations.
+
 ## Next
 
 1. **The pass** (migration step 3) and **the re-filing** (step 4): the Researchers and the Decider write the TSV files that `memo migrate apply` takes. Nothing in the code is missing for them.
@@ -63,7 +78,7 @@ The start read on a generated store of 42,000 notes takes 33 to 38 ms with the i
 
 ## Open questions
 
-- `memo doctor` does not yet report a path that has two contents (design.md's case table). The sync never changes the bookmark's copy, and the local file stays, so nothing is lost; only the report is missing.
+- `memo doctor` does not yet report a path that has two contents (design.md's case table). The sync never changes the bookmark's copy, and the local file stays, so nothing is lost; only the report is missing. It does report a path clash, where one side holds a file and the other a folder.
 - `memo recall` searches the session's stores and the archive by default, and every indexed store with `--all`.
 
 ## Tests
