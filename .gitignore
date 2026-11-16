@@ -1,2 +1,5 @@
 __pycache__/
 node_modules/
+
+# memo v2 keeps notes in its own home and syncs them on the memo bookmark
+.tstack/memo/
