@@ -10,6 +10,7 @@ A store holds notes/, summaries/ and retired/, each record in the subfolder name
 characters of its ULID. The SQLite index at $XDG_CACHE_HOME/tstack/memo-v2.db is a cache of the files.
 """
 
+import hashlib
 import json
 import math
 import os
@@ -20,14 +21,16 @@ import time
 from pathlib import Path
 from typing import NamedTuple
 
-# argparse, subprocess and tomllib are imported where they are used: the SessionStart hook loads this
-# file on every session and the start read needs none of them.
+# The SessionStart hook loads this file on every session. argparse, calendar, fcntl, signal and subprocess load in
+# the functions that use them, which the start read never calls. tomllib loads only when a file is parsed:
+# memo.toml, groups.toml, or a record file the index lacks.
 
 MAX_CHARS = 280
 SHORT = 6
 FENCE = "+++"
 FOLDERS = ("notes", "summaries", "retired")
 SCHEMA = 3
+RENDER = 2  # bump when select, count_line or the hint words change: the cached sections are keyed by it
 
 HEADER, USER, MACHINE, GROUPS, REPO = 600, 3000, 1900, 2500, 6000
 TOTAL = HEADER + USER + MACHINE + GROUPS + REPO
@@ -312,6 +315,7 @@ class Store(NamedTuple):
     scope: Scope
     dir: Path
     legacy: tuple = ()
+    frozen: bool = False  # an archive or another checkout's old folder: recall reads it, nothing writes there
 
     def path_of(self, folder, ident):
         return self.dir / folder / ident[:4] / f"{ident}.md"
@@ -326,24 +330,29 @@ class Store(NamedTuple):
         return list_names(self.dir)
 
 
-def list_names(base):
+def list_names(base: Path, unreadable: list | None = None) -> frozenset[str]:
     """The relative paths of the record files under base. Listings only: no stat, no read. A file directly in a
-    folder, as the old stores have it, counts too."""
+    folder, as the old stores have it, counts too. A folder that cannot be listed is skipped, and named in
+    unreadable when it is given."""
     out = set()
-    for folder in FOLDERS:
+
+    def listing(path):
         try:
-            with os.scandir(base / folder) as it:
-                for e in it:
-                    if e.name.startswith("."):
-                        continue
-                    if e.name.endswith(".md"):
-                        out.add(f"{folder}/{e.name}")
-                    elif e.is_dir(follow_symlinks=False):
-                        with os.scandir(e.path) as sub:
-                            out.update(f"{folder}/{e.name}/{s.name}" for s in sub
-                                       if s.name.endswith(".md") and not s.name.startswith("."))
+            with os.scandir(path) as it:
+                return [(e.name, e.is_dir(follow_symlinks=False), e.path) for e in it if not e.name.startswith(".")]
         except (FileNotFoundError, NotADirectoryError):
-            pass
+            return []
+        except OSError:
+            if unreadable is not None:
+                unreadable.append(path)
+            return []
+
+    for folder in FOLDERS:
+        for name, is_dir, path in listing(base / folder):
+            if name.endswith(".md"):
+                out.add(f"{folder}/{name}")
+            elif is_dir:
+                out.update(f"{folder}/{name}/{sub}" for sub, _, _ in listing(path) if sub.endswith(".md"))
     return frozenset(out)
 
 
@@ -817,6 +826,9 @@ class Index:
         self.open().execute("insert or replace into reads values (?,?,?,?,?,?,?)",
                             (str(store.dir), slice_bytes, digest, "\n".join(sec.lines), " ".join(sec.items),
                              sec.left_out, int(sec.over)))
+
+    def clear_reads(self):
+        self.open().execute("delete from reads")
 
     def word_counts(self, bases, wanted):
         con = self.open()
@@ -1314,7 +1326,7 @@ class Memo:
         try:
             rel = base.relative_to(memo_home(self.env)).parts
         except ValueError:
-            return Store(Scope("repo", f"archive:{base.name}"), base)
+            return Store(Scope("repo", f"archive:{base.name}"), base, frozen=True)
         if rel[0] == "user":
             return user_store(self.env)
         if rel[0] == "repo":
@@ -1357,7 +1369,16 @@ class Advice(NamedTuple):
     text: str
 
 
-def clean_text(text):
+def no_secret(text: str) -> str:
+    """text, or Refusal("secret") when it looks like one."""
+    for pat in SECRET_PATTERNS:
+        if pat.search(text):
+            raise Refusal("secret", "memo: this looks like a secret. Notes travel to a remote and many sessions "
+                                    "read them; say where the secret lives, not its value.")
+    return text
+
+
+def clean_text(text: str | None) -> str:
     """One line, at most 280 characters, no secret. Raises Refusal("length") or Refusal("secret")."""
     text = " ".join((text or "").split())
     if not text:
@@ -1365,11 +1386,7 @@ def clean_text(text):
     if len(text) > MAX_CHARS:
         raise Refusal("length", f"memo: {len(text)} characters, {len(text) - MAX_CHARS} over the {MAX_CHARS} limit; "
                                 "say the fact and the reason, drop the story.")
-    for pat in SECRET_PATTERNS:
-        if pat.search(text):
-            raise Refusal("secret", "memo: this looks like a secret. Notes travel to a remote and many sessions "
-                                    "read them; say where the secret lives, not its value.")
-    return text
+    return no_secret(text)
 
 
 def _stamp():
@@ -1382,9 +1399,55 @@ def _must_write(m):
                               "durable in your report; your coordinator notes it.")
 
 
+_KEY_PART = re.compile(r"[a-z0-9._-]+")
+
+
+def is_repo_key(name: str) -> bool:
+    """Whether name is a remote's repository key: <owner>/<name>, lower case, as normalize_remote makes it."""
+    parts = name.split("/")
+    return len(parts) == 2 and all(_KEY_PART.fullmatch(x) and x not in (".", "..") for x in parts)
+
+
+def parse_target_scope(env: dict, text: str, here: str | None = None) -> Scope:
+    """The scope `--scope kind:name` names for a write on this machine: user, machine:<this machine's name>,
+    group:<a group of groups.toml>, repo:<owner>/<name> in lower case, or repo:<absolute path> of a checkout with
+    no remote. A repository other than here (the session's repository key) must have a store on this machine.
+    Every name becomes a folder under memo's home, so anything else is a usage Refusal."""
+    try:
+        scope = parse_scope(text)
+    except ValueError as e:
+        raise Refusal("usage", f"memo: {text!r} is not a scope: user, machine, group:<name> or "
+                               "repo:<owner>/<name>") from e
+    if scope.kind == "user":
+        return scope
+    if scope.kind == "machine":
+        if scope.name != load_local(env).machine:
+            raise Refusal("usage", f"memo: {scope} is not this machine; a machine note is written on its machine")
+        return scope
+    if scope.kind == "group":
+        groups = load_groups(groups_path(env))
+        if scope.name not in groups:
+            raise Refusal("usage", f"memo: groups.toml has no group {scope.name} (groups: "
+                                   f"{', '.join(sorted(groups)) or 'none'})")
+        return scope
+    name = scope.name
+    local = name.startswith("/") and os.path.normpath(name) == name and name != "/"
+    if not (local or is_repo_key(name)):
+        raise Refusal("usage", f"memo: {name!r} is not a repository: give repo:<owner>/<name> in lower case, as "
+                               "its remote names it")
+    if name != here and not repo_dir(env, name).is_dir():
+        groups = load_groups(groups_path(env))
+        shared = [g for g in sorted(groups) if name in groups[g].repos and (here is None or here in groups[g].repos)]
+        hint = (f"; a fact for both belongs to a group they share: {', '.join(shared)}" if shared else
+                "; the two share no group")
+        raise Refusal("usage", f"memo: {name} has no store on this machine{hint}")
+    return scope
+
+
 def target_scope(m, text):
     """The scope a --scope value names, for this session. A usage Refusal when it cannot be written here."""
     s = m.session
+    here = s.repo.scope.name if s.repo else None
     if text in (None, "", "repo"):
         if s.repo is None:
             raise Refusal("usage", "memo: outside a repository there is no repo scope; pass --scope user or "
@@ -1400,27 +1463,17 @@ def target_scope(m, text):
             raise Refusal("usage", "memo: name the group, --scope group:<name> (this repository's groups: "
                                    f"{', '.join(s.read_groups) or 'none'})")
         return Scope("group", s.read_groups[0])
-    try:
-        scope = parse_scope(text)
-    except ValueError:
-        raise Refusal("usage", f"memo: {text!r} is not a scope: user, machine, group:<name> or "
-                               "repo:<owner>/<name>") from None
-    if scope.kind == "machine" and scope.name != s.local.machine:
-        raise Refusal("usage", f"memo: {scope} is not this machine; a machine note is written on its machine")
-    if scope.kind == "group" and scope.name not in s.groups:
-        raise Refusal("usage", f"memo: groups.toml has no group {scope.name} (groups: "
-                               f"{', '.join(sorted(s.groups)) or 'none'})")
-    if scope.kind == "repo":
-        if not scope.name.startswith("/"):
-            scope = Scope("repo", scope.name.lower())
-        if (s.repo is None or scope != s.repo.scope) and not repo_dir(m.env, scope.name).is_dir():
-            here = s.repo.scope.name if s.repo else None
-            shared = [g for g in sorted(s.groups) if scope.name in s.groups[g].repos
-                      and (here is None or here in s.groups[g].repos)]
-            hint = (f"; a fact for both belongs to a group they share: {', '.join(shared)}" if shared else
-                    "; the two share no group")
-            raise Refusal("usage", f"memo: {scope.name} has no store on this machine{hint}")
+    scope = parse_target_scope(m.env, text, here)
+    if scope.kind == "group" and here is not None and here not in s.groups[scope.name].repos:
+        mine = [g for g in sorted(s.groups) if here in s.groups[g].repos]
+        raise Refusal("usage", f"memo: {here} is not in group {scope.name}, so this session would not read the note "
+                               f"(this repository's groups: {', '.join(mine) or 'none'})")
     return scope
+
+
+def group_readers(groups: dict, name: str) -> list[str]:
+    """The repositories that read group name at start: those it is among the first MAX_GROUPS groups of."""
+    return [r for r in sorted(groups[name].repos) if any(g.name == name for g in groups_of(r, groups)[0])]
 
 
 def overlap(a, b):
@@ -1443,6 +1496,10 @@ def record_origin(m):
 
 
 def _write(m, store, record):
+    if store.frozen:
+        raise Refusal("usage", f"memo: {store.dir} is an archive or an old store's folder, which no start read "
+                               "shows and no session writes. `memo supersede` writes the correction in this "
+                               "repository's store instead.")
     atomic_write(store.path_of(FOLDER_OF[type(record)], record.id), render_record(record))
     m.forget(store)
     record_origin(m)
@@ -1454,6 +1511,7 @@ def write_note(m, scope_text, text, refs=(), supersedes=()):
     scope_text None is the repo's."""
     _must_write(m)
     text = clean_text(text)
+    refs = tuple(no_secret(r.strip()) for r in refs if r.strip())
     scope = target_scope(m, scope_text)
     store = m.store_of(scope)
     same = next((n for n in m.view(store).live if n.text == text and n.id not in supersedes), None)
@@ -1478,8 +1536,8 @@ def write_note(m, scope_text, text, refs=(), supersedes=()):
     if scope.kind == "user":
         advice.append(Advice("wide-scope", "memo: every session in every repo reads a user note."))
     elif scope.kind == "group":
-        repos = ", ".join(sorted(m.session.groups[scope.name].repos))
-        advice.append(Advice("wide-scope", f"memo: every session in {repos} reads this note."))
+        repos = ", ".join(group_readers(m.session.groups, scope.name)) or "no repository"
+        advice.append(Advice("wide-scope", f"memo: every session in {repos} reads this note at start."))
     elif scope.kind == "machine":
         advice.append(Advice("wide-scope", f"memo: every session on {scope.name} reads this note."))
     elif m.session.repo is None or scope != m.session.repo.scope:
@@ -1513,12 +1571,18 @@ def retire(m, ids, reason):
                                        tuple(dict.fromkeys(r.id for r in recs))))
 
 
-def supersede(m, ids, text):
+def supersede(m, ids, text, scope_text=None):
+    """The note that corrects ids, in their store; for notes of an archive or an old folder, in the store
+    scope_text names (this repository's by default)."""
     _must_write(m)
     text = clean_text(text)
     store, recs = _one_store(m, ids, "supersede")
     if any(not isinstance(r, Note) for r in recs):
         raise Refusal("usage", "memo: only a note is superseded; `memo retire` takes back a summary")
+    if store.frozen:
+        store = m.store_of(target_scope(m, scope_text))
+    elif scope_text is not None and target_scope(m, scope_text) != store.scope:
+        raise Refusal("usage", f"memo: a correction goes in the store of the note it corrects, {store.scope}")
     note = Note(new_ulid(), store.scope, m.by(), _stamp(), text, (), tuple(dict.fromkeys(r.id for r in recs)))
     return _write(m, store, note), store
 
@@ -1563,8 +1627,7 @@ def summarize(m, ids, keep, keep_none=False):
 def names_digest(store):
     """A digest of every record file name the store reads. A record file is never edited, so equal names are equal
     files, and a section computed from them can be reused."""
-    import hashlib
-    h = hashlib.sha1(str(SCHEMA).encode())
+    h = hashlib.sha1(f"{SCHEMA}.{RENDER}".encode())
     for base in store.dirs():
         h.update(b"\0" + str(base).encode() + b"\0")
         h.update("\n".join(sorted(list_names(base))).encode())
@@ -1982,7 +2045,7 @@ def cmd_note(m, a, out):
         note, written, advice = write_note(m, a.scope, parts[0], a.ref)
     except Refusal as e:
         if e.reason in ("length", "secret"):
-            _refusal_log(m, e.reason, parts[0])
+            _refusal_log(m, e.reason, " ".join([parts[0], *a.ref]))
         raise
     if not written:
         print(f"already noted as {note.id} {note.scope}", file=out)
@@ -1997,7 +2060,7 @@ def cmd_supersede(m, a, out):
     *ids, text = a.args
     if not ids:
         raise Refusal("usage", "memo: memo supersede ID... \"<the true line>\"")
-    note, store = supersede(m, ids, text)
+    note, store = supersede(m, ids, text, a.scope)
     print(f"noted {note.id} {note.scope}, superseding " + ", ".join(short(i) for i in note.supersedes), file=out)
     _then_task(m, store, out)
 
@@ -2058,7 +2121,7 @@ def archive_stores(env):
     root = archive_root(env)
     try:
         for d in sorted(p.parent for p in root.glob("*/**/notes") if p.is_dir()):
-            out.append(Store(Scope("repo", f"archive:{d.relative_to(root)}"), d))
+            out.append(Store(Scope("repo", f"archive:{d.relative_to(root)}"), d, frozen=True))
     except OSError:
         pass
     return out
@@ -2131,6 +2194,7 @@ def cmd_export(m, a, out):
 
 
 def cmd_reindex(m, a, out):
+    m.index.clear_reads()
     for store in m.session.stores:
         for base in store.dirs():
             m.index.sync(base, force=True)
@@ -2161,6 +2225,11 @@ def parse_import(text):
             bad.append(f"line {no}: want date<TAB>text<TAB>sources")
             continue
         try:
+            time.strptime(cols[0], "%Y-%m-%d")
+        except ValueError:
+            bad.append(f"line {no}: {cols[0]} is not a day of the calendar")
+            continue
+        try:
             rows.append((cols[0], clean_text(cols[1]), tuple(s.strip() for s in cols[2].split(",") if s.strip())))
         except Refusal as e:
             bad.append(f"line {no}: {e}")
@@ -2171,14 +2240,19 @@ def parse_import(text):
 
 def cmd_import(m, a, out):
     _must_write(m)
-    rows = parse_import(Path(a.file).read_text(encoding="utf-8"))
+    try:
+        content = Path(a.file).read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError) as e:
+        raise Refusal("usage", f"memo: cannot read {a.file}: {e}") from e
+    rows = parse_import(content)
     scope = target_scope(m, a.scope)
     store = m.store_of(scope)
     for date, text, refs in rows:
         if a.dry_run:
             print(f"would note {date} {scope}: {text}", file=out)
             continue
-        ms = int(time.mktime(time.strptime(date, "%Y-%m-%d")) * 1000)
+        import calendar
+        ms = calendar.timegm(time.strptime(date, "%Y-%m-%d")) * 1000
         n = _write(m, store, Note(encode_ulid(ms, _rand80()), scope, m.by(), f"{date}T00:00:00Z", text, refs))
         print(f"noted {n.id} {scope}", file=out)
 
@@ -2228,6 +2302,11 @@ def doctor_lines(m, days):
         new_notes += fresh
         named_commit += sum(1 for n in fresh if LANDED_RE.search(n.text))
         for base in store.dirs():
+            unreadable = []
+            list_names(base, unreadable)
+            if unreadable:
+                findings.append(f"{store.scope}: {_n(len(unreadable), 'folder')} cannot be read, so the start read "
+                                f"skips them: {', '.join(map(str, unreadable))}")
             recs, bad = read_dir(base)
             for rel, err in bad:
                 findings.append(f"{store.scope}: {base / rel} is not a record ({err})")
@@ -2312,6 +2391,7 @@ def build_parser():
     s.add_argument("--ref", action="append", default=[], help="a path or jj change id that is the note's evidence")
     s = add("supersede", cmd_supersede, "write the note that corrects the given ones")
     s.add_argument("args", nargs="+", metavar="ID... TEXT")
+    s.add_argument("--scope", help="for a note of an archive: the store of the correction; default: this repo")
     s = add("retire", cmd_retire, "take notes or summaries out, with the reason")
     s.add_argument("args", nargs="+", metavar="ID... WHY")
     s = add("summarize", cmd_summarize, "answer a compaction task: the ids it lists and the notes to keep")

@@ -364,6 +364,124 @@ class Writing(CliCase):
         m.index.close()
 
 
+
+class WritesStayInTheirStore(CliCase):
+    def notes_on_disk(self):
+        return {str(f.relative_to(self.tmp)) for f in self.tmp.rglob("*.md")}
+
+    def test_a_repo_scope_is_owner_and_name_or_a_local_store(self):
+        self.run_memo("note", "seed so the widget store exists")
+        before = self.notes_on_disk()
+        for bad in ("repo:acme", "repo:..", "repo:../user", "repo:../../../outside", "repo:Acme/Widget",
+                    "repo:acme/widget/", "repo:acme//widget", "repo:/no/such/store", "repo:/tmp/../etc"):
+            code, _, err = self.run_memo("note", "--scope", bad, f"a fact for {bad}")
+            self.assertEqual(code, 2, bad)
+            self.assertIn("memo:", err)
+        self.assertEqual(self.notes_on_disk(), before)
+        self.assertEqual(memo.parse_target_scope(self.env, "repo:acme/widget"), memo.Scope("repo", "acme/widget"))
+        for bad in ("repo:../..", "group:nope", "repo:Acme/Widget", "machine:other"):
+            with self.assertRaises(memo.Refusal) as e:
+                memo.parse_target_scope(self.env, bad)
+            self.assertEqual(e.exception.reason, "usage")
+
+    def test_a_correction_of_an_archived_note_lands_in_the_session_store(self):
+        _, out, _ = self.run_memo("note", "archived fact about narinfo")
+        ident = out.split()[1]
+        root = self.tmp / "data/tstack/memo"
+        archive = root / "archive/v1-2026-11-16/acme/widget"
+        archive.mkdir(parents=True)
+        (root / "home/repo/acme/widget/notes").rename(archive / "notes")
+        self.run_memo("recall", "narinfo")
+        code, out, err = self.run_memo("supersede", ident[-6:], "corrected fact about narinfo")
+        self.assertEqual(code, 0, err)
+        self.assertEqual(len(list(archive.rglob("*.md"))), 1, "the archive is read only")
+        self.assertIn("corrected fact about narinfo", memo.start_text(self.env, str(self.repo)))
+        code, _, err = self.run_memo("retire", ident[-6:], "status")
+        self.assertEqual(code, 2)
+        self.assertIn("archive", err)
+        self.assertEqual(len(list(archive.rglob("*.md"))), 1)
+
+    def test_a_correction_of_another_checkouts_legacy_note_never_writes_into_it(self):
+        other = self.tmp / "other"
+        legacy = other / ".tstack/memo/notes"
+        legacy.mkdir(parents=True)
+        sh(other, "git", "init", "-q")
+        (legacy / f"{uid(5)}.md").write_text(
+            f'+++\nid = "{uid(5)}"\nkind = "gotcha"\nscope = "project:{other}"\nby = "s"\nat = "t"\n+++\nlegacy port gotcha\n')
+        memo.start_text(self.env, str(other))
+        code, _, err = self.run_memo("supersede", uid(5)[-6:], "the legacy port is 9090")
+        self.assertEqual(code, 0, err)
+        self.assertEqual(len(list(legacy.iterdir())), 1)
+
+    def test_a_ref_goes_through_the_secret_check(self):
+        tok = "ghp_" + "A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6Q7r8"
+        code, _, _ = self.run_memo("note", "the deploy key lives in 1Password", "--ref", tok)
+        self.assertEqual(code, 2)
+        self.assertFalse(any(tok in f.read_text() for f in self.tmp.rglob("*.md")))
+        log = (self.tmp / "state/tstack/memo/refusals.log").read_text()
+        self.assertIn("\tsecret\t", log)
+
+    def test_import_checks_every_row_before_it_writes(self):
+        tsv = self.tmp / "imp.tsv"
+        tsv.write_text("date\ttext\tsources\n2026-01-05\tgood row\t\n2026-02-30\tbad row\t\n")
+        code, _, err = self.run_memo("import", str(tsv))
+        self.assertEqual(code, 2)
+        self.assertIn("line 3", err)
+        self.assertEqual(self.notes_on_disk(), set())
+        code, _, err = self.run_memo("import", str(self.tmp / "missing.tsv"))
+        self.assertEqual((code, "Traceback" in err), (2, False))
+
+    def test_an_imported_note_is_dated_its_day_in_utc(self):
+        tsv = self.tmp / "imp.tsv"
+        tsv.write_text("date\ttext\tsources\n2026-01-05\tgood row\t\n")
+        old = os.environ.get("TZ")
+        os.environ["TZ"] = "Pacific/Kiritimati"
+        time.tzset()
+        try:
+            code, out, err = self.run_memo("import", str(tsv))
+        finally:
+            if old is None:
+                os.environ.pop("TZ")
+            else:
+                os.environ["TZ"] = old
+            time.tzset()
+        self.assertEqual(code, 0, err)
+        self.assertEqual(memo.ulid_date(out.split()[1]), "2026-01-05")
+
+
+class ReadsSurvive(CliCase):
+    @unittest.skipIf(os.geteuid() == 0, "root reads a folder of mode 0")
+    def test_an_unreadable_folder_of_one_store_leaves_the_rest_of_the_read(self):
+        self.run_memo("note", "--scope", "user", "Luiz reads a design as a page first")
+        self.run_memo("note", "the index is a cache of the files")
+        bad = next((self.tmp / "data/tstack/memo/home/user/notes").iterdir())
+        bad.chmod(0)
+        self.addCleanup(bad.chmod, 0o755)
+        memo._repo_cache.clear()
+        self.assertIn("cache of the files", memo.start_text(self.env, str(self.repo)))
+        code, out, err = self.run_memo("doctor")
+        self.assertEqual(code, 0, err)
+        self.assertIn("cannot be read", out)
+
+    def test_reindex_drops_the_cached_sections(self):
+        legacy = self.repo / ".tstack/memo/notes"
+        legacy.mkdir(parents=True)
+        f = legacy / f"{uid(5)}.md"
+        f.write_text(f'+++\nid = "{uid(5)}"\nkind = "gotcha"\nscope = "project:acme/widget"\nby = "s"\nat = "t"\n+++\nthe port is 8080\n')
+        self.assertIn("8080", memo.start_text(self.env, str(self.repo)))
+        f.write_text(f.read_text().replace("8080", "9090"))
+        self.assertEqual(self.run_memo("reindex")[0], 0)
+        start = memo.start_text(self.env, str(self.repo))
+        self.assertIn("9090", start)
+        self.assertNotIn("8080", start)
+
+    def test_the_cached_section_is_keyed_by_the_code_that_drew_it(self):
+        store = memo.repo_store(self.env, "acme/widget")
+        digest = memo.names_digest(store)
+        with mock.patch.object(memo, "RENDER", memo.RENDER + 1):
+            self.assertNotEqual(memo.names_digest(store), digest)
+
+
 def _write_one(args):
     script, env, cwd, i = args
     return subprocess.run([sys.executable, script, "--cwd", cwd, "note", f"parallel fact {i} {os.getpid()}"],
