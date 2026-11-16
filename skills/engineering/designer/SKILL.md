@@ -15,7 +15,7 @@ Open the todo list with the sections below as items, in order.
 
 ## Start or resume
 
-1. Read the spin-off file. Its `found-in` names the repo; `<slug>` is the file's name between `spin-off-` and `.md`. You run in your own Rex session, labelled `<slug>`. Every agent you start opens in it: a tab through `rex run -s "$REX_SESSION"`, a coordinator through `fleet team add --session <slug>` (LAUNCH.md, Launch step 4).
+1. Read the spin-off file. Its `found-in` names the repo; `<slug>` is the file's name between `spin-off-` and `.md`. You run as the tab `designer-<slug>` in the Rex session `designers`, beside the other designers. The agents that build the work open in a new Rex session labelled `<slug>`, named after the work: a coordinator through `fleet team add --session <slug>`, which opens or reuses it (LAUNCH.md, Launch step 4), or the no-fleet tab through `rex new <slug>` (LAUNCH.md, No fleet). Nothing you start opens in `designers`.
 2. Open your own jj workspace from the repo's root, on the landing bookmark its `AGENTS.md` names: `jj workspace add ../<repo>-design-<slug> -r <bookmark>@origin --name design-<slug>`. Work there from now on, by absolute path. Working in the origin's workspace would snapshot your files into its open change.
 3. Copy the spin-off file to `docs/design/<slug>/spin-off.md` and start `docs/design/<slug>/dossier.md` as [DOSSIER.md](DOSSIER.md) shapes it.
 
@@ -27,19 +27,31 @@ Done when `jj status` in your workspace shows both files. When the workspace and
 
 Luiz shapes the design; you do not hand him one to approve. Work in this order:
 
-1. **Talk first.** Before any research, ask Luiz what should change and for whom, what he already knows or has decided, and what worries him. Record his answers in the dossier's **Conversation**, in his words. Done when he has answered.
-2. **Research the gaps** that conversation leaves: unfamiliar code through `tstack:how`, earlier decisions through `tstack:recall`, docs, APIs and facts through `tstack:research`. Never research what he already told you. Done when each gap has an answer, or Luiz has said it can stay open.
-3. **Explain before asking.** Show him, through `tstack:show-me` in the chat, how the domain works today, its moving parts, and two or three real options with their trade-offs in plain words. He reshapes the options before anything is decided. Record his reshapings in **Conversation**. Done when he has reacted to them.
+1. **Talk first.** Before any research, ask Luiz what should change and for whom, what he already knows or has decided, what worries him, and how he will watch it run ([Observability](#observability)). Record his answers in the dossier's **Conversation**, in his words. Done when he has answered.
+2. **Research the gaps** that conversation leaves, the repo's current logs, metrics, traces and alerts among them: unfamiliar code through `tstack:how`, earlier decisions through `tstack:recall`, docs, APIs and facts through `tstack:research`. Never research what he already told you. Done when each gap has an answer, or Luiz has said it can stay open.
+3. **Explain before asking.** Show him, through `tstack:show-me` in the chat, how the domain works today, its moving parts, and two or three real options with their trade-offs in plain words. Each option says how it would be observed and what that costs. He reshapes the options before anything is decided. Record his reshapings in **Conversation**. Done when he has reacted to them.
 4. **Bring in a Decider** (the Decider row, Fable high) before you put a call to Luiz when the call takes work or data another team or design owns, reverses an accepted ADR, or has evidence pointing both ways. Give it the question and the evidence. Show its ruling beside the options and log it in the dossier. Its ruling informs Luiz. It never decides for him. Done when every such call has a ruling.
 5. **Ask decisions in small rounds** through `tstack:grilling`. Two of its rules do not apply to you: "Ask the whole frontier in one round" and "Word each question so 'yes' accepts your recommended answer". Ask at most three questions a round, and give each a real choice. Each option says what it means for the people who use the result. Done when every decision the design needs has Luiz's answer.
 6. **Build the design** on what he decided. Start with the data shapes. Each piece goes to the skill that owns it. Invoke that skill, never write its piece yourself. Done when the design page is published:
-   - The design page: `tstack:show-me`, published as an Artifact. Its source is `docs/design/<slug>/design.html`.
+   - The design page: `tstack:show-me`, published as an Artifact. Its source is `docs/design/<slug>/design.html`. It has an Observability section that answers every question in [Observability](#observability).
    - Terms in `CONTEXT.md`, and ADRs in `docs/adr/` for decisions that bind the fleets: `tstack:domain-modeling`. The dossier links them.
    - Work that moves between states: a checked model through the [statechart](../statechart/SKILL.md) skill (user-invoked: read its SKILL.md and follow it). Its `.tla`, `.cfg`, view, `chart.mmd` and `report.md` go to `docs/design/<slug>/`.
    - Types, signatures and the module map, on need: `tstack:architect`, its sketch only, kept in the design docs.
 7. **Check the model landed.** Do it when you suspect the model is too complex, or Luiz's answers suggest an idea did not land. Ask him what is unclear and explain it again. Done when he says it is clear, or when you had no such doubt. Then ask gate 1.
 
-Done when the dossier records Luiz's approval of the current design version. A change he asks for is a new version, and the steps above apply to it again from the one it touches.
+### Observability
+
+Infra observability is designed with the work, never added as a last lane. For each thing the work runs (a service, a worker, a scheduled job, a queue, a deploy), the design answers:
+
+- **Signals.** The logs, metrics and traces it emits, by name, with their fields or labels.
+- **Destination.** Where they go: the stack the repo already uses, found in Design step 2. A new tool or service is a decision for Luiz in Design step 5.
+- **Health.** What working means as a number (an error rate, a latency, a freshness bound, a queue depth), the alert that fires when it breaks, who receives it and through what channel.
+- **Diagnosis.** The dashboard or query Luiz opens when the alert fires, and what it shows for each failure state the statechart names.
+- **Cost.** Volume, retention and price for any high-volume signal.
+
+Work that runs nothing writes `none` in the page's Observability section, with the reason. Done when every running piece has all five answers, and Luiz's decisions on them are in the dossier.
+
+Gate 1 is done when the dossier records Luiz's approval of the current design version. A change he asks for is a new version, and the steps above apply to it again from the one it touches.
 
 ## Plan (gate 2)
 

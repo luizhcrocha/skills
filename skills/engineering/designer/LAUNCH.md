@@ -10,7 +10,7 @@ Read from the designer's [SKILL.md](SKILL.md) when you write the plan, check the
 - **files owned**: paths or globs. No two lanes own one file (the partition rule in `tstack:orchestrate`).
 - **depends-on**: lane ids, or none.
 - **suggested role**: from [models.md](../../../docs/models.md), marked advisory, since the coordinator decides.
-- **done criterion**: a check someone can run or read.
+- **done criterion**: a check someone can run or read. A lane that builds a running piece owns that piece's signals and alerts from the design's Observability section, and its criterion includes seeing them work: the log line or metric on its dashboard, a test alert reaching its receiver.
 
 Done when every lane has all five and no file appears under two lanes.
 
@@ -40,7 +40,7 @@ Ask gate 3 only after the fleet check passed on the current plan and the current
 1. Recheck the record (DOSSIER.md, "Resume from the record"). Launch only when all three approvals are live; otherwise go to the gate the record names.
 2. Land `docs/design/<slug>/`, with any ADRs and `CONTEXT.md` edits, as docs through tuca-mode's Land playbook. The coordinators' workspaces see the design only once it has landed. Done when `<bookmark>@origin` holds the folder.
 3. Run `fleet ls` again. When it fails, the phase goes back to `parked`.
-4. Per coordinator, as one Bash call with `timeout: 300000`, in that coordinator's repo: `cd <repo>; fleet team add <name> --project <id> --mission "<mission>" --session <slug>`. `--session` opens the coordinator in your Rex session, beside you, not in the repo's team session. Write the coordinator's row in the dossier's **Launch** table as the call returns, then go on to the next. When the call does not start it:
+4. Per coordinator, as one Bash call with `timeout: 300000`, in that coordinator's repo: `cd <repo>; fleet team add <name> --project <id> --mission "<mission>" --session <slug>`. `--session` opens the coordinator in the Rex session `<slug>`, named after the work, created by the first `add` and reused by the next. Coordinators never open in `designers` or in the repo's team session. Write the coordinator's row in the dossier's **Launch** table as the call returns, then go on to the next. When the call does not start it:
    - **Untrusted repo.** The refusal names `--trust`. Ask Luiz with `AskUserQuestion`, showing the exact line you would run: `cd <repo>; fleet team add <name> --project <id> --mission "<mission>" --session <slug> --trust`. On the yes he types, run that line once, unchanged.
    - **Auto mode refuses** a call, this one or the `--trust` line. Report the refusal and the refused line to Luiz, record the row as `refused`, and do nothing else for that coordinator: no retry, no other route.
    - **Killed midway.** The tool killed the run. Run the same `add` again: it starts the file it wrote.
@@ -52,10 +52,10 @@ Ask gate 3 only after the fleet check passed on the current plan and the current
 
 ## No fleet
 
-On a machine without `fleet` (decision D, 2026-11-14), the plan runs in one new tuca-mode tab under `tstack:orchestrate`, in your own Rex session. `team.md` names that session in place of coordinators: its label, its repo, and the Coordinator pair from models.md. Gate 3 approves that session. Then run Launch steps 1 and 2 (recheck the record, land the docs) and open the tab. Inside Rex:
+On a machine without `fleet` (decision D, 2026-11-14), the plan runs in one new tuca-mode tab under `tstack:orchestrate`, in a new Rex session `<slug>`, named after the work. `team.md` names that tab in place of coordinators: its label, its repo, and the Coordinator pair from models.md. Gate 3 approves that tab. Then run Launch steps 1 and 2 (recheck the record, land the docs) and open the tab. Inside Rex:
 
 ```sh
-rex run -s "$REX_SESSION" -c <repo> --label <label> -- claude --name <label> --model opus --effort medium "/tstack:tuca-mode /tstack:orchestrate docs/design/<slug>/plan.md"
+rex new <slug> -c <repo> --window <label> -- claude --name <label> --model opus --effort medium "/tstack:tuca-mode /tstack:orchestrate docs/design/<slug>/plan.md"
 ```
 
-Outside Rex, give Luiz the same launch in nushell: `cd <repo>; claude --name <label> --model opus --effort medium "/tstack:tuca-mode /tstack:orchestrate docs/design/<slug>/plan.md"`. Record the session as the one row of **Launch**, set the phase to `handed`, run Launch step 7, and stop.
+Outside Rex, give Luiz the same launch in nushell: `cd <repo>; claude --name <label> --model opus --effort medium "/tstack:tuca-mode /tstack:orchestrate docs/design/<slug>/plan.md"`. Record the tab as the one row of **Launch**, set the phase to `handed`, run Launch step 7, and stop.
