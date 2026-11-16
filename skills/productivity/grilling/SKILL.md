@@ -7,7 +7,7 @@ Interview the user relentlessly until you reach a shared understanding. Map this
 
 Work the tree in **rounds**. The **frontier** is every decision whose prerequisites are already settled: the questions you can ask _now_ without guessing at answers you haven't heard yet. Ask the whole frontier in one round: number each question, lay out its choices with what each means for the user, and give your recommended answer with its reason: the trade-off first, in plain words, then the evidence behind it. Then wait for the user's answers before the next round.
 
-Format a round like so, each question one plain question with two to four lettered options, and the recommendation by its letter with the trade-off in one plain sentence (sources after it):
+With `AskUserQuestion` available, ask the round as [Through a dialog](#through-a-dialog) says. Without it, format a round in the chat like so, each question one plain question with two to four lettered options, and the recommendation by its letter with the trade-off in one plain sentence (sources after it):
 
 ```
 ❓ **Q1** - **<a plain title>**: <one plain question that names the thing>
@@ -34,6 +34,15 @@ Each round the user answers reshapes the tree: settled decisions push the fronti
 Finding _facts_ is your job, never the user's. When a frontier question needs a fact from the environment (filesystem, tools, etc.), dispatch a sub-agent with a fresh context window, playing the Researcher role ([models.md](../../../docs/models.md)) to find it; don't ask the user for anything you could look up yourself. Don't block on it: a running exploration is an unsettled prerequisite, so only the questions downstream of it wait for the sub-agent to report; ask the rest of the frontier now. The _decisions_ are the user's: put each to them and wait.
 
 The session is done when the frontier is empty: every branch of the design tree visited, nothing left silently assumed. Do not act on it until the user confirms you have reached a shared understanding.
+
+## Through a dialog
+
+The dialog is the round, written there once:
+
+- One dialog question per frontier question, four at most; the rest of the frontier opens the next round.
+- The header is the plain title, twelve characters at most; the question is one plain question that names the thing.
+- Two to four options, each label a few words and each description one line on what it means for the user. The recommended option goes first, its label ends in "(Recommended)", and its description adds the trade-off in one plain sentence, sources after it.
+- The chat before the dialog holds only what a dialog cannot show: a picture, a table of numbers, a link, a fact just learned. Often that is one line or nothing. The questions, options and recommendation live in the dialog alone (Luiz, 2026-11-16, on a round asked in chat and again in the dialog: "seems counter produtive").
 
 ## On a fleet dashboard
 
