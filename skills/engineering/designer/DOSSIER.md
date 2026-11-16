@@ -4,7 +4,7 @@ Read from the designer's [SKILL.md](SKILL.md) when you start the dossier, record
 
 `docs/design/<slug>/dossier.md` is the designer's record and the only source of the phase. A compacted or resumed designer reads it and knows where it stands; launch reads its approvals and nothing else. Write each entry the moment its event happens.
 
-The gates follow a checked model: [references/lifecycle.tla](references/lifecycle.tla) with its config and view. TLC holds seven rules over it: coordinators start only when the record shows the current design, plan and team each approved; a plan approval sits on the current approved design; a team approval sits on the current approved plan; Luiz sees each team version only after a fleet check passed on it, so a change to the design, the plan or the team sends it back through the check; a designer reaches `planned` only in a split, on the current approved design and plan; a designer in a split never runs the fleet check, gate 3 or the launch itself; a design is `handed` only on its current approved design and plan, and outside a split its current approved team. The model covers the designer: the council's launch of a split is one step, from `planned` to `handed`. Rerun it through the statechart skill when you change how the gates work.
+The gates follow a checked model: [references/lifecycle.tla](references/lifecycle.tla) with its config and view. TLC holds four rules over it: coordinators start only when the record shows the current design, plan and team each approved; a plan approval sits on the current approved design; a team approval sits on the current approved plan; Luiz sees each team version only after a fleet check passed on it, so a change to the design, the plan or the team sends it back through the check. Rerun it through the statechart skill when you change how the gates work.
 
 ## Shape
 
@@ -14,7 +14,6 @@ The gates follow a checked model: [references/lifecycle.tla](references/lifecycl
 phase: designing
 versions: design v0, plan v0, team v0
 spin-off: spin-off.md
-split: <name>
 
 ## Approvals
 
@@ -45,8 +44,7 @@ card for design v<n>
 | :-- | :-- | :-- | :-- |
 ```
 
-- **phase** is one of `designing`, `designReview`, `planReview`, `fleetCheck`, `parked`, `teamReview`, `ready`, `planned`, `handed`, `dropped`: the model's names for the chart's states. `planned` is where a designer in a split stops: the council takes the team and the launch from there. The designer records `handed` when the council reports the split launched.
-- **split** names the split from the spin-off file. Leave the line out when the spin-off file has none.
+- **phase** is one of `designing`, `designReview`, `planReview`, `fleetCheck`, `parked`, `teamReview`, `ready`, `handed`, `dropped`: the model's names for the chart's states.
 - **versions** count each artifact's revisions. A version is 0 until its file first exists, 1 from then, and each new version adds 1. The model counts from the first file, so its version 0 is the record's v1.
 - **Artifacts** lists the design page's link and source, the statechart files, the ADRs and `CONTEXT.md` terms, each by path.
 
@@ -76,7 +74,6 @@ An approval is live only when its version is the current one, its sha256 matches
 
 - No live design approval: `designing` until the current version's page is published, then `designReview`.
 - No live plan approval: `planReview`.
-- In a split, both live: `planned`. The team approval lives in the council's split record, so a split dossier has none.
 - No live team approval: `fleetCheck`, so the fleet check runs again before gate 3.
 - All three live: `ready`. Check **Launch** for coordinators already started before you run any `fleet team add`.
 
@@ -106,4 +103,4 @@ One entry per question put to a Decider: the date, the question, the evidence gi
 
 ## Launch
 
-In a split, this section holds one line, the path of the council's split record, which has the Launch rows. Otherwise, one row per coordinator in `team.md`, written as each `fleet team add` returns: `started`, `failed` with the error, or `refused` with what refused it. The launch is not atomic, so the rows are how a resume knows which coordinators still need a start.
+One row per coordinator in `team.md`, written as each `fleet team add` returns: `started`, `failed` with the error, or `refused` with what refused it. The launch is not atomic, so the rows are how a resume knows which coordinators still need a start.
