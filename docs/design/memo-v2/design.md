@@ -290,7 +290,7 @@ section(store, slice)
 
 The second branch is the state between a burst of writes and the compaction tasks that follow. The read stays inside its slice in that state too, and it says what is missing.
 
-In that state the oldest notes that no summary stands for leave the read first. A note that a summary keeps was chosen once, and a burst of new notes does not push it out. A kept note leaves the read only when the kept notes alone do not fit the slice. That happens during a backlog of tasks, and the tasks over the summaries end it. The model checks this rule as `KeptNotesStay` ([model.md](model.md)).
+In that state the oldest notes that no summary stands for leave the read first. A note that a summary keeps was chosen once, and a burst of new notes does not push it out. The newest notes outside a summary fill up to a quarter of the slice, and the newest one is read even when it alone is larger. The summaries come next, newest first, each with its kept notes, while they fit. More notes outside a summary are read only when every summary is shown. So a kept note leaves the read only when the summaries do not fit in the three quarters left. That happens during a backlog of tasks, and the tasks over the summaries end it. The newest live note is always read on its own, even when a summary stands for it because the notes after it were retired; that summary's lines then neither show nor count it. The model checks this rule as `KeptNotesStay` ([model.md](model.md)).
 
 The selection is a function of the store's files and nothing else. Two machines that hold the same files print the same section.
 

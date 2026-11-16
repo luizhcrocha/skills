@@ -135,12 +135,23 @@ class SelectRules(unittest.TestCase):
             self.assertEqual(len(view.live_ids) - len(set(told)), sec.left_out)
 
     @PROPS
-    @given(stores(), st.sampled_from([1900, 2500, 3000, 6000]))
+    @given(stores(), SLICES)
     def test_newest_word_for_word(self, recs, sl):
         view = memo.View(recs)
-        free = [n for n in view.live if n.id not in view.covered_by]
-        if free:
-            self.assertIn(memo.note_line(free[-1]), memo.select(view, SCOPE, sl).lines)
+        if view.live:
+            self.assertIn(memo.note_line(view.live[-1]), memo.select(view, SCOPE, sl).lines)
+
+    def test_the_newest_note_under_a_summary_is_read_once_after_the_notes_after_it_retire(self):
+        """newest.cfg of the model: two summaries side by side, then the newest note retired."""
+        recs = [note(i, f"fact {i} " + "about the tile renderer " * 8) for i in range(1, 7)]
+        recs.append(memo.Summary(uid(11), SCOPE, "s", "", 1, (uid(1), uid(2), uid(3)), (uid(1), uid(2))))
+        recs.append(memo.Summary(uid(12), SCOPE, "s", "", 1, (uid(4), uid(5)), ()))
+        recs.append(memo.Retirement(uid(13), SCOPE, "s", "", "status", (uid(6),)))
+        view = memo.View(recs)
+        for sl in (600, 1250, 1900, 6000):
+            sec = memo.select(view, SCOPE, sl)
+            self.assertIn(memo.note_line(view.by_id[uid(5)]), sec.lines, sl)
+            self.assertFalse(any(ln.startswith("  (+2 notes") for ln in sec.lines), "the newest note is counted")
 
     @PROPS
     @given(stores(), SLICES)
@@ -150,13 +161,15 @@ class SelectRules(unittest.TestCase):
         if not sec.over:
             return
         read, counted = shown(view, sec)
-        lines = memo._Lines(view)
         loose = sorted((x for x in view.cover() if isinstance(x, memo.Note)), key=lambda n: n.id, reverse=True)
-        over = memo.OVER_LINE.format(n=len(view.live))
-        avail = sl - len(memo.heading(SCOPE).encode()) - len(over.encode()) - 1
-        reserve = min(avail, max(sl // 4, lines.cost(loose[0]))) if loose else 0
-        head = {n.id for n in memo._suffix(loose, reserve, lines.cost)}
-        own = {i for i in read if i not in view.covered_by}
+        head, room = set(loose[:1]), sl // 4
+        for n in loose:
+            room -= len(memo.note_line(n).encode()) + 1
+            if room < 0:
+                break
+            head.add(n)
+        head = {n.id for n in head}
+        own = {i for i in read if isinstance(view.by_id[i], memo.Note) and view.by_id[i] in loose}
         if own - head:
             roots = {x.id for x in view.cover() if isinstance(x, memo.Summary)}
             self.assertLessEqual(roots, {s.id for s in counted})

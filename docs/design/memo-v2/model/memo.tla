@@ -49,6 +49,9 @@ Reserve == Budget \div 4
 
 Dead(F) == {x \in Notes \cup Sums : Mark(x) \in F}
 LiveNotes(F) == (F \cap Notes) \ Dead(F)
+\* The newest live note. It is read on its own even when a summary stands for it, which happens once the
+\* notes after it are retired, and no summary's lines show or count it.
+Front(F) == IF LiveNotes(F) = {} THEN {} ELSE {Max(LiveNotes(F))}
 
 \* A summary stands for its files only while every summary under it is still there and not retired.
 RECURSIVE Usable(_, _)
@@ -116,17 +119,18 @@ Roots(F) ==
       ineffect == Pick({s \in Sums : Usable(s, F) /\ Span(s) \cap live # {}}, {}, {})
       covered  == UNION {Covers[s] : s \in ineffect}
       under    == UNION {Span(s) : s \in ineffect}
-  IN (ineffect \ covered) \cup (live \ under)
+  IN (ineffect \ covered) \cup (live \ under) \cup Front(F)
 
 \* What a session reads: notes word for word, and the count line of each summary shown.
+\* A summary's lines show and count the live notes but the newest, which is a root of its own.
 ReadOf(F) ==
-  LET live     == LiveNotes(F)
+  LET rest     == LiveNotes(F) \ Front(F)
       roots    == Roots(F)
-      over     == Total(roots, live) > Budget
-      chosen   == IF over THEN Evict(roots, live) ELSE Open(roots, live)
+      over     == Total(roots, rest) > Budget
+      chosen   == IF over THEN Evict(roots, rest) ELSE Open(roots, rest)
   IN
   [ own    |-> chosen \cap Notes,
-    notes  |-> (chosen \cap Notes) \cup UNION {Keeps[s] \cap live : s \in chosen \cap Sums},
+    notes  |-> (chosen \cap Notes) \cup UNION {Keeps[s] \cap rest : s \in chosen \cap Sums},
     counts |-> chosen \cap Sums,
     over   |-> over ]
 
@@ -240,11 +244,12 @@ WithinBudget == \A m \in Machines : Lines(m) <= Budget
 OnlyLiveNotes == \A m \in Machines : read[m].notes \subseteq LiveNotes(files[m])
 
 \* No live note is told twice: two summaries shown together never stand for the same note,
-\* and a summary shown never stands for a note that is also shown on its own.
+\* and a summary shown never stands for a note that is also shown on its own, but the newest live
+\* note, which no summary's lines show or count.
 NeverTwice ==
   \A m \in Machines : \A s \in read[m].counts :
     /\ \A t \in read[m].counts : s # t => Span(s) \cap Span(t) = {}
-    /\ \A n \in read[m].own : n \notin Span(s)
+    /\ \A n \in read[m].own \ Front(files[m]) : n \notin Span(s)
 
 \* A live note is read, or counted by one summary shown, or left out only when the store is over
 \* budget (the count line then says so).
@@ -297,4 +302,9 @@ KeepsLife == (11 :> {3}) @@ (21 :> {3})
 \* 10 is a summary that another machine wrote earlier over notes 2 and 3, across 11 and 12.
 CoversMerge == (10 :> {2, 3}) @@ (11 :> {1, 2}) @@ (12 :> {3, 4}) @@ (21 :> {11, 12})
 KeepsMerge == (10 :> {2}) @@ (11 :> {1}) @@ (12 :> {3}) @@ (21 :> {1})
+
+\* newest.cfg: 11 is the summary of the three oldest notes and keeps two of them; 12 is the summary of
+\* notes 4 and 5 and keeps none. Retiring note 6 leaves note 5, which 12 stands for, the newest live note.
+CoversNewest == (11 :> {1, 2, 3}) @@ (12 :> {4, 5})
+KeepsNewest == (11 :> {1, 2}) @@ (12 :> {})
 =============================================================================

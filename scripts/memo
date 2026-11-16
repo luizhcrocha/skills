@@ -887,6 +887,10 @@ class View:
                     self.out.setdefault(old, r.id)
         self.live = [n for n in self.notes if n.id not in self.out]
         self.live_ids = {n.id for n in self.live}
+        # The newest live note is read on its own even when a summary stands for it (the notes after it were
+        # retired); no summary's lines show or count it. The model's Front.
+        self.front = self.live[-1].id if self.live else None
+        self.rest = self.live_ids - {self.front}
         self._span, self._usable = {}, {}
         cands = [s for s in self.summaries if self.usable(s) and not self.span(s).isdisjoint(self.live_ids)]
         cands.sort(key=lambda s: (-len(self.span(s)), s.id))
@@ -899,7 +903,7 @@ class View:
         covered = {c for s in self.in_effect for c in s.covers}
         self.covered_by = {n: s.id for s in self.in_effect for n in self.span(s)}
         roots = [s for s in self.in_effect if s.id not in covered]
-        roots += [n for n in self.live if n.id not in claimed]
+        roots += [n for n in self.live if n.id not in claimed or n.id == self.front]
         self._cover = sorted(roots, key=lambda x: (self.newest(x), isinstance(x, Summary), x.id))
         self._df = df
         self._df_cache = {}
@@ -946,13 +950,13 @@ class View:
         return x.level if isinstance(x, Summary) else 0
 
     def leaves(self, s):
-        """The live notes s stands for, oldest first."""
-        return sorted((self.by_id[i] for i in self.span(s) if i in self.live_ids), key=lambda n: n.id)
+        """The live notes s stands for, oldest first, but the newest live note."""
+        return sorted((self.by_id[i] for i in self.span(s) if i in self.rest), key=lambda n: n.id)
 
     def kept(self, s):
-        """The live notes s keeps, oldest first."""
+        """The live notes s keeps, oldest first, but the newest live note."""
         sp = self.span(s)
-        return sorted((self.by_id[i] for i in set(s.keeps or ()) if i in self.live_ids and i in sp),
+        return sorted((self.by_id[i] for i in set(s.keeps or ()) if i in self.rest and i in sp),
                       key=lambda n: n.id)
 
     def kids(self, s):
@@ -960,7 +964,7 @@ class View:
         subs = [self.by_id[c] for c in dict.fromkeys(s.covers) if isinstance(self.by_id.get(c), Summary)]
         subs = [k for k in subs if not self.span(k).isdisjoint(self.live_ids)]
         taken = set().union(*(self.span(k) for k in subs))
-        notes = [self.by_id[c] for c in dict.fromkeys(s.covers) if c in self.live_ids and c not in taken]
+        notes = [self.by_id[c] for c in dict.fromkeys(s.covers) if c in self.rest and c not in taken]
         return notes + subs
 
     def cover(self):
@@ -1105,7 +1109,8 @@ def _order(view, items):
 
 def select(view, scope, slice_bytes):
     """Pure. len("\\n".join(lines).encode()) <= slice_bytes, for every view and every slice. Over the slice, the
-    oldest notes outside a summary leave first, and a kept note leaves only when the kept notes alone do not fit."""
+    newest notes outside a summary take up to a quarter of it (the newest always), then the summaries newest first,
+    then more notes outside a summary only when every summary is shown."""
     roots = view.cover()
     if not roots:
         return Section(scope, ())

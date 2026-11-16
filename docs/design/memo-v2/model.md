@@ -6,6 +6,7 @@ A TLA+ model of one scope's store, checked with TLC through the `statechart` ski
 | :-- | :-- |
 | [model/memo.tla](model/memo.tla) | The model |
 | [model/life.cfg](model/life.cfg), [model/life-view.ts](model/life-view.ts) | One machine, six notes, two summaries. Small enough to draw |
+| [model/newest.cfg](model/newest.cfg) | One machine, six notes, two summaries side by side: retiring the newest note leaves a note that a summary stands for as the newest live one |
 | [model/merge.cfg](model/merge.cfg) | Two machines, five notes, four summaries, one of them written by the other machine across two others |
 | [model/bookmark.cfg](model/bookmark.cfg) | The same two machines, which exchange files only through one `memo` bookmark |
 | [model/today.cfg](model/today.cfg), [model/merge-view.ts](model/merge-view.ts) | The same two machines with today's rule for which summaries are in effect |
@@ -27,7 +28,7 @@ Each rule is an invariant of the model, in the words a reader would agree to.
 | `OnlyLiveNotes` | Every line read word for word is a live note of the store: nothing corrected, retired or rewritten |
 | `NeverTwice` | No live note is told twice: two summaries shown together never stand for the same note, and a summary shown never stands for a note that is also shown on its own |
 | `Accounted` | A live note is read, or counted by one summary shown, or left out only while the store is over budget, when the count line says so |
-| `NewestWordForWord` | The newest live note is always read word for word |
+| `NewestWordForWord` | The newest live note is always read word for word, even when a summary stands for it because the notes after it were retired. That summary's lines then neither show nor count it |
 | `KeptNotesStay` | While a store is over its slice, a note outside a summary is read beyond the newest quarter of the slice only when every summary is shown. A note that a summary keeps never leaves to make room for a note outside a summary |
 | `NoBrokenSummary` | A summary shown is not retired and still has every summary it was written from |
 | `WriteNeverRefused` | While a note is left to write, every machine can add it: no state refuses a write for space |
@@ -38,14 +39,17 @@ Each rule is an invariant of the model, in the words a reader would agree to.
 
 ## Results
 
-Run again on 2026-11-16 with TLC 2.19, after the two changes.
+Run again on 2026-11-16 with TLC 2.19, after the review of the implementation. Every config now lets a session retire the newest note (`Retirable` holds note 5 or 6), which the earlier runs never did, and `newest.cfg` is new. With the earlier selection, `newest.cfg` breaks `NewestWordForWord` in 9 steps: six notes, the two summaries, then note 6 retired, and note 5 is only counted. The selection now reads the newest live note on its own (`Front`), and `NeverTwice` exempts that one note from "a summary shown never stands for a note shown on its own", since no summary's lines show or count it.
 
-| Config | States | Result |
-| :-- | :-- | :-- |
-| `life.cfg` | 33 | Every rule holds |
-| `merge.cfg` | 7,776 | Every rule holds |
-| `bookmark.cfg` | 52,491 | Every rule holds |
-| `today.cfg` | 7,776 | `NeverTwice` breaks in 11 steps. Every other rule holds |
+| Config | Distinct states | Result |
+| :-- | --: | :-- |
+| `life.cfg` | 73 | Every rule holds |
+| `newest.cfg` | 37 | Every rule holds |
+| `merge.cfg` | 20,116 | Every rule holds |
+| `bookmark.cfg` | 167,235 | Every rule holds |
+| `today.cfg` | 12,518 when it stops | `NeverTwice` breaks in 11 steps |
+
+The `*-report.md` and `*-chart.mmd` files are from the run before this one.
 
 `KeptNotesStay` was also run against the first revision's selection, which showed the newest lines that fit. It breaks there in 7 steps of `life.cfg`: a session writes four notes, a summary of the three oldest that keeps one, and two more notes. The store goes over its slice, and the read drops the summary with its kept note while it still shows three notes outside a summary. So the rule tests the change.
 
