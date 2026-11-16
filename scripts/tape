@@ -309,8 +309,7 @@ _keys = {}
 def key_of(cwd):
     """memo's project key of a directory ("owner/repo", else the main repo path), or "" outside any repo."""
     if cwd not in _keys:
-        store = memo.resolve_project(cwd)
-        _keys[cwd] = store.scope.removeprefix("project:") if store else ""
+        _keys[cwd] = memo.repo_key(cwd) or ""
     return _keys[cwd]
 
 
@@ -492,10 +491,10 @@ class Ctx:
             if self.project:
                 self._key = norm_key(self.project)
             else:
-                store = memo.resolve_project(self.cwd)
-                if store is None:
+                key = memo.repo_key(self.cwd)
+                if key is None:
                     raise TapeError(f"tape: {self.cwd} is in no jj or git repo; pass --project OWNER/REPO")
-                self._key = store.scope.removeprefix("project:")
+                self._key = key
         return self._key
 
     @property

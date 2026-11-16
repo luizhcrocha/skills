@@ -104,7 +104,7 @@ def memo_wake(hook):
     """SessionStart: the memory this repo's earlier sessions left. Workers do not wake."""
     if hook.is_worker:
         return None
-    return memo().wake_text(hook.env, hook.cwd, str(hook.input.get("source") or "")) or None
+    return memo().start_text(hook.env, hook.cwd) or None
 
 
 def user_manager_runs(run):
@@ -131,7 +131,7 @@ def tape_build(hook):
     hook's pipes. memo-dream is not started here: it dreams at night as a service (`memo-dream night`)."""
     if hook.is_worker or hook.headless:
         return None
-    if not memo().tape_index(hook.env).exists() or memo().resolve_project(hook.cwd) is None:
+    if not memo().tape_index(hook.env).exists() or memo().repo_key(hook.cwd) is None:
         return None
     import shutil
     import subprocess

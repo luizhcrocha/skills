@@ -125,7 +125,7 @@ class TapeCase(unittest.TestCase):
         self.store = self.tmp / "data" / "tstack" / "tape" / "acme__widget"
         self.other_store = self.tmp / "data" / "tstack" / "tape" / "acme__other"
         tape._keys.clear()
-        tape.memo._scope_cache.clear()
+        tape.memo._repo_cache.clear()
 
     def transcript(self, launch, session):
         return self.projects / tape.sessions.slug(launch) / f"{session}.jsonl"

@@ -24,7 +24,7 @@ _deps-lint:
 [env("GIT_CONFIG_GLOBAL", "/dev/null")]
 [env("GIT_CONFIG_NOSYSTEM", "1")]
 test-scripts:
-    python3 scripts/unittest_shards.py -s scripts/tests -v
+    uv run --no-project --with "hypothesis>=6.170" python3 scripts/unittest_shards.py -s scripts/tests -v
 
 # The TypeScript lint pack's RuleTester suites (anti-slop fork, tstack rules), on the pinned Oxlint
 [env("GIT_CONFIG_GLOBAL", "/dev/null")]
