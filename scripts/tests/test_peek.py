@@ -98,8 +98,9 @@ class PeekTest(unittest.TestCase):
         status, kind, body = self.get(url)
         self.assertEqual(status, 200)
         self.assertIn(b'<svg class="drawn">', body)
-        self.assertNotIn(b"A --&gt; B", body)
-        self.assertIn(b"broken", body)
+        self.assertIn(b'<pre class="mermaid" hidden>flowchart LR\n  A --&gt; B\n</pre>', body)
+        self.assertIn(b'<pre class="mermaid">broken\n</pre>', body)
+        self.assertIn(b"mermaid.esm.min.mjs", body)
 
     def tool(self, *names):
         for name in names:
