@@ -482,6 +482,130 @@ class ReadsSurvive(CliCase):
             self.assertNotEqual(memo.names_digest(store), digest)
 
 
+
+class SmallRules(CliCase):
+    def test_an_id_tail_is_matched_as_written(self):
+        self.run_memo("note", "a fact about the cache")
+        code, _, err = self.run_memo("zoom", "%%%%")
+        self.assertEqual(code, 2)
+        self.assertIn("no note", err)
+
+    def test_recall_needs_a_limit_of_one_or_more(self):
+        self.assertEqual(self.run_memo("recall", "cache", "--limit", "0")[0], 2)
+
+    def test_a_retired_or_corrected_note_is_not_retired_or_corrected_again(self):
+        _, out, _ = self.run_memo("note", "the quota is 10 per day")
+        ident = out.split()[1]
+        self.assertEqual(self.run_memo("retire", ident, "status")[0], 0)
+        self.assertEqual(self.run_memo("retire", ident, "status")[0], 2)
+        self.assertEqual(self.run_memo("supersede", ident, "the quota is 20 per day")[0], 2)
+
+    def test_keep_and_keep_none_together_are_refused(self):
+        ids = [self.run_memo("note", f"fact {i} about the tile renderer")[1].split()[1] for i in range(3)]
+        code, _, err = self.run_memo("summarize", ids[0], ids[1], "--keep", ids[0], "--keep-none")
+        self.assertEqual(code, 2)
+        self.assertIn("--keep-none", err)
+
+    def test_a_group_note_needs_this_repository_in_the_group(self):
+        self.configure()
+        (self.tmp / "cfg/tstack/groups.toml").write_text(
+            '[groups.tooling]\nrepos = ["acme/widget"]\n[groups.company]\nrepos = ["acme/other"]\n')
+        code, _, err = self.run_memo("note", "--scope", "group:company", "a company fact")
+        self.assertEqual(code, 2)
+        self.assertIn("tooling", err)
+
+    def test_names_match_whole(self):
+        with self.assertRaises(ValueError):
+            memo.parse_groups('[groups."tooling\\n"]\nrepos=["a/b"]\n')
+
+    def test_a_byte_order_mark_is_read_past(self):
+        r = memo.Note(uid(1), memo.Scope("user"), "s", "t", "x")
+        self.assertEqual(memo.parse_record("notes", "\ufeff" + memo.render_record(r), r.id), r)
+
+    def test_text_that_is_not_utf8_is_refused(self):
+        code, _, err = self.run_memo("note", "bad byte \udcff here")
+        self.assertEqual(code, 2)
+        self.assertIn("UTF-8", err)
+
+    def test_a_line_is_capped_in_bytes(self):
+        code, _, _ = self.run_memo("note", "\U0001F600" * 280)
+        self.assertEqual(code, 2)
+        for face in ("\U0001F600", "\U0001F601", "\U0001F602"):
+            self.assertEqual(self.run_memo("note", face * 210)[0], 0)
+        view = memo.View(memo.Memo(self.env, str(self.repo)).view(memo.repo_store(self.env, "acme/widget")).notes)
+        sl = memo.GROUPS // memo.MAX_GROUPS - memo.UNREAD_MAX - 1
+        self.assertIn(memo.note_line(view.live[-1]), memo.select(view, memo.Scope("group", "a" * 30), sl).lines)
+
+    def test_tasks_say_when_a_store_is_over_and_no_task_helps(self):
+        self.run_memo("note", "\u00e9" * 279)
+        self.run_memo("note", "\u00e9" * 278)
+        m = memo.Memo(self.env, str(self.repo))
+        store = m.session.repo
+        with mock.patch.object(memo, "REPO", 900):
+            out = io.StringIO()
+            memo.cmd_tasks(m, None, out)
+        m.index.close()
+        self.assertNotIn("every store this session reads fits", out.getvalue())
+        self.assertIn(str(store.scope), out.getvalue())
+
+    def test_the_unread_groups_line_is_capped(self):
+        self.configure()
+        long = "z" + "-overflow" * 160
+        (self.tmp / "cfg/tstack/groups.toml").write_text(
+            f'[groups.a]\nrepos = ["acme/widget"]\n[groups.b]\nrepos = ["acme/widget"]\n'
+            f'[groups.{long}]\nrepos = ["acme/widget"]\n')
+        self.run_memo("note", "a widget fact")
+        (line,) = [ln for ln in memo.start_text(self.env, str(self.repo)).splitlines() if "not read" in ln]
+        self.assertLessEqual(len(line.encode()), memo.UNREAD_MAX)
+
+    def test_local_keys_map_to_distinct_folders(self):
+        env = {"XDG_DATA_HOME": "/d"}
+        self.assertNotEqual(memo.repo_dir(env, "/home/x/a__b"), memo.repo_dir(env, "/home/x/a/b"))
+        for key in ("/home/x/a__b", "/home/x/a/b", "/home/x/a_/b", "/home/x/_u"):
+            self.assertEqual(memo.unflat(memo.repo_dir(env, key).name), key)
+
+    def test_the_nearest_repository_holds_cwd(self):
+        outer = self.tmp / "outer"
+        (outer / ".jj").mkdir(parents=True)
+        inner = outer / "vendor/lib"
+        inner.mkdir(parents=True)
+        sh(inner, "git", "init", "-q")
+        sh(inner, "git", "remote", "add", "origin", "git@github.com:other/lib.git")
+        self.assertEqual(memo.repo_key(str(inner)), "other/lib")
+
+    def test_a_remote_in_capitals_loses_its_suffix(self):
+        self.assertEqual(memo.normalize_remote("git@github.com:Owner/Repo.GIT"), "owner/repo")
+
+    def test_an_open_thread_is_sent_to_its_owner(self):
+        code, _, err = self.run_memo("note", "open", "finish the importer")
+        self.assertEqual(code, 2)
+        for owner in ("dossier", "fleet ledger", "issue"):
+            self.assertIn(owner, err)
+
+    def test_a_locked_index_is_not_deleted(self):
+        self.run_memo("note", "a fact")
+        index = memo.Index(self.env, timeout=0.1)
+        held = memo.sqlite3.connect(index.path, isolation_level=None)
+        held.execute("begin exclusive")
+        self.addCleanup(held.close)
+        with mock.patch.object(memo, "SCHEMA", memo.SCHEMA + 1), self.assertRaises(memo.sqlite3.OperationalError):
+            index.open()
+        held.rollback()
+        self.assertTrue(index.path.exists())
+
+    def test_hint_words_keep_names_with_digits(self):
+        self.assertEqual(set(memo.hint_tokens("HTTP2 and SHA256 not 4ccb1e90 nor 01M7JKF73S1F05QBAD0VR28QBH")),
+                         {"http2", "sha256"})
+
+    def test_the_origin_file_is_written_once(self):
+        self.run_memo("note", "a fact")
+        origin = self.tmp / "state/tstack/memo/git/acme/widget.origin"
+        before = origin.stat().st_mtime_ns
+        time.sleep(0.01)
+        memo.start_text(self.env, str(self.repo))
+        self.assertEqual(origin.stat().st_mtime_ns, before)
+
+
 def _write_one(args):
     script, env, cwd, i = args
     return subprocess.run([sys.executable, script, "--cwd", cwd, "note", f"parallel fact {i} {os.getpid()}"],

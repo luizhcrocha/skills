@@ -12,7 +12,7 @@ Python 3.14 (3.14.8), uv 0.12.21, ruff 0.16.9, basedpyright 1.40.1, pytest 9.1.1
 
 A project's pinned version wins. Read `requires-python` in `pyproject.toml`, `.python-version`, and `languages.python.version` in `devenv.nix` first, and write code that runs on the lowest version they allow (a Modal or Lambda image may pin an older minor than the dev shell).
 
-tstack's own tooling (`scripts/*.py`, extensionless scripts, `hooks/tstack-hook`, the coordinator) is the exception on purpose: standard library only, Python 3.11 or newer, `unittest`, run with plain `python3`, no pyproject and no dev shell. Keep it that way; the plugin must run on any machine with a `python3`.
+tstack's own tooling (`scripts/*.py`, extensionless scripts, `hooks/tstack-hook`, the coordinator) is the exception on purpose: the scripts themselves import the standard library only, need Python 3.11 or newer, and run with plain `python3`, with no pyproject and no dev shell, because the plugin must run on any machine with a `python3`. Their tests use `unittest` and may take third-party test libraries, such as Hypothesis, through `uv run --with` in the justfile (Luiz, 2026-11-16).
 
 ## Non-negotiables
 

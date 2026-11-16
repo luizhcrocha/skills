@@ -26,11 +26,13 @@ from typing import Literal, NamedTuple
 # memo.toml, groups.toml, or a record file the index lacks.
 
 MAX_CHARS = 280
+MAX_BYTES = 840  # 280 characters of 3 bytes: the line then fits a group's slice over its budget, beside
+# the unread-groups line, its heading and the over line
 SHORT = 6
 FENCE = "+++"
 FOLDERS = ("notes", "summaries", "retired")
-SCHEMA = 3
-RENDER = 2  # bump when select, count_line or the hint words change: the cached sections are keyed by it
+SCHEMA = 4
+RENDER = 3  # bump when select, count_line or the hint words change: the cached sections are keyed by it
 
 HEADER, USER, MACHINE, GROUPS, REPO = 600, 3000, 1900, 2500, 6000
 TOTAL = HEADER + USER + MACHINE + GROUPS + REPO
@@ -61,12 +63,15 @@ LANDED_RE = re.compile(r"\b(?=[0-9a-f]*\d)(?=[0-9a-f]*[a-f])[0-9a-f]{7,}\b"
 OLD_KINDS = ("decision", "gotcha", "preference", "fact", "open")
 
 
+Reason = Literal["length", "secret", "role", "usage"]
+
+
 class Refusal(Exception):
     """A write memo will not make. The reasons are a closed set: there is no "space"."""
 
-    REASONS = ("length", "secret", "role", "usage")
+    REASONS: tuple[Reason, ...] = ("length", "secret", "role", "usage")
 
-    def __init__(self, reason, message):
+    def __init__(self, reason: Reason, message: str):
         super().__init__(message)
         self.reason = reason
         self.code = EXIT_ROLE if reason == "role" else EXIT_INVALID
@@ -130,8 +135,11 @@ def ulid_date(ulid):
         return "?"
 
 
+ScopeKind = Literal["user", "machine", "group", "repo"]
+
+
 class Scope(NamedTuple):
-    kind: str
+    kind: ScopeKind
     name: str = ""
 
     def __str__(self):
@@ -211,7 +219,7 @@ def parse_record(folder, content, expect_id):
     """The folder says which record a file is. Old fields (`kind`, `pin`) are read and dropped.
     Raises ValueError on a file that is not a valid record of its folder."""
     import tomllib
-    lines = content.split("\n")
+    lines = content.removeprefix("\ufeff").split("\n")
     if not lines or lines[0].strip() != FENCE:
         raise ValueError("no front block")
     end = next((i for i in range(1, len(lines)) if lines[i].strip() == FENCE), None)
@@ -220,7 +228,7 @@ def parse_record(folder, content, expect_id):
     try:
         head = tomllib.loads("\n".join(lines[1:end]))
     except tomllib.TOMLDecodeError as e:
-        raise ValueError(f"front block: {e}") from None
+        raise ValueError(f"front block: {e}") from e
     text = " ".join("\n".join(lines[end + 1:]).split())
     ident = head.get("id")
     if not isinstance(ident, str) or not _ULID_RE.match(ident):
@@ -362,7 +370,7 @@ class Group(NamedTuple):
     repos: frozenset
 
 
-_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9-]*$")
+_NAME_RE = re.compile(r"[a-z0-9][a-z0-9-]*")
 
 
 def groups_path(env):
@@ -375,13 +383,13 @@ def parse_groups(text):
     try:
         data = tomllib.loads(text)
     except tomllib.TOMLDecodeError as e:
-        raise ValueError(str(e)) from None
+        raise ValueError(str(e)) from e
     raw = data.get("groups", {})
     if not isinstance(raw, dict):
         raise ValueError("[groups] is not a table")
     groups = {}
     for name, g in raw.items():
-        if not _NAME_RE.match(name) or not isinstance(g, dict):
+        if not _NAME_RE.fullmatch(name) or not isinstance(g, dict):
             raise ValueError(f"bad group {name!r}")
         repos = g.get("repos", [])
         if not isinstance(repos, list) or not all(isinstance(r, str) for r in repos):
@@ -430,7 +438,7 @@ def load_local(env):
     except ValueError:
         return Local()
     machine, remote = data.get("machine"), data.get("home_remote")
-    machine = machine.strip() if isinstance(machine, str) and _NAME_RE.match(machine.strip()) else None
+    machine = machine.strip() if isinstance(machine, str) and _NAME_RE.fullmatch(machine.strip()) else None
     remote = remote.strip() if isinstance(remote, str) and remote.strip() else None
     return Local(machine, remote)
 
@@ -453,8 +461,7 @@ def normalize_remote(url):
         path = url.split(":", 1)[1]
     else:
         return None
-    path = path.strip("/")
-    path = path.removesuffix(".git")
+    path = path.strip("/").lower().removesuffix(".git")
     parts = [p for p in path.split("/") if p]
     if len(parts) < 2:
         return None
@@ -525,9 +532,8 @@ _repo_cache = {}
 def project_root(cwd):
     """(main repo root, origin url or "") for the repo holding cwd, or None outside any repo."""
     here = Path(cwd).resolve()
-    chain = [here, *here.parents]
-    for marker, resolve in ((".jj", _jj_main), (".git", _git_main)):
-        for d in chain:
+    for d in (here, *here.parents):
+        for marker, resolve in ((".jj", _jj_main), (".git", _git_main)):
             if (d / marker).exists():
                 main, url = resolve(d)
                 return main.resolve(), url
@@ -550,13 +556,22 @@ def repo_key(cwd):
     return found[0] if found else None
 
 
-def _flat(key):
-    return key.strip("/").replace("/", "__")
+def flat(key: str) -> str:
+    """A local key as one folder name: "_" is written "_u" and "/" is written "__", so two keys never share one."""
+    return key.strip("/").replace("_", "_u").replace("/", "__")
+
+
+_flat = flat  # memo-migrate's name for it, until that script calls flat
+
+
+def unflat(name: str) -> str:
+    """The local key that flat made name from."""
+    return "/" + re.sub(r"_(.)", lambda m: "/" if m.group(1) == "_" else "_", name)
 
 
 def repo_dir(env, key):
     if key.startswith("/"):
-        return memo_home(env) / "repo" / "_local" / _flat(key)
+        return memo_home(env) / "repo" / "_local" / flat(key)
     return memo_home(env) / "repo" / key
 
 
@@ -586,7 +601,7 @@ class Remote(NamedTuple):
 
 
 def git_dir_of(env, key):
-    return state_home(env) / "tstack" / "memo" / "git" / f"{_flat(key) if key.startswith('/') else key}.git"
+    return state_home(env) / "tstack" / "memo" / "git" / f"{flat(key) if key.startswith('/') else key}.git"
 
 
 class Session(NamedTuple):
@@ -628,7 +643,6 @@ def resolve_session(env, cwd):
 
 _WORD_RE = re.compile(r"\w+")
 _HEXHASH = re.compile(r"^(?=[0-9a-f]*\d)(?=[0-9a-f]*[a-f])[0-9a-f]{7,}$")
-_SHORT_ID = re.compile(r"^(?=[0-9A-Z]*\d)[0-9A-HJKMNP-TV-Z]{4,}$")
 STOPWORDS = frozenset("""
     an the me my we us our you your he him his she her it its they them their
     this that these those what which who whom whose how when where why
@@ -653,7 +667,7 @@ def hint_tokens(text):
         if not 2 <= len(w) <= 24 or not any(c.isalpha() for c in w):
             continue
         low = w.lower()
-        if low in STOPWORDS or _HEXHASH.match(low) or _SHORT_ID.match(w):
+        if low in STOPWORDS or _HEXHASH.match(low) or _ULID_RE.match(w):
             continue
         out.setdefault(low, w)
     return out
@@ -706,9 +720,10 @@ def read_dir(base, names=None):
 
 
 class Index:
-    def __init__(self, env):
+    def __init__(self, env, timeout=10.0):
         cache = env.get("XDG_CACHE_HOME") or str(_home_dir(env) / ".cache")
         self.path = Path(cache) / "tstack" / "memo-v2.db"
+        self.timeout = timeout
         self.con = None
 
     def open(self):
@@ -717,10 +732,10 @@ class Index:
         try:
             self.path.parent.mkdir(parents=True, exist_ok=True)
         except OSError as e:
-            raise sqlite3.OperationalError(str(e)) from None
+            raise sqlite3.OperationalError(str(e)) from e
         for attempt in (0, 1):
             try:
-                con = sqlite3.connect(self.path, timeout=10, isolation_level=None)
+                con = sqlite3.connect(self.path, timeout=self.timeout, isolation_level=None)
                 con.execute("pragma journal_mode=wal")
                 con.execute("pragma synchronous=off")
                 if con.execute("pragma user_version").fetchone()[0] != SCHEMA:
@@ -744,6 +759,8 @@ class Index:
                     con.execute("commit")
                 self.con = con
                 return con
+            except sqlite3.OperationalError:
+                raise
             except sqlite3.DatabaseError:
                 if attempt:
                     raise
@@ -848,7 +865,8 @@ class Index:
         con = self.open()
         if len(token) == 26:
             return con.execute("select store, id from records where id=?", (token,)).fetchall()
-        return con.execute("select store, id from records where id like ?", ("%" + token,)).fetchall()
+        tail = token.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        return con.execute("select store, id from records where id like ? escape '\\'", ("%" + tail,)).fetchall()
 
     def search(self, keys, terms, limit):
         """(record, store key) hits, best first: every term, else any term as a prefix."""
@@ -1259,7 +1277,9 @@ def all_tasks(view, scope, slice_bytes):
 
 
 def task_text(t, slice_bytes):
-    what = "notes outside a summary" if t.level == 1 else "notes its oldest summaries keep"
+    kinds = {isinstance(x, Summary) for x in t.items}
+    what = {frozenset({False}): "notes outside a summary", frozenset({True}): "notes the oldest summaries keep"}.get(
+        frozenset(kinds), "notes outside a summary and notes the oldest summaries keep")
     out = [(f"memo task: the {t.scope} store is over its slice of {slice_bytes:,} bytes. Below are the "
             f"{len(t.offered)} {what}."),
            (f"Name up to {t.keep_limit} that a session a month from now most needs to read at start. Keep none if "
@@ -1330,7 +1350,7 @@ class Memo:
         if rel[0] == "user":
             return user_store(self.env)
         if rel[0] == "repo":
-            return repo_store(self.env, "/" + rel[2].replace("__", "/") if rel[1] == "_local" else "/".join(rel[1:]))
+            return repo_store(self.env, unflat(rel[2]) if rel[1] == "_local" else "/".join(rel[1:]))
         return Store(Scope(rel[0], "/".join(rel[1:])), base)
 
     def find(self, token, stores=None):
@@ -1383,9 +1403,15 @@ def clean_text(text: str | None) -> str:
     text = " ".join((text or "").split())
     if not text:
         raise Refusal("usage", "memo: the text is empty")
+    try:
+        size = len(text.encode("utf-8"))
+    except UnicodeEncodeError as e:
+        raise Refusal("usage", "memo: the text is not UTF-8; check the shell's locale") from e
     if len(text) > MAX_CHARS:
         raise Refusal("length", f"memo: {len(text)} characters, {len(text) - MAX_CHARS} over the {MAX_CHARS} limit; "
                                 "say the fact and the reason, drop the story.")
+    if size > MAX_BYTES:
+        raise Refusal("length", f"memo: {size:,} bytes, over the {MAX_BYTES:,} limit; fewer wide characters")
     return no_secret(text)
 
 
@@ -1561,12 +1587,22 @@ def _one_store(m, ids, what):
     return found[0][0], [r for _, _, r in found]
 
 
+def _not_out(m, store, recs):
+    """The model's CanRetire: a record already retired or corrected is not taken out again."""
+    view = m.view(store)
+    out = [r.id for r in recs if r.id in view.out]
+    if out:
+        raise Refusal("usage", "memo: " + ", ".join(short(i) for i in out) + " is already retired or corrected "
+                      "(memo zoom shows by what)")
+
+
 def retire(m, ids, reason):
     _must_write(m)
     reason = clean_text(reason)
     store, recs = _one_store(m, ids, "retire")
     if any(isinstance(r, Retirement) for r in recs):
         raise Refusal("usage", "memo: a retirement is not retired; write the note again instead")
+    _not_out(m, store, recs)
     return _write(m, store, Retirement(new_ulid(), store.scope, m.by(), _stamp(), reason,
                                        tuple(dict.fromkeys(r.id for r in recs))))
 
@@ -1579,6 +1615,7 @@ def supersede(m, ids, text, scope_text=None):
     store, recs = _one_store(m, ids, "supersede")
     if any(not isinstance(r, Note) for r in recs):
         raise Refusal("usage", "memo: only a note is superseded; `memo retire` takes back a summary")
+    _not_out(m, store, recs)
     if store.frozen:
         store = m.store_of(target_scope(m, scope_text))
     elif scope_text is not None and target_scope(m, scope_text) != store.scope:
@@ -1593,6 +1630,8 @@ def summarize(m, ids, keep, keep_none=False):
     _must_write(m)
     if not keep and not keep_none:
         raise Refusal("usage", "memo: name the notes to keep (--keep ID) or pass --keep-none")
+    if keep and keep_none:
+        raise Refusal("usage", "memo: --keep and --keep-none together; pass one")
     store, recs = _one_store(m, ids, "summarize")
     view = m.view(store)
     items = list(dict.fromkeys(r.id for r in recs))
@@ -1650,12 +1689,27 @@ def section_of(m, store, slice_bytes):
     return sec
 
 
+UNREAD_MAX = 200
+
+
+def unread_line(names):
+    """The start read's line on the groups past MAX_GROUPS, at most UNREAD_MAX bytes: names that do not fit are
+    counted."""
+    head = f"(groups.toml puts this repository in more than {MAX_GROUPS} groups; not read: "
+    shown = list(names)
+    while True:
+        rest = len(names) - len(shown)
+        line = head + ", ".join(shown) + (f"{', ' if shown else ''}{rest} more" if rest else "") + ")"
+        if len(line.encode()) <= UNREAD_MAX or not shown:
+            return line
+        shown.pop()
+
+
 def start_parts(m):
     """The header, then one section per store, from the local stores. No git and no network call."""
     s = m.session
     groups_read = max(1, len(s.read_groups))
-    unread = (f"(groups.toml puts this repository in more than {MAX_GROUPS} groups; not read: "
-              f"{', '.join(s.unread_groups)})") if s.unread_groups else None
+    unread = unread_line(s.unread_groups) if s.unread_groups else None
     parts, sections = [START_HEADER], []
     for store in s.stores:
         sl = slice_of(store.scope, groups_read)
@@ -1761,7 +1815,7 @@ def store_roots(env, remote):
         home = memo_home(env)
         roots.append(("user/", home / "user"))
         for kind in ("machine", "group"):
-            roots += [(f"{kind}/{n}/", home / kind / n) for n in _subdirs(home / kind) if _NAME_RE.match(n)]
+            roots += [(f"{kind}/{n}/", home / kind / n) for n in _subdirs(home / kind) if _NAME_RE.fullmatch(n)]
     return roots
 
 
@@ -1782,7 +1836,7 @@ def local_file_of(env, remote, path):
         parts = path.split("/")
         if parts[0] == "user":
             base, rest = memo_home(env) / "user", "/".join(parts[1:])
-        elif parts[0] in ("machine", "group") and len(parts) > 2 and _NAME_RE.match(parts[1]):
+        elif parts[0] in ("machine", "group") and len(parts) > 2 and _NAME_RE.fullmatch(parts[1]):
             base, rest = memo_home(env) / parts[0] / parts[1], "/".join(parts[2:])
     return base / rest if _RECORD_PATH.match(rest) else None
 
@@ -2000,7 +2054,7 @@ def sync_targets(m, every):
             for name in _subdirs(base / owner):
                 key = f"{owner}/{name}"
                 if owner == "_local":
-                    local_only.append("/" + name.replace("__", "/"))
+                    local_only.append(unflat(name))
                     continue
                 url = _read(git_dir_of(env, key).with_suffix(".origin"))
                 if url:
@@ -2101,6 +2155,9 @@ def _then_task(m, store, out):
 
 def cmd_note(m, a, out):
     parts = list(a.text)
+    if len(parts) == 2 and parts[0] == "open":
+        raise Refusal("usage", "memo: work in progress is not a note; it goes to its owner: the dossier, the fleet "
+                               "ledger or an issue (docs/adr/0004). A note is knowledge, true a month from now.")
     if len(parts) == 2 and parts[0] in OLD_KINDS:
         raise Refusal("usage", f"memo: notes have no kinds now; write: memo note \"{parts[1]}\" "
                                "[--scope user|machine|group:<name>]")
@@ -2145,12 +2202,19 @@ def cmd_summarize(m, a, out):
 
 
 def cmd_tasks(m, a, out):
-    n = 0
+    n, stuck = 0, []
     for store in m.session.stores:
-        for t in all_tasks(m.view(store), store.scope, m.slice(store)):
-            print(("\n" if n else "") + task_text(t, m.slice(store)), file=out)
+        view, sl = m.view(store), m.slice(store)
+        tasks = all_tasks(view, store.scope, sl)
+        for t in tasks:
+            print(("\n" if n else "") + task_text(t, sl), file=out)
             n += 1
-    if not n:
+        if not tasks and not fits(view, store.scope, sl):
+            stuck.append(store.scope)
+    for scope in stuck:
+        print(f"memo: {scope} is over its slice and no summary can bring it inside: its newest lines are too long "
+              "for it. Supersede the longest with shorter lines.", file=out)
+    if not n and not stuck:
         print("no task: every store this session reads fits its slice", file=out)
 
 
@@ -2437,6 +2501,17 @@ def cmd_migrate(m, a, out):
     return mod.main(a.rest, m.env, m.cwd, out, SimpleNamespace(**globals()))
 
 
+def _positive(text):
+    import argparse
+    try:
+        n = int(text)
+    except ValueError as e:
+        raise argparse.ArgumentTypeError(f"{text!r} is not a number") from e
+    if n < 1:
+        raise argparse.ArgumentTypeError("give 1 or more")
+    return n
+
+
 def build_parser():
     import argparse
     p = argparse.ArgumentParser(prog="memo", description="tstack's memory: knowledge notes, a bounded start read.")
@@ -2466,7 +2541,7 @@ def build_parser():
     add("tasks", cmd_tasks, "every pending compaction task of the stores read here")
     s = add("recall", cmd_recall, "search the notes, retired and archived ones included")
     s.add_argument("query", nargs="+")
-    s.add_argument("--limit", type=int, default=20)
+    s.add_argument("--limit", type=_positive, default=20)
     s.add_argument("--all", action="store_true", help="every store this machine has indexed")
     s.add_argument("--live", action="store_true", help="only live notes")
     s = add("zoom", cmd_zoom, "one record in full; for a summary, what it covers (* kept)")
