@@ -57,7 +57,7 @@ Publish the result as an alignment page through `tstack:show-me` (an Artifact): 
 Luiz decides in this tab. Ask with `AskUserQuestion`, at most three items a round. Each item offers a real choice: the proposed constraint, an alternative, or leave it open. For each decision:
 
 1. `fleet council decide --binds <slug>,<slug> --words "<Luiz's words>" "<constraint>"`, adding `--supersedes C-<m>` when it replaces an earlier one. It prints `C-<n>`.
-2. One SendMessage line to each bound designer, `designer-<slug>`, and to nobody else: `council C-<n> binds you: fleet council show C-<n>`. When a tab cannot be reached, tell Luiz which. The designer still sees the decision at its next resume or gate.
+2. One SendMessage line to each bound designer, `<slug>-designer`, and to nobody else: `council C-<n> binds you: fleet council show C-<n>`. When a tab cannot be reached, tell Luiz which. The designer still sees the decision at its next resume or gate.
 
 Done when every item on the page is decided, left open by Luiz, or sent as a question.
 

@@ -45,7 +45,7 @@ Ask gate 3 only after the fleet check passed on the current plan and the current
    - **Auto mode refuses** a call, this one or the `--trust` line. Report the refusal and the refused line to Luiz, record the row as `refused`, and do nothing else for that coordinator: no retry, no other route.
    - **Killed midway, or no tab.** Fix what the refusal names and run `add` again (`fleet team add --help` says what each case left behind).
    - **A startup prompt.** Luiz answers it in the Rex app (`fleet team attach <name>`), then run `fleet team start <name>`.
-5. Post the news, which wakes nobody: `fleet news post --from designer-<slug> --to all --kind fyi "spin-off <slug> launched: <coordinators>; design in docs/design/<slug>/"`.
+5. Post the news, which wakes nobody: `fleet news post --from <slug>-designer --to all --kind fyi "spin-off <slug> launched: <coordinators>; design in docs/design/<slug>/"`.
 6. Set the phase to `handed` when every row says `started`. Otherwise tell Luiz which coordinators failed and why.
 7. Land the dossier with its **Launch** rows and phase as a follow-up docs change, as in step 2: the copy landed in step 2 predates the launch. When `fleet council --help` succeeds, re-register the landed dossier: `fleet council register <slug> --dossier <repo>/docs/design/<slug>/dossier.md --repo <repo>`, with `<repo>` the repo's root. Then forget the design workspace: `jj workspace forget design-<slug>`.
 

@@ -15,7 +15,7 @@ Open the todo list with the sections below as items, in order.
 
 ## Start or resume
 
-1. Read the spin-off file. Its `found-in` names the repo; `<slug>` is the file's name between `spin-off-` and `.md`. You are the tab `designer-<slug>` in the Rex session `designers`; nothing you start opens there.
+1. Read the spin-off file. Its `found-in` names the repo; `<slug>` is the file's name between `spin-off-` and `.md`. You are the tab `<slug>-designer` in the Rex session `designers`; nothing you start opens there.
 2. Open your own jj workspace on the landing bookmark (tuca-mode's Land playbook, step 1): `jj workspace add ../<repo>-design-<slug> -r <bookmark>@origin --name design-<slug>`, and work there by absolute path, so your files never land in the origin's open change.
 3. Copy the spin-off file to `docs/design/<slug>/spin-off.md` and start `docs/design/<slug>/dossier.md` as [DOSSIER.md](DOSSIER.md) shapes it.
 
