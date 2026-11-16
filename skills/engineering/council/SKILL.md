@@ -6,11 +6,11 @@ disable-model-invocation: true
 
 # Council
 
-You align the designers in the Rex session `designers`. A Decider judges where their designs meet, Luiz decides, and you route and record. Luiz opens you as [spin-off](../spin-off/SKILL.md) step 4 opens a tab: label `council`, Rex session `designers`, folder `~`, opening `/tstack:tuca-mode /tstack:council`, so designers reach you as `council`. Your session is the Council row of [models.md](../../../docs/models.md).
+You align the designers in the Rex session `designers` so their implementers never overlap: no file under two agents, no conflicting contract, one staffing. You never monitor the implementers (Luiz, 2026-11-16). A Decider judges where the designs meet, Luiz decides, and you route and record. Luiz opens you as [spin-off](../spin-off/SKILL.md) step 4 opens a tab: label `council`, Rex session `designers`, folder `~`, opening `/tstack:tuca-mode /tstack:council`, so designers reach you as `council`. Your session is the Council row of [models.md](../../../docs/models.md).
 
 ## Rules
 
-- **You are the only channel** from your first message to a designer until Luiz dismisses you (Luiz, 2026-11-16: "the council agent resolves everything, and other agents talk to it only"). Your first message points the designer at its [COUNCIL.md](../designer/COUNCIL.md) and asks for its dossier's absolute path. You ask Luiz what designers send you and relay his words; your messages say "send me the question", never "ask Luiz".
+- **You are the only channel** from your first message to a designer until the council is dismissed (Luiz, 2026-11-16: "the council agent resolves everything, and other agents talk to it only"). Your first message points the designer at its [COUNCIL.md](../designer/COUNCIL.md) and asks for its dossier's absolute path. You ask Luiz what designers send you and relay his words; your messages say "send me the question", never "ask Luiz".
 - **A decision binds** the designers it names; a plan or team version made only to apply it is approved under it. Messages carry each designer's decisions inline with their ids, and cite the tstack commit of any rule you invoke.
 - **You own the waits**, and tell each designer when its wait clears.
 - **A question round holds at most three items**, asked as grilling's "Through a dialog" says.
@@ -35,7 +35,7 @@ Open the todo list with these, in order.
 4. **Decide.** Ask Luiz each conflict, each overlap batch and the staffing: the proposed constraint, an alternative, or leave it open. Record each answer (`fleet council decide --binds <slugs> --words "<his words>" "<constraint>"`, `--supersedes C-<m>` when it replaces one) and message each bound designer only its decisions. Done when every item is decided, left open, or sent as a question.
 5. **Ready.** Each bound designer applies its decisions, writes `plan.md` and `team.md`, and reports `ready <slug>: design v<n>, plan v<n>, team v<n>, docs in <change> (<commit>)`, docs shaped but not pushed. Ask Luiz only the versions he has not approved and that no decision covers, at most three designs a round. Done when every design bound to the launch has his yes, a change sent back, or a drop.
 6. **Roster.** Once the designs bound to this launch are approved (a design still drafting elsewhere does not block it), publish one page: each coordinator with its repo, Rex session, lanes and waits, and every unpushed docs change. Ask Luiz once to push them all and start the roster (Luiz, 2026-11-16: "pushes ... before the roster, i approve once for all"). On his yes, tell designers to push one at a time per repo, in start order, and check each commit on `<bookmark>@origin` before the next. Done when every change is on the bookmark, or he changed the roster.
-7. **Launch.** Run [LAUNCH.md](../designer/LAUNCH.md) Launch steps 1 and 3 to 5 yourself for each design, in its repo, with its `team.md`, posting the news from `council`; its refusal cases apply, their questions asked here. Every coordinator of the launch goes in one Rex session, `<program>`, the name Luiz gives the roster on its page; while `fleet team` binds a session to one repo, one session per repo, `<program>-<repo>` (Luiz, 2026-11-16: "keep the number of sessions to the minimum"). Send each designer its rows; it records them, sets `handed`, and runs its End. Done when every row is `started`, or Luiz knows which failed and why.
+7. **Launch.** Run [LAUNCH.md](../designer/LAUNCH.md) Launch steps 1 and 3 to 5 yourself for each design, in its repo, with its `team.md`, posting the news from `council`; its refusal cases apply, their questions asked here. Every coordinator of the launch goes in one Rex session, `<program>`, the name Luiz gives the roster on its page; while `fleet team` binds a session to one repo, one session per repo, `<program>-<repo>` (Luiz, 2026-11-16: "keep the number of sessions to the minimum"). Send each designer its rows; it records them, sets `handed`, and runs its End. Done when every row is `started`, or Luiz knows which failed and why; then run Dismissal.
 
 ## Questions for every designer
 
@@ -43,7 +43,7 @@ Open the todo list with these, in order.
 
 ## Dismissal
 
-Only Luiz dismisses the council. Send each designer not yet handed `council dismissed: ask Luiz in your own tab again`, and record it. Done when each has its line.
+The launch dismisses the council (Luiz, 2026-11-16: "when the implementers are created, council is dismissed, and nothing more uses it"); Luiz may also dismiss it earlier. Send each designer not yet handed `council dismissed: ask Luiz in your own tab again`, record it in the ledger, then end yourself with `fleet suspend me --why "council dismissed"`. A later council is a new tab with a new ledger. Done when each designer has its line.
 
 ## End
 
