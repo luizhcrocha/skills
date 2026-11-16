@@ -119,7 +119,8 @@ class YamlTest(unittest.TestCase):
 
     def test_what_counts_as_quiet(self):
         for path, kind in (("docs/x.md", "docs"), ("README.md", "docs"), (".tstack/memo/notes/a.md", "docs"),
-                           (".tstack/memo/index.tsv", "memo"), ("scripts/tests/test_x.py", "tests"),
+                           (".tstack/reviews/abcd.tsv", "records"), (".tstack/memo/index.tsv", None),
+                           ("scripts/tests/test_x.py", "tests"),
                            ("src/a.test.ts", "tests"), ("justfile", "tooling"), ("src/a.ts", None),
                            ("package.json", None)):
             self.assertEqual(lc.kind(path), kind, path)
@@ -283,7 +284,7 @@ class SkipCiTest(RepoCase):
 
     def test_a_quiet_stack_in_a_skip_ci_repo_is_marked_and_pushes(self):
         self.change("docs: b", {"docs/b.md": "b\n"})
-        self.change("test: b", {"tests/test_b.py": "b\n", ".tstack/memo/index.tsv": "x\n"})
+        self.change("test: b", {"tests/test_b.py": "b\n", ".tstack/reviews/abcd.tsv": "x\n"})
         result = self.check()
         self.assertTrue(result["skip_ci_habit"])
         self.assertTrue(result["suggest_skip_ci"])
@@ -933,13 +934,13 @@ class ReviewRecordTest(RepoCase):
         self.assertEqual(review["state"], "missing")
         self.assertIn("its patch fingerprint", review["why"])
 
-    def test_from_a_subdirectory_records_and_memo_only_changes_read_from_the_workspace_root(self):
+    def test_from_a_subdirectory_records_and_record_only_changes_read_from_the_workspace_root(self):
         self.trunk(("feat: a", {"a.ts": "a\n", "sub/x.ts": "x\n"}))
         self.change("feat: b", {"b.ts": self.lines(301)})
         change = jj(self.repo, "log", "--no-graph", "-r", "@-", "-T", "change_id.short(12)").strip()
         [read] = self.read()
         self.record(read, change)
-        self.change("docs: a memo note", {".tstack/memo/notes/01M6.md": "n\n"})
+        self.change("docs: a review record", {".tstack/reviews/abcd.tsv": "x\n"})
         result = self.check("--require-reviews", cwd=self.repo / "sub")
         self.assertEqual([(r["change"], r["state"]) for r in result["reviews"]], [(change, "current")])
         self.assertEqual(result["verdict"], "push")
@@ -1022,7 +1023,7 @@ class ReviewRecordTest(RepoCase):
 
 
 class GateNeededTest(RepoCase):
-    """A stack of docs and memo notes alone fast-forwards without a gate run: nothing the gate runs reads it. Tests,
+    """A stack of docs and review records alone fast-forwards without a gate run: nothing the gate runs reads it. Tests,
     tooling, and a Markdown file among code (a skill's SKILL.md, which tstack's validate reads) still need the gate."""
 
     def needed(self, files):
@@ -1030,19 +1031,19 @@ class GateNeededTest(RepoCase):
         self.change("docs: d", files)
         return self.check()["gate_needed"]
 
-    def test_docs_and_memo_notes_need_no_gate(self):
+    def test_docs_and_review_records_need_no_gate(self):
         self.assertIs(self.needed({"README.md": "r\n", "CONTEXT.md": "c\n", "docs/adr/0003-x.md": "a\n",
                                    "docs/guide.md": "g\n", "adr/0001-y.md": "a\n",
-                                   ".tstack/memo/notes/01M6.md": "n\n", ".tstack/reviews/abcd.tsv": "x\n"}), False)
+                                   ".tstack/reviews/abcd.tsv": "x\n"}), False)
 
     def test_what_a_gate_may_read_or_compile_is_not_gate_free(self):
         free = ["README.md", "CONTEXT.md", "LICENSE", "docs/guide.md", "docs/notes.txt", "docs/adr/0003-x.md",
-                "doc/intro.md", "adr/0001-y.md", "adrs/0002-z.txt", ".tstack/memo/notes/01M6.md",
-                ".tstack/memo/index.tsv", ".tstack/reviews/abcd.tsv"]
+                "doc/intro.md", "adr/0001-y.md", "adrs/0002-z.txt", ".tstack/reviews/abcd.tsv"]
         gated = ["skills/x/README.md", "skills/x/docs/a.md", "skills/x/adr/0001.md", "fleet/README.md",
                  "fleet/CONTEXT.md", "crates/core/README.md", "docs/page.mdx", "index.mdx", "docs/requirements.txt",
                  "docs/constraints.txt", "docs/conf.rst", ".tstack/hooks/pre.sh", ".tstack/reviews/abcd.md",
-                 ".tstack/reviews/sub/abcd.tsv", ".tstack/config.toml", "requirements.txt",
+                 ".tstack/reviews/sub/abcd.tsv", ".tstack/config.toml", ".tstack/memo/notes/01M6.md",
+                 ".tstack/memo/index.tsv", "requirements.txt",
                  "CMakeLists.txt", "docs/CMakeLists.txt", "notes.txt"]
         self.assertEqual([p for p in free if not lc.gate_free(p)], [])
         self.assertEqual([p for p in gated if lc.gate_free(p)], [])
