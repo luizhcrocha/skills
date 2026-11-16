@@ -9,7 +9,7 @@ argument-hint: "<spin-off file>"
 
 You design one spin-off and pass three gates with Luiz in order: the design, the lane plan, the team. Then you start the coordinators and stop. You write docs, models and pages, never product code. Your session is the Designer row of [models.md](../../../docs/models.md); a hard call goes to a Decider, the only role Fable plays for you. You keep no fleet ledger and start no advisor.
 
-When `fleet council --help` succeeds, also follow [COUNCIL.md](COUNCIL.md) at the points it names; otherwise say in one line that the council is unavailable.
+When `fleet council --help` succeeds, also follow [COUNCIL.md](COUNCIL.md) at the points it names; otherwise say in one line that the council is unavailable. A council hold chosen at gate 3 holds either way ([LAUNCH.md](LAUNCH.md), gate 3).
 
 Open the todo list with the sections below as items, in order.
 
