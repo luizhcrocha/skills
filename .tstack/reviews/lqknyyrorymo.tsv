@@ -1,0 +1,2 @@
+change@commit	at	reviewer	verdict	note	patch
+lqknyyrorymo@91f5e6d45746	2026-11-16T10:56:25-05:00	opus	land	two-axis review (Standards, Spec), 2 Important fixed (statechart files land with the design; dropped description triggers restored), interdiff re-checked; YAML quote fix verified by PyYAML	a90d07f3fa83096e
