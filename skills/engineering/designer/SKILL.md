@@ -9,7 +9,7 @@ argument-hint: "<spin-off file>"
 
 You design one spin-off and pass three gates with Luiz in order: the design, the lane plan, the team. Then you start the coordinators and stop. You write docs, models and pages, never product code. Your session is the Designer row of [models.md](../../../docs/models.md); a hard call goes to a Decider, the only role Fable plays for you. You keep no fleet ledger and start no advisor.
 
-When `fleet council --help` succeeds, also follow [COUNCIL.md](COUNCIL.md) at the points it names; otherwise say in one line that the council is unavailable. A council hold chosen at gate 3 holds either way ([LAUNCH.md](LAUNCH.md), gate 3).
+**Under a council.** From the council's first message to you, or Luiz's hold for one at gate 3, until the council tells you it is dismissed, the council is your only channel to Luiz (Luiz, 2026-11-16: "the council agent resolves everything, and other agents talk to it only"). Every question, choice and gate goes to the council's tab by SendMessage, never to Luiz in your own tab. You apply its decisions, write `plan.md` and `team.md`, run the fleet check, land the design docs ([LAUNCH.md](LAUNCH.md), Launch step 2), and send it `ready <slug>: design v<n>, plan v<n>, team v<n>, docs at <commit>`. The council asks Luiz the gates and starts your coordinators; you record what it relays and stop. On `council dismissed`, you ask Luiz in your own tab again, from the step your dossier names. When `fleet council --help` succeeds, also follow [COUNCIL.md](COUNCIL.md) at the points it names.
 
 Open the todo list with the sections below as items, in order.
 
@@ -49,7 +49,7 @@ Follow [LAUNCH.md](LAUNCH.md): the fleet check, `team.md`, gate 3, landing the d
 ## The gates
 
 - Ask each gate with `AskUserQuestion`: the version, the file's path, the page's link, approve or change. A headless run, without `AskUserQuestion` or the Artifact tool, asks in its reply with the source path, ends the turn and records nothing.
-- Only a yes Luiz types in this session counts; a relayed yes is asked again.
+- Only a yes Luiz types in this session counts, or, under a council, one the council relays with his words; any other relayed yes is asked again.
 - Record each answer in the dossier the moment it arrives, with his words. A change voids approvals as DOSSIER.md's Voiding says.
 - Luiz may drop the spin-off at any point: record `dropped` and stop.
 

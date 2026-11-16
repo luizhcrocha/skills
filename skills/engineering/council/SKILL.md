@@ -1,6 +1,6 @@
 ---
 name: council
-description: "Align the designer sessions without waking them all: check their Interfaces cards with fleet council, judge overlaps and conflicts through a Decider, record Luiz's decisions, and message only the designers they bind."
+description: "Align the designer sessions without waking them all: check their Interfaces cards, judge overlaps and conflicts through a Decider, record Luiz's decisions, message only the designers they bind, and, as their only channel to Luiz, ask their gates and start their coordinators."
 disable-model-invocation: true
 ---
 
@@ -16,7 +16,9 @@ Luiz's rules (2026-11-15):
 - A question for every designer goes through the questions file. You never wake every designer at once.
 - The fleet CLI owns the state, under `~/.local/state/fleet/council/`. You write nothing into it, or into a designer's workspace, except through `fleet council`.
 
-Every step runs only when `fleet council --help` succeeds. When it fails, say in one line that `fleet council` is missing, and stop.
+Luiz's rule (2026-11-16): "the council agent resolves everything, and other agents talk to it only". From your first message to a designer until Luiz dismisses the council, you are its only channel to Luiz. Its questions, choices and gates come to you; you ask them in this tab and relay each answer with his words. You start its coordinators. Luiz never approves anything in a designer's tab.
+
+When `fleet council --help` fails, run the same steps by hand and say so in one line. The ledger is `~/.local/state/tstack/council/decisions.md`, and only you write it: each `C-<n>` with the slugs it binds and Luiz's words, each `Q-<n>` and its answers, each launch row. Find the designers with `rex window ls -s designers` and read their dossiers' Interfaces cards directly; the Decider does the check's join. Send every message with SendMessage. Designers acknowledge in their dossier's Constraints table.
 
 Open the todo list with the steps below as items, in order.
 
@@ -68,7 +70,19 @@ Luiz may call a council on a few related designers waiting at gate 3, to staff t
 1. Read each named designer's `plan.md` and `team.md`. Done when both are read for each.
 2. Spawn one Decider (`model: "fable", effort: "high"`) with those files. It returns one staffing for all of them: the implementer agents, the lanes each takes across the designs, what each waits on, and which designer starts it, with no file under two agents. Done when every lane is in exactly one agent.
 3. Ask Luiz with `AskUserQuestion`: take the staffing, change it, or keep each designer's own team. Done when he has chosen.
-4. Record his choice with `fleet council decide --binds <slug>,<slug> --words "<Luiz's words>" "<the staffing, one line>"` and write each designer's part in the decision's text or a file it names. Send each bound designer one SendMessage line: `council C-<n>: your part of the staffing is in fleet council show C-<n>`. Done when each designer has its line.
+4. Record his choice with `fleet council decide --binds <slug>,<slug> --words "<Luiz's words>" "<the staffing, one line>"` and write each designer's part in the decision's text or a file it names. Send each bound designer one SendMessage line: `council C-<n>: your part of the staffing is in fleet council show C-<n>; report ready when your team.md holds it`. Then run Gates and launch. Done when each designer has its line.
+
+## Gates and launch
+
+Done when every designer that reported `ready` is launched, sent back with a change, or dropped.
+
+1. **Collect.** A designer reports `ready <slug>: design v<n>, plan v<n>, team v<n>, docs at <commit>`. Check that `<bookmark>@origin` holds that commit. Done when each report is verified or sent back with what is missing.
+2. **Ask.** `AskUserQuestion`, at most three designs a round, one question per design: approve the versions he has not yet approved (design, plan and team together), change, or drop. Each option's description names the design page and the `plan.md` and `team.md` paths. Record his answer in the ledger and relay it to the designer with his words; the designer records it in its dossier. A change goes back to its designer, which reports `ready` again. Done when each design has his answer.
+3. **Launch.** For each approved design, run the designer's [LAUNCH.md](../designer/LAUNCH.md) Launch steps 3 to 6 yourself, in the design's repo, with its `team.md`: one `fleet team add` per coordinator in the Rex session `<slug>`, and the news post from `council`. Its refusal cases apply as written, the questions they raise asked here. Send the designer its launch rows; it writes them into its dossier, lands it (Launch step 7) and stops. Done when every row is `started`, or Luiz knows which failed and why.
+
+## Dismissal
+
+Only Luiz dismisses the council. Send each designer you have messaged one line, `council dismissed: ask Luiz in your own tab again`, and record the dismissal in the ledger. Done when each has its line.
 
 ## Questions for every designer
 
