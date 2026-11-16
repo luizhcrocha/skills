@@ -10,9 +10,13 @@ Each file gets <state>/files/<id>/<name>, a symlink to its absolute path, where
 <id> is a hash of that path: the same file keeps the same URL, and the link
 shows its current content. The server answers only for those links, on
 127.0.0.1, and `tailscale serve` publishes it to the tailnet, never to the
-internet. Markdown is rendered to HTML through pandoc, since Quick Look shows
-nothing for a .md fetched over HTTP. pandoc runs in its sandbox, so a page
-carries no local file the Markdown points to.
+internet. Quick Look shows nothing for some types fetched over HTTP, so the
+server converts them: Markdown to HTML through pandoc, in its sandbox, so a
+page carries no local file the Markdown points to; documents (docx, doc, odt,
+rtf, pptx, ppt, odp) to PDF and spreadsheets (xlsx, xls, ods) to an HTML table
+through headless LibreOffice. Without LibreOffice a docx falls back to pandoc's
+HTML and the rest are served as they are. A conversion is cached until the file
+changes.
 """
 
 import hashlib
@@ -23,6 +27,8 @@ import mimetypes
 import os
 import shutil
 import signal
+import tempfile
+import threading
 import subprocess
 import sys
 import time
@@ -86,6 +92,75 @@ def render_markdown(source):
     return f"<!doctype html><meta charset=utf-8><title>{html.escape(source.name)}</title><pre>{text}</pre>".encode()
 
 
+DOCUMENTS = {".docx", ".doc", ".odt", ".rtf", ".pptx", ".ppt", ".odp"}
+SHEETS = {".xlsx", ".xlsm", ".xls", ".ods"}
+OFFICE_LOCK = threading.Lock()
+
+
+def cached(source, ext, convert):
+    stat = source.stat()
+    key = entry_id(source)
+    cache = state_dir() / "cache"
+    cache.mkdir(parents=True, exist_ok=True)
+    out = cache / f"{key}-{stat.st_mtime_ns}-{stat.st_size}.{ext}"
+    if out.exists():
+        return out.read_bytes()
+    body = convert(source)
+    if body is None:
+        return None
+    for stale in cache.glob(f"{key}-*"):
+        stale.unlink(missing_ok=True)
+    out.write_bytes(body)
+    return body
+
+
+def office_convert(source, target):
+    office = shutil.which("soffice") or shutil.which("libreoffice")
+    if not office:
+        return None
+    profile = (state_dir() / "office-profile").as_uri()
+    with OFFICE_LOCK, tempfile.TemporaryDirectory() as out:
+        run = subprocess.run(
+            [office, "--headless", "--norestore", f"-env:UserInstallation={profile}",
+             "--convert-to", target, "--outdir", out, str(source)],
+            capture_output=True, timeout=120,
+        )
+        produced = Path(out) / f"{source.stem}.{target.split(':')[0]}"
+        if run.returncode != 0 or not produced.is_file():
+            return None
+        return produced.read_bytes()
+
+
+def pandoc_docx(source):
+    pandoc = shutil.which("pandoc")
+    if not pandoc or source.suffix.lower() != ".docx":
+        return None
+    run = subprocess.run(
+        [pandoc, "--standalone", "--sandbox", "--embed-resources", "--metadata", f"title={source.name}",
+         "--from", "docx", "--to", "html5", str(source)],
+        capture_output=True, timeout=60,
+    )
+    return run.stdout if run.returncode == 0 else None
+
+
+def convert(source):
+    suffix = source.suffix.lower()
+    if suffix in (".md", ".markdown"):
+        return render_markdown(source), "text/html; charset=utf-8"
+    if suffix in DOCUMENTS:
+        pdf = cached(source, "pdf", lambda s: office_convert(s, "pdf"))
+        if pdf is not None:
+            return pdf, "application/pdf"
+        page = cached(source, "html", pandoc_docx)
+        if page is not None:
+            return page, "text/html; charset=utf-8"
+    if suffix in SHEETS:
+        page = cached(source, "html", lambda s: office_convert(s, "html:HTML (StarCalc)"))
+        if page is not None:
+            return page, "text/html; charset=utf-8"
+    return None
+
+
 class Handler(http.server.BaseHTTPRequestHandler):
     def do_GET(self):
         if self.path == HEALTH:
@@ -93,8 +168,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
         source = resolve(self.path)
         if source is None:
             return self.reply(404, b"not peeked", "text/plain")
-        if source.suffix.lower() in (".md", ".markdown"):
-            return self.reply(200, render_markdown(source), "text/html; charset=utf-8")
+        converted = convert(source)
+        if converted is not None:
+            return self.reply(200, *converted)
         kind = mimetypes.guess_type(source.name)[0] or "application/octet-stream"
         if kind.startswith("text/") and "charset" not in kind:
             kind += "; charset=utf-8"
