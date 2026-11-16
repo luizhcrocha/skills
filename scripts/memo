@@ -2284,7 +2284,8 @@ def cmd_migrate(m, a, out):
     loader = SourceFileLoader("memo_migrate", str(Path(__file__).resolve().parent / "memo-migrate"))
     mod = module_from_spec(spec_from_loader("memo_migrate", loader))
     loader.exec_module(mod)
-    return mod.main(a.rest, m.env, m.cwd, out, sys.modules[__name__])
+    from types import SimpleNamespace
+    return mod.main(a.rest, m.env, m.cwd, out, SimpleNamespace(**globals()))
 
 
 def build_parser():

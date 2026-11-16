@@ -1,0 +1,292 @@
+#!/usr/bin/env python3
+"""memo migrate: the one-time move from memo v1 stores to v2 (docs/design/memo-v2/migration.md).
+
+Loaded by `memo migrate <step>`, which hands it the memo module. Each step can run again, and each takes
+--dry-run, which prints what the step would do and writes nothing.
+
+  snapshot           copy the checkout's .tstack/memo/ and the old global folder into the archive
+  apply <file.tsv>   rows of id<TAB>action<TAB>argument: retire <why>, supersede <line>, refile <scope>, keep.
+                     Every row is valid or nothing is written
+  store [--fresh]    copy .tstack/memo/ into the home store, then write MIGRATED. --fresh copies nothing:
+                     the store starts with what the pass wrote (custom-mcp-servers)
+  store --global     write MIGRATED for the old global folder, once each of its live notes has an end: on
+                     this machine's apply, or on another machine whose sync brought the note into a store
+  report             the pass's counts and its unplaced items, in the archive's pass-report.md
+"""
+
+import argparse
+import re
+import shutil
+import time
+from pathlib import Path
+
+ACTIONS = ("retire", "supersede", "refile", "keep")
+HEADER = ["id", "action", "argument"]
+_SCOPE_LINE = re.compile(r'(?m)^scope\s*=\s*".*"$')
+
+
+def archive_dir(M, env, date):
+    return M.archive_root(env) / f"v1-{date}"
+
+
+def legacy_sources(M, m):
+    """(name in the archive, folder) of the v1 stores this session reads: the checkout's and the global one."""
+    out = []
+    if m.session.repo is not None:
+        out += [(M._flat(m.session.repo.scope.name), d) for d in m.session.repo.legacy if d.is_dir()]
+    if M.legacy_global(m.env).is_dir():
+        out.append(("global", M.legacy_global(m.env)))
+    return out
+
+
+def record_files(base):
+    """{relative path: path} of the record files under base, flat or in subfolders."""
+    return {rel: base / rel for rel in sorted(_names(base))}
+
+
+def _names(base):
+    found = []
+    for folder in ("notes", "summaries", "retired"):
+        root = base / folder
+        if root.is_dir():
+            found += [str(p.relative_to(base)) for p in root.rglob("*.md") if not p.name.startswith(".")]
+    return found
+
+
+def snapshot(M, m, a, out):
+    dest = archive_dir(M, m.env, a.date)
+    for name, src in legacy_sources(M, m):
+        files = [p for p in src.rglob("*") if p.is_file()]
+        new = [p for p in files if not (dest / name / p.relative_to(src)).exists()]
+        records = sum(1 for p in files if p.suffix == ".md" and p.relative_to(src).parts[0] in M.FOLDERS)
+        if not a.dry_run:
+            for p in new:
+                target = dest / name / p.relative_to(src)
+                target.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(p, target)
+        verb = "would copy" if a.dry_run else "copied"
+        print(f"{name}: {records:,} record files, {len(files):,} files; {verb} {len(new):,} into {dest / name}",
+              file=out)
+    return 0
+
+
+def parse_rows(M, text):
+    lines = [ln for ln in text.splitlines() if ln.strip()]
+    if not lines or lines[0].split("\t") != HEADER:
+        raise M.Refusal("usage", "memo migrate: the header must be id<TAB>action<TAB>argument")
+    rows, bad = [], []
+    for no, ln in enumerate(lines[1:], 2):
+        cols = ln.split("\t")
+        if len(cols) == 2:
+            cols.append("")
+        if len(cols) != 3 or cols[1] not in ACTIONS:
+            bad.append(f"line {no}: want id<TAB>{'|'.join(ACTIONS)}<TAB>argument")
+            continue
+        rows.append((no, cols[0].strip(), cols[1], cols[2].strip()))
+    return rows, bad
+
+
+def global_file(M, env, ident):
+    """The file of a note in the old global folder, or None."""
+    base = M.legacy_global(env)
+    for rel in (f"notes/{ident}.md", f"notes/{ident[:4]}/{ident}.md"):
+        if (base / rel).is_file():
+            return base / rel
+    return None
+
+
+def check(M, m, rows, bad, before):
+    """(rows applied before, each other row resolved to (row, action, store, record, argument)), or a usage
+    Refusal that names every bad line. A row applied before is skipped unread: its note may have moved."""
+    done, seen, again = [], set(), 0
+    for no, token, action, arg in rows:
+        tail = token.strip().strip("()").upper()
+        if len(tail) >= 4 and any(i.endswith(tail) and act == action for i, act in before):
+            again += 1
+            continue
+        try:
+            store, _, rec = m.find(token)
+        except M.Refusal as e:
+            bad.append(f"line {no}: {e}")
+            continue
+        if rec.id in seen:
+            bad.append(f"line {no}: {rec.id} has a row already")
+            continue
+        seen.add(rec.id)
+        try:
+            if action in ("retire", "supersede"):
+                arg = M.clean_text(arg)
+            if action == "retire" and isinstance(rec, M.Retirement):
+                raise ValueError("a retirement is not retired")
+            if action in ("supersede", "refile") and not isinstance(rec, M.Note):
+                raise ValueError(f"only a note can be {action}d")
+            if action == "refile":
+                arg = M.parse_scope(arg)
+                if arg.kind != "repo" and arg.name and not M._NAME_RE.match(arg.name):
+                    raise ValueError(f"not a scope name: {arg.name!r}")
+                if global_file(M, m.env, rec.id) is None:
+                    raise ValueError("refile moves a note of the old global folder (step 4); this one is not there")
+        except (M.Refusal, ValueError) as e:
+            bad.append(f"line {no}: {e}")
+            continue
+        done.append((no, action, store, rec, arg))
+    if bad:
+        bad.sort(key=lambda line: int(line.split()[1].rstrip(":")))
+        raise M.Refusal("usage", "memo migrate: nothing applied:\n  " + "\n  ".join(bad))
+    return again, done
+
+
+def applied_log(M, env, date):
+    return archive_dir(M, env, date) / "applied.tsv"
+
+
+def applied_before(path):
+    try:
+        return {tuple(ln.split("\t")[:2]) for ln in path.read_text(encoding="utf-8").splitlines()}
+    except OSError:
+        return set()
+
+
+def apply(M, m, a, out):
+    M._must_write(m)
+    rows, bad = parse_rows(M, Path(a.file).read_text(encoding="utf-8"))
+    log = applied_log(M, m.env, a.date)
+    before = applied_before(log)
+    again, fresh = check(M, m, rows, bad, before)
+    counts = {}
+    for _, action, store, _, arg in fresh:
+        key = (action, str(arg) if action == "refile" else str(store.scope))
+        counts[key] = counts.get(key, 0) + 1
+    verb = "would apply" if a.dry_run else "applied"
+    print(f"{verb} {len(fresh):,} rows of {len(fresh) + again:,} ({again:,} applied before)", file=out)
+    for (action, where), n in sorted(counts.items()):
+        print(f"  {action:<10} {n:>6,}  {'to ' if action == 'refile' else 'in '}{where}", file=out)
+    if a.dry_run:
+        return 0
+    log.parent.mkdir(parents=True, exist_ok=True)
+    for _, action, store, rec, arg in fresh:
+        if action == "retire":
+            M.retire(m, [rec.id], arg)
+        elif action == "supersede":
+            M.supersede(m, [rec.id], arg)
+        elif action == "refile":
+            refile(M, m, store, rec, arg)
+        unplaced = action == "retire" and arg.lower().startswith("unplaced")
+        with open(log, "a", encoding="utf-8") as f:
+            f.write(f"{rec.id}\t{action}\t{store.scope}\t{'unplaced' if unplaced else ''}\t{arg}\n")
+    return 0
+
+
+def refile(M, m, store, rec, scope):
+    """Move a note of an old folder into the store of scope, in the subfolder of its id. Only its scope line
+    changes: the id, the time, the author and the text stay."""
+    src = global_file(M, m.env, rec.id)
+    content = _SCOPE_LINE.sub(f'scope = "{scope}"', src.read_text(encoding="utf-8"), count=1)
+    if M.parse_record("notes", content, rec.id).scope != scope:
+        raise M.Refusal("usage", f"memo migrate: {src} has no scope line to rewrite")
+    M.atomic_write(M.scope_store(m.env, scope).path_of("notes", rec.id), content)
+    src.unlink()
+    m.forget(store)
+
+
+def store_step(M, m, a, out):
+    M._must_write(m)
+    if a.glob:
+        return store_global(M, m, a, out)
+    repo = m.session.repo
+    if repo is None:
+        raise M.Refusal("usage", "memo migrate store: run it in the repository's checkout, or pass --global")
+    src = next((d for d in repo.legacy if d.is_dir()), None)
+    files = {} if src is None or a.fresh else record_files(src)
+    copy = {}
+    for rel, path in files.items():
+        ident = Path(rel).stem
+        if not M._ULID_RE.match(ident):
+            continue
+        target = repo.path_of(rel.split("/", 1)[0], ident)
+        if not target.exists():
+            copy[target] = path
+    verb = "would copy" if a.dry_run else "copied"
+    how = " (fresh: the pass's notes only, which are there already)" if a.fresh else ""
+    print(f"{repo.scope}: {verb} {len(copy):,} of {len(files):,} record files into {repo.dir}{how}", file=out)
+    if a.dry_run:
+        return 0
+    for target, path in copy.items():
+        M.atomic_write(target, path.read_bytes())
+    M.atomic_write(repo.dir / M.MIGRATED, f"{time.strftime('%Y-%m-%d')} from {src}\n")
+    print(f"{repo.scope}: {M.MIGRATED} written; {src} is read no more and can leave the working tree", file=out)
+    return 0
+
+
+def store_global(M, m, a, out):
+    user = M.user_store(m.env)
+    old = M.legacy_global(m.env)
+    ids = {Path(rel).stem for rel in _names(old) if rel.startswith("notes/")}
+    placed = {p.stem for p in M.memo_home(m.env).glob("*/**/notes/*/*.md")} - {
+        p.stem for p in user.dir.glob("notes/*/*.md")}
+    left = sorted(n.id for n in m.view(user).live if n.id in ids and n.id not in placed)
+    if left:
+        raise M.Refusal("usage", f"memo migrate store --global: {len(left):,} live notes of {old} have no end yet; "
+                                 "step 4's apply refiles or retires each (" + ", ".join(left[:5]) +
+                                 (", …" if len(left) > 5 else "") + ")")
+    print(f"user: {len(ids):,} notes left in {old}, none live; "
+          f"{'would write' if a.dry_run else 'wrote'} {M.MIGRATED} in {user.dir}", file=out)
+    if not a.dry_run:
+        M.atomic_write(user.dir / M.MIGRATED, f"{time.strftime('%Y-%m-%d')} from {old}\n")
+    return 0
+
+
+def report(M, m, a, out):
+    rows = []
+    try:
+        for ln in applied_log(M, m.env, a.date).read_text(encoding="utf-8").splitlines():
+            ident, action, scope, unplaced, *_ = ln.split("\t") + [""] * 4
+            rows.append((ident, action, scope, unplaced == "unplaced"))
+    except OSError:
+        pass
+    ends = {"knowledge (superseded by a note)": 0, "retired with a reason": 0, "unplaced": 0, "refiled": 0,
+            "kept": 0}
+    for _, action, _, unplaced in rows:
+        end = ("unplaced" if unplaced else "retired with a reason" if action == "retire"
+               else "knowledge (superseded by a note)" if action == "supersede"
+               else "refiled" if action == "refile" else "kept")
+        ends[end] += 1
+    text = [f"# The v1 pass, {a.date}", "", "| End | Items |", "| :-- | --: |",
+            *(f"| {end} | {n:,} |" for end, n in ends.items()), "", "## Unplaced", ""]
+    text += [f"- {ident} in {scope}" for ident, _, scope, unplaced in rows if unplaced] or ["None."]
+    path = archive_dir(M, m.env, a.date) / "pass-report.md"
+    if a.dry_run:
+        print("\n".join(text), file=out)
+        return 0
+    M.atomic_write(path, "\n".join(text) + "\n")
+    print(f"wrote {path}: {len(rows):,} items", file=out)
+    return 0
+
+
+def build_parser():
+    p = argparse.ArgumentParser(prog="memo migrate", description="the one-time move from memo v1 stores")
+    sub = p.add_subparsers(dest="step", required=True)
+    for name, fn in (("snapshot", snapshot), ("apply", apply), ("store", store_step), ("report", report)):
+        s = sub.add_parser(name)
+        s.set_defaults(fn=fn)
+        s.add_argument("--dry-run", action="store_true", help="print what the step would do; write nothing")
+        s.add_argument("--date", default=time.strftime("%Y-%m-%d", time.gmtime()),
+                       help="the archive's date, v1-<date>; default today, so a step run on another day passes it")
+        if name == "apply":
+            s.add_argument("file")
+        if name == "store":
+            s.add_argument("--fresh", action="store_true", help="copy no old record (custom-mcp-servers)")
+            s.add_argument("--global", dest="glob", action="store_true", help="the old global folder")
+    return p
+
+
+def main(argv, env, cwd, out, M):
+    try:
+        a = build_parser().parse_args(argv)
+    except SystemExit as e:
+        return e.code if isinstance(e.code, int) else M.EXIT_INVALID
+    m = M.Memo(env, cwd)
+    try:
+        return a.fn(M, m, a, out)
+    finally:
+        m.index.close()
