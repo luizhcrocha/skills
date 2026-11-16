@@ -889,3 +889,14 @@ class Bookmark(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class RemoteKey(unittest.TestCase):
+    def test_a_remote_whose_path_climbs_gives_no_key(self):
+        for url in ("git@github.com:../..", "https://github.com/../..", "git@github.com:owner/..",
+                    "ssh://git@host/./repo.git"):
+            self.assertIsNone(memo.normalize_remote(url), url)
+
+    def test_ordinary_remotes_keep_their_key(self):
+        self.assertEqual(memo.normalize_remote("git@github.com:Owner/Repo.git"), "owner/repo")
+        self.assertEqual(memo.normalize_remote("https://github.com/luizhcrocha/skills/"), "luizhcrocha/skills")

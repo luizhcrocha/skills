@@ -171,6 +171,12 @@ def check(M, m, rows, bad, before):
             bad.append(f"line {no}: {rec.id} has a row already")
             continue
         seen.add(rec.id)
+        if rec.id in m.view(store).out:
+            if action == "retire":
+                again += 1
+                continue
+            bad.append(f"line {no}: {M.short(rec.id)} is already retired or corrected (memo zoom shows by what)")
+            continue
         try:
             if action in ("retire", "supersede"):
                 arg = M.clean_text(arg)

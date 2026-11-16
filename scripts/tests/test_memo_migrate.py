@@ -292,3 +292,27 @@ class Safety(MigrateCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class AlreadyOut(MigrateCase):
+    def setUp(self):
+        super().setUp()
+        self.migrate("snapshot")
+
+    def files_now(self):
+        return sorted(str(p.relative_to(self.home)) for p in self.home.rglob("*.md"))
+
+    def test_a_supersede_row_for_a_note_a_session_retired_refuses_before_any_write(self):
+        self.assertEqual(memo.main(["retire", uid(2), "done in abc1234"], env=self.env, cwd=str(self.repo),
+                                   out=io.StringIO()), 0)
+        before = self.files_now()
+        rows = self.tsv((uid(1), "retire", "the deploy moved"), (uid(2), "supersede", "the hook port is done"))
+        self.assertIn("already retired or corrected", self.migrate("apply", rows, code=2))
+        self.assertEqual(self.files_now(), before)
+
+    def test_a_retire_row_for_a_note_a_session_superseded_counts_as_done(self):
+        self.assertEqual(memo.main(["supersede", uid(3), "the cache key is the digest"], env=self.env,
+                                   cwd=str(self.repo), out=io.StringIO()), 0)
+        rows = self.tsv((uid(1), "retire", "the deploy moved"), (uid(3), "retire", "old pin"))
+        self.migrate("apply", rows)
+        self.assertIn("applied 0 rows", self.migrate("apply", rows))

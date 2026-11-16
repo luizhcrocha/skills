@@ -463,9 +463,9 @@ def normalize_remote(url):
         return None
     path = path.strip("/").lower().removesuffix(".git")
     parts = [p for p in path.split("/") if p]
-    if len(parts) < 2:
+    if len(parts) < 2 or not all(re.fullmatch(r"[a-z0-9][a-z0-9._-]*", p) for p in parts[-2:]):
         return None
-    return f"{parts[-2]}/{parts[-1]}".lower()
+    return f"{parts[-2]}/{parts[-1]}"
 
 
 def _read(path):
