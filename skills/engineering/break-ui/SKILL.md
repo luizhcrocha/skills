@@ -1,6 +1,6 @@
 ---
 name: break-ui
-description: "Stress-test a piece of UI with realistic worst-case data (long names, missing fields, huge counts, non-Latin text, emoji), shown behind a Demo/Worst case toggle, and report each break with its fix. Use for \"break this\", \"try the worst case\", edge cases in a component."
+description: "Stress-test a UI with realistic worst-case data (long names, missing fields, non-Latin text) and report each break with its fix. Use for \"break this\" or component edge cases."
 ---
 
 # Breaking UI

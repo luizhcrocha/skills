@@ -1,6 +1,6 @@
 ---
 name: find-animation-opportunities
-description: "Find places in a UI that don't animate but should, and reject the ones that shouldn't; read-only, exact values. Use for \"what could animate here?\" or \"make this feel more alive\"."
+description: "Find places in a UI that don't animate but should, rejecting the ones that shouldn't; read-only. Use for \"what could animate here?\" or \"make this feel more alive\"."
 ---
 
 # Finding Animation Opportunities

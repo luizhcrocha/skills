@@ -1,6 +1,6 @@
 ---
 name: how
-description: "Explain how code works, as onboarding a senior engineer. Use for \"how does X work\", \"zoom out\", a map of an area, a walkthrough before changing unfamiliar code, or \"where should this live\"."
+description: "Explain how code works, as onboarding a senior engineer. Use for \"how does X work\", \"zoom out\", a map of an area, unfamiliar code before a change, or \"where should this live\"."
 ---
 
 # How

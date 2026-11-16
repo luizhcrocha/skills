@@ -1,6 +1,6 @@
 ---
 name: review-animations
-description: "Review animation and motion code (CSS transitions, keyframes, Motion, springs, gestures) against a strict craft bar, with a Block or Approve verdict. Use for a UI diff that adds or changes motion."
+description: "Review motion code (CSS transitions, keyframes, Motion, springs) against a strict craft bar, with a Block or Approve verdict. Use for a UI diff that changes motion."
 ---
 
 # Reviewing Animations

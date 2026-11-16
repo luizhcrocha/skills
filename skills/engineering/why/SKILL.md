@@ -1,6 +1,6 @@
 ---
 name: why
-description: "Find why code is the way it is, from every record, as a cited, confidence-tiered answer. Use for \"why does X work this way\", \"why did we pick Y\", regressions, postmortems, before changing code of unknown reason."
+description: "Find why code is the way it is. Use for \"why does X work this way\", \"why did we pick Y\", regressions, postmortems, or before changing unexplained code."
 ---
 
 # Why

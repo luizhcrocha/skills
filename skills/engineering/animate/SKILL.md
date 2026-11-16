@@ -1,6 +1,6 @@
 ---
 name: animate
-description: "Build an animation or transition that passes review-animations, or name a motion effect (\"what's it called when...\"). Use to animate a component, add motion, or find the term for an effect."
+description: "Build an animation or transition that passes review-animations, or name a motion effect. Use to add motion, or for \"what's it called when...\"."
 ---
 
 # Building Animations

@@ -1,6 +1,6 @@
 ---
 name: choreograph
-description: "Coordinate several elements that animate together: what moves, in what order, how much they overlap, what stays still. Use for staggered lists, hero entrances, view swaps, multi-step flows, morphs, or motion that \"feels mechanical\" or \"too much going on\"."
+description: "Coordinate several elements animating together: order, overlap, what stays still. Use for staggered lists, entrances, view swaps, morphs, or motion that \"feels mechanical\" or \"too much going on\"."
 ---
 
 # Choreographing Motion

@@ -1,6 +1,6 @@
 ---
 name: improve-animations
-description: "Audit a codebase's animation and motion code and write prioritized, self-contained fix plans for other agents; read-only on source. Use to \"improve the animations\" or \"audit the motion\"."
+description: "Audit a codebase's motion code and write prioritized, self-contained fix plans for other agents; read-only. Use to \"improve the animations\" or \"audit the motion\"."
 ---
 
 # Improving Animations

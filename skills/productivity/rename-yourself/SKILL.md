@@ -1,6 +1,6 @@
 ---
 name: rename-yourself
-description: "Give this session one name in two places: its Rex tab and its Claude Code session (/rename), typed into its own pane through rex. Use for /rename-yourself, \"rename yourself\", or when the session's work has a clear name and the tab still shows `Window <id>`."
+description: "Name this session in its Rex tab and Claude Code (/rename). Use for /rename-yourself, \"rename yourself\", or once the work has a name and the tab shows `Window <id>`."
 argument-hint: "[name]"
 ---
 

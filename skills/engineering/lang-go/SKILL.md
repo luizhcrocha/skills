@@ -1,6 +1,6 @@
 ---
 name: lang-go
-description: "Go rules and taste for tstack: defers modern idioms to JetBrains' use-modern-go, adds gates, errors, seams and the testing ladder (rapid, go test -fuzz, synctest). Use when writing, reviewing or testing Go code."
+description: "Go rules and taste: modern idioms via JetBrains' use-modern-go, errors, seams, the testing ladder. Use for any Go code."
 paths: ["**/*.go", "**/go.mod"]
 ---
 

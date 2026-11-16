@@ -1,6 +1,6 @@
 ---
 name: explain
-description: "Explain a piece of work plainly (what, how, why) as one conversational account. Use for \"explain this change to me\", \"help me really understand X\", \"walk me through this PR\"."
+description: "Explain a piece of work plainly (what, how, why) in one conversational account. Use for \"explain this change\", \"walk me through this PR\", or \"help me understand X\"."
 ---
 
 # Explain

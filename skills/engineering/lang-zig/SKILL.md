@@ -1,6 +1,6 @@
 ---
 name: lang-zig
-description: Zig rules and taste for tstack: the 0.16 std.Io and build APIs, allocator and errdefer discipline, TigerBeetle-style assertions, and the testing ladder's Zig tools. Use when writing, reviewing or testing Zig code.
+description: "Zig rules and taste: 0.16 std.Io and build APIs, errdefer discipline, TigerBeetle-style assertions. Use for any Zig code."
 paths: ["**/*.zig", "**/build.zig", "**/build.zig.zon"]
 ---
 

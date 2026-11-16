@@ -1,6 +1,6 @@
 ---
 name: unslop
-description: "Cut AI tells from prose that ships: docs, commit and PR messages, READMEs, skill text, memo notes, and every reply under /tuca-mode. Rule numbers are stable ids other skills cite. Adapted from poteto's pstack (MIT)."
+description: "Cut AI tells from prose that ships: docs, commit and PR messages, skill text, memo notes, every /tuca-mode reply. Adapted from poteto's pstack (MIT)."
 ---
 
 # Unslop

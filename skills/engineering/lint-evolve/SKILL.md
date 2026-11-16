@@ -1,6 +1,6 @@
 ---
 name: lint-evolve
-description: "Turn a repeated lesson into a native lint rule, tested on the real incident and trialled across Luiz's repos. Use for \"make this a lint rule\", or a finding, gotcha or MUST KILL seen twice that a linter could catch."
+description: "Turn a repeated lesson into a native lint rule, proven on its incident. Use for \"make this a lint rule\" or a finding, gotcha or MUST KILL seen twice."
 ---
 
 # Lint evolve

@@ -1,6 +1,6 @@
 ---
 name: create-verification-skill
-description: "Generate a project-local verify-<app> skill that launches the app and drives it like a user, with a feature map. Use for \"make a verify skill\", or when proving a change means improvising the launch."
+description: "Generate a project-local verify-<app> skill that launches the app and drives it like a user. Use for \"make a verify skill\", or when proving a change means improvising the launch."
 ---
 
 # Create a verification skill

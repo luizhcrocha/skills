@@ -1,6 +1,6 @@
 ---
 name: lang-py
-description: "Python rules and taste for tstack: uv environments, ruff, basedpyright, pytest and Hypothesis, bounded worker pools. Use when writing, reviewing or testing Python code."
+description: "Python rules and taste: uv environments, ruff, basedpyright, pytest and Hypothesis, bounded worker pools. Use for any Python code."
 paths: ["**/*.py", "**/pyproject.toml", "**/uv.lock"]
 ---
 

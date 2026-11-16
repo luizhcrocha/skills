@@ -1,6 +1,6 @@
 ---
 name: lang-nu
-description: "Nushell rules and taste for tstack: bash habits that break, external failures and pipefail, typed signatures, explicit module imports, redirection, Luiz's config in the dotfiles, nu-check and std/assert. Use when writing, reviewing or testing Nushell code, or a command for Luiz's shell."
+description: "Nushell rules and taste: bash habits that break, external failures, typed signatures, nu-check. Use for any Nushell code or a command for Luiz's shell."
 paths: ["**/*.nu", "**/*.nuon"]
 ---
 

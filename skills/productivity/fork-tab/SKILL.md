@@ -1,6 +1,6 @@
 ---
 name: fork-tab
-description: "Hand a new idea this session drifted onto to a fresh agent in a Rex tab next to this one, under tuca-mode, with its edits moved to its own jj workspace, then go back to the work it interrupted. Use for /fork-tab, \"fork this to a tab\", or when the session has wandered off its task onto a new thread."
+description: "Fork an idea the session drifted onto to a fresh tuca-mode agent in its own Rex tab and jj workspace, then resume. Use for /fork-tab or off-task drift."
 argument-hint: "[the new idea, in a few words]"
 ---
 

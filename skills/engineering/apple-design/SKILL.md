@@ -1,6 +1,6 @@
 ---
 name: apple-design
-description: "Apple's fluid-interface principles for the web: springs, velocity handoff, momentum, rubber-banding, materials, type. Use for gesture-driven UI, sheets, drag or swipe, or an Apple-style feel."
+description: "Apple's fluid-interface principles for the web: springs, velocity handoff, momentum, rubber-banding, materials, type. Use for gesture-driven UI or an Apple-style feel."
 ---
 
 # Apple design

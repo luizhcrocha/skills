@@ -1,6 +1,6 @@
 ---
 name: swarm
-description: "Fan out N parallel workers over slices or race arms and return one PASS / ISSUES / BLOCKED report. Use for \"swarm this\", coverage matrices, races, best-of runs, gauntlets of checks."
+description: "Fan out N parallel workers over slices or race arms into one report. Use for \"swarm this\", coverage matrices, best-of runs, or check gauntlets."
 ---
 
 # Swarm

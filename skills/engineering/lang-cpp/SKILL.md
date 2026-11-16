@@ -1,6 +1,6 @@
 ---
 name: lang-cpp
-description: C++ rules and taste for tstack (C++23, Core Guidelines, RAII and ownership, std::expected, sanitizers, CMake). Use when writing, reviewing or testing C++ code.
+description: "C++ rules and taste (C++23, Core Guidelines, RAII and ownership, std::expected, sanitizers, CMake). Use for any C++ code."
 paths: ["**/*.cpp", "**/*.cc", "**/*.cxx", "**/*.hpp", "**/*.hh", "**/*.hxx", "**/CMakeLists.txt", "**/meson.build"]
 ---
 

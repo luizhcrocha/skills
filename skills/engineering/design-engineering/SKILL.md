@@ -1,6 +1,6 @@
 ---
 name: design-engineering
-description: "Craft rules for web UI polish (press states, origins, transforms, clip-path, gestures, performance, accessibility) and a Before/After review table. Use to polish UI or review it for feel."
+description: "Craft rules for web UI polish (press states, transforms, clip-path, gestures, accessibility) with a Before/After review table. Use to polish UI or review it for feel."
 ---
 
 # Design engineering

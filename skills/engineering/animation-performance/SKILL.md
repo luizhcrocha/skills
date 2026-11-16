@@ -1,6 +1,6 @@
 ---
 name: animation-performance
-description: "Keep web animations inside the frame budget: composite-only properties, off-main-thread motion, CSS vs WAAPI vs rAF, will-change, and finding why one drops frames. Use when an animation is janky or stutters, or to pick which property to animate."
+description: "Keep web animations inside the frame budget: composite-only properties, CSS vs WAAPI vs rAF, will-change. Use for a janky animation or to pick which property to animate."
 ---
 
 # Animation Performance

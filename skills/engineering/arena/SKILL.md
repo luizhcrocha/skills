@@ -1,6 +1,6 @@
 ---
 name: arena
-description: "Run N parallel attempts at one task under distinct constraints, pick a base, graft the best of the others. Use for \"arena this\" or competing designs of one contested shape."
+description: "Run N parallel attempts at one task under distinct constraints, then graft the best onto a chosen base. Use for \"arena this\" or competing designs."
 ---
 
 # Arena

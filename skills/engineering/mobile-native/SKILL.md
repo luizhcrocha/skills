@@ -1,6 +1,6 @@
 ---
 name: mobile-native
-description: "Make a web app feel native on a phone: sticky hover, tap flash, 100vh, input zoom, tap delay, overscroll, safe areas, theme-color. Use when a web UI feels wrong on mobile, or for a PWA or touch UI."
+description: "Make a web app feel native on phones: sticky hover, 100vh, input zoom, safe areas. Use when web UI feels wrong on mobile, or for a PWA."
 ---
 
 # Mobile native

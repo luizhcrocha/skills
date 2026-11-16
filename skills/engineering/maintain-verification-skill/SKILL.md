@@ -1,6 +1,6 @@
 ---
 name: maintain-verification-skill
-description: "Audit a verify-<app> skill and feature map against the app as it is now, with one live pass, then one change of proven fixes. Use for \"audit the verify skill\", a failed verify run, or UI churn."
+description: "Audit a verify-<app> skill and feature map against the live app, fixing them in one change. Use after a failed verify run or UI churn."
 ---
 
 # Maintain a verification skill

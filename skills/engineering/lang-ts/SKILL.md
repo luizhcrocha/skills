@@ -1,6 +1,6 @@
 ---
 name: lang-ts
-description: "TypeScript rules and taste for tstack: parse at boundaries, typed failures, strict contracts, Vite+ gates, the ladder's tools, Cloudflare and Effect topics. Use when writing, reviewing or testing TypeScript code."
+description: "TypeScript rules and taste: parse at boundaries, typed failures, Vite+ gates, Cloudflare and Effect topics. Use for any TypeScript code."
 paths: ["**/*.ts", "**/*.tsx", "**/*.mts", "**/*.cts"]
 ---
 

@@ -1,6 +1,6 @@
 ---
 name: lang-swift
-description: "Swift rules and taste for tstack: Swift 6.4, value types first, the 6.2 concurrency model, swift-format and SwiftLint gates, Swift Testing and the ladder. Use when writing, reviewing or testing Swift code."
+description: "Swift rules and taste: Swift 6.4, value types first, the 6.2 concurrency model, Swift Testing. Use for any Swift code."
 paths: ["**/*.swift", "**/Package.swift"]
 ---
 

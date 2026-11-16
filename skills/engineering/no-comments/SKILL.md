@@ -1,6 +1,6 @@
 ---
 name: no-comments
-description: "Strip narrating comments from a diff, fix what they papered over, offer to encode claims as types, tests or lints. Use before landing, when a playbook asks, or \"no comments\", \"deslop the comments\"."
+description: "Strip narrating comments from a diff and fix what they papered over. Use before landing, or for \"no comments\", \"deslop the comments\"."
 ---
 
 # No comments

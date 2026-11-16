@@ -1,6 +1,6 @@
 ---
 name: remove-animations
-description: "Find the animations a UI does not need (keyboard actions, high-frequency surfaces, functional data, purposeless decoration) and remove them, cleaning up what they leave. Subtracts only. Use when the app \"feels slow\" or \"over-animated\"."
+description: "Find and remove animations a UI does not need, cleaning up what they leave. Use when the app \"feels slow\" or \"over-animated\"."
 ---
 
 # Removing Animations

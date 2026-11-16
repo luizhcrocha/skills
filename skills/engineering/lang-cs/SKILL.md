@@ -1,6 +1,6 @@
 ---
 name: lang-cs
-description: C# and .NET rules and taste for tstack, from nullable discipline and records to analyzers, Microsoft.Testing.Platform, test tools and Temporal .NET gotchas. Use when writing, reviewing or testing C# code.
+description: "C# and .NET rules and taste: nullable discipline, records, analyzers, Microsoft.Testing.Platform, Temporal .NET gotchas. Use for any C# code."
 paths: ["**/*.cs", "**/*.csproj", "**/*.sln", "**/*.slnx", "**/Directory.*.props", "**/*.razor"]
 ---
 

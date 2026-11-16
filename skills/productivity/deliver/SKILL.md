@@ -1,6 +1,6 @@
 ---
 name: deliver
-description: "Put a file, page or running app in front of Luiz on the device he is using: peek with Quick Look, an Artifact, a tailnet URL or a Taildrop. Use whenever you ask Luiz to look at, read, open or approve something."
+description: "Put a file, page or running app in front of Luiz: Quick Look, Artifact, tailnet URL or Taildrop. Use whenever you ask Luiz to look at, read, open or approve something."
 ---
 
 # Deliver

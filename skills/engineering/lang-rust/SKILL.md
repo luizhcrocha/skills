@@ -1,6 +1,6 @@
 ---
 name: lang-rust
-description: Rust rules and taste for tstack: non-negotiables, error and module style, the fmt/clippy/test gates, and the testing ladder's Rust tools. Use when writing, reviewing or testing Rust code.
+description: "Rust rules and taste: non-negotiables, error and module style, fmt/clippy/test gates, the testing ladder. Use for any Rust code."
 paths: ["**/*.rs", "**/Cargo.toml"]
 ---
 

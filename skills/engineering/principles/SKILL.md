@@ -1,6 +1,6 @@
 ---
 name: principles
-description: Engineering principles, one file each. Use when a design, refactor, debugging, testing or delegation decision needs a rule to settle it, or a playbook names a principle.
+description: "Engineering principles. Use when a design, refactor, debugging, testing or delegation decision needs a rule to settle it, or a playbook names a principle."
 ---
 
 # Principles

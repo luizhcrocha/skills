@@ -1,6 +1,6 @@
 ---
 name: to-issues
-description: "Break a plan, spec or PRD into independently grabbable issues as tracer-bullet vertical slices. Use to turn a plan into issues or implementation tickets."
+description: "Break a plan, spec or PRD into independently grabbable issues or tickets, as tracer-bullet vertical slices."
 ---
 
 # To Issues

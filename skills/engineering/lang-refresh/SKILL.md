@@ -1,6 +1,6 @@
 ---
 name: lang-refresh
-description: Check the lang-* skills against their sources' latest releases and propose updates as jj changes. Use for "refresh the language skills", "are the lang skills current?", a new major release of a language or tool, or a scheduled run.
+description: "Refresh the lang-* skills against their sources' latest releases, as jj changes. Use for \"refresh the language skills\", \"are the lang skills current?\", a language or tool's new major release, or a scheduled run."
 argument-hint: "[lang-<id> ...] [check only]"
 ---
 

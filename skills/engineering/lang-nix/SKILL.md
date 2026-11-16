@@ -1,6 +1,6 @@
 ---
 name: lang-nix
-description: "Nix rules and taste for tstack: flakes, NixOS and home-manager modules, devenv, the latest-release rule, nixfmt and flake checks, VM tests. Use when writing, reviewing or testing Nix code, a flake, or a devenv."
+description: "Nix rules and taste: NixOS and home-manager modules, the latest-release rule, VM tests. Use for any Nix code, flake or devenv."
 paths: ["**/*.nix", "**/flake.lock", "**/devenv.yaml"]
 ---
 

@@ -1,6 +1,6 @@
 ---
 name: lang-c
-description: C rules and taste for tstack (C23, GCC/Clang, sanitizers, clang-tidy, QMK keymaps). Use when writing, reviewing or testing C code.
+description: "C rules and taste (C23, GCC/Clang, sanitizers, clang-tidy, QMK keymaps). Use for any C code."
 paths: ["**/*.c", "**/*.h"]
 ---
 
