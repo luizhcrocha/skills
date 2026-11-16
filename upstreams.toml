@@ -175,8 +175,9 @@ map = [
   { from = "skills/architect/references/rationale-template.md", to = "skills/engineering/architect/references/rationale-template.md" },
   # create-verification-skill's feature-map example, verbatim (2026-09-30).
   { from = "skills/create-verification-skill/references", to = "skills/engineering/create-verification-skill/references" },
-  # statechart and the two formal-verification skills, verbatim,
-  # frontmatter included (user-invoked only). statechart's scripts/test (3.7 MB of corpus
+  # statechart and the two formal-verification skills, frontmatter included (user-invoked
+  # only); verbatim except statechart's SKILL.md, compressed by branch with views and
+  # TLC edge cases moved to references/ (2026-11-16), which a sync 3-way merges. statechart's scripts/test (3.7 MB of corpus
   # and fuzz tests) and package.json (a fast-check devDependency) stay upstream (2026-10-30).
   { from = "skills/statechart/SKILL.md", to = "skills/engineering/statechart/SKILL.md" },
   { from = "skills/statechart/references", to = "skills/engineering/statechart/references" },
