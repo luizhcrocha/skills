@@ -25,10 +25,10 @@ Each rung costs more to build and keep than the one below it, and proves somethi
 
 TigerBeetle runs its whole database in a deterministic simulator with injected crashes, disk faults and network partitions; "if it isn't tested under realistic failure conditions in a deterministic simulation, it isn't done." Most code doesn't need the simulator. These parts are cheap and apply everywhere:
 
-- **Nondeterminism behind seams from day one.** Clock, randomness, I/O and scheduling come in through interfaces. That costs nothing now and is what makes rungs 5 and 8 possible later. Code that reads the clock or the network directly records it as design debt.
-- **Seeds are part of the result.** Every randomized run prints its seed; a failure is reproduced only when its seed replays it; the seed goes in the bug report.
-- **Assertions in production code.** Check preconditions and invariants where they hold (roughly two per function in TigerBeetle's style). Under a property test or a simulation, an assertion turns silent corruption into a crash at the point of fault.
-- **Small, bounded, static.** Bounded loops and queues, no unbounded growth, limits stated as constants: a smaller state space is one a test can cover.
+- **Nondeterminism behind ports from day one**, and every randomized run replays from its seed: Own the Nondeterminism (`tstack:principles`).
+- **Limits on everything, and assertions in production code**: Bound and Assert (`tstack:principles`). A smaller state space is one a test can cover, and an assertion is what a property test, a fuzzer or a simulation trips on.
+
+Building rung 8 itself: [simulation.md](simulation.md).
 
 ## Evidence tiers
 

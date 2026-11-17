@@ -14,6 +14,14 @@ The prose that ships alongside the type sketch. One page. Sentence-case headings
 
 *The recommended architecture. Data structures first. Then how data flows through the signatures. Name the load-bearing decisions. State which invariants are encoded in types, where validation lives, and what the system deliberately does not do. Judge interface depth explicitly. State what complexity the public surface hides, what remains exposed to callers, and why the interface is no larger than needed. Cite the principle behind each decision (e.g., `per boundary-discipline`). Don't restate it.*
 
+## Limits, invariants and nondeterminism
+
+*Three short lists, per Bound and Assert and Own the Nondeterminism. **Limits**: each loop, queue, batch, retry and buffer the design adds, with its bound as a named constant and what happens past it. **Invariants**: what the code asserts, at which transitions, and the pairs (written here, checked again there). **Nondeterminism**: each port (`Clock`, `Rng`, `Network`, `Storage`, the scheduler) and who supplies it in production, in tests and in a simulation. A direct clock, random or I/O call left in core logic is named here as debt, with its reason.*
+
+## Performance sketch
+
+*Back of the envelope, before any code: for each of network, disk, memory and CPU, the bandwidth and latency the hot path needs at the expected load, slowest resource first. Name where batching amortizes the cost. One line per resource; "not on the hot path" is a fine answer. The design phase is when the 10x wins are still available and nothing can yet be measured.*
+
 ## Synthesis decision
 
 *Filled in by [arena](../../arena/SKILL.md). Records which candidate became the base and why, what was adapted from each of the others, and what was rejected and why.*

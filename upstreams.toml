@@ -323,3 +323,18 @@ map = [
   { from = "README.md", to = "mods/prompt-jump/README.md" },
   { from = "CHANGELOG.md", to = "mods/prompt-jump/CHANGELOG.md" },
 ]
+
+# TigerBeetle (Apache-2.0): TigerStyle and the VOPR, its deterministic
+# simulator, the sources of principles' Bound and Assert and tdd's
+# simulation.md (Luiz, 2026-11-16). Copied verbatim as references; the skills
+# adapt them in their own words, so upstream edits merge cleanly.
+[upstream.tigerbeetle]
+url = "https://github.com/tigerbeetle/tigerbeetle.git"
+base = "a2a3c7064519e08233abe26c54a43fca2f9ad9bc"
+units = ["*", "docs/*", "docs/internals/*"]
+ignore = ["*"]
+map = [
+  { from = "docs/TIGER_STYLE.md", to = "skills/engineering/principles/references/TIGER_STYLE.md" },
+  { from = "docs/internals/vopr.md", to = "skills/engineering/tdd/references/vopr.md" },
+  { from = "LICENSE", to = "skills/engineering/principles/references/TIGERBEETLE_LICENSE" },
+]

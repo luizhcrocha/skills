@@ -21,7 +21,7 @@ Validation and error handling:
 - Validate config at parse time (the boundary), not inside business logic
 - Parse raw data into domain types at the boundary
 - Do not re-export transport, storage, framework, or wire types through the public surface
-- No redundant nil checks deep in call chains if the boundary already validated
+- No redundant nil checks deep in call chains if the boundary already validated. An assertion of the code's own belief is not re-validation: it crashes on a programmer error rather than handling bad input (Bound and Assert)
 
 Code organization:
 - Business logic in pure functions with no framework dependencies

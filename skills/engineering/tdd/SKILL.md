@@ -13,7 +13,7 @@ When exploring the codebase, read `CONTEXT.md` (if it exists) so test names and 
 
 Testing is a ladder: static checks, example tests at seams, integration on real dependencies, characterization, property, model-based, fuzzing, mutation, deterministic simulation. Climb only as far as the remaining risk demands. [ladder.md](ladder.md) has each rung, when it applies, and what gates it.
 
-- **Choose by residual risk.** An invariant (round trip, idempotence, normalization) → a property test. A state machine or store → model-based. Concurrency, retries, crashes → simulation, and only on top of a model-based rung.
+- **Choose by residual risk.** An invariant (round trip, idempotence, normalization) → a property test. A state machine or store → model-based. Concurrency, retries, crashes → simulation ([simulation.md](simulation.md)), and only on top of a model-based rung.
 - **Maturity gates the cost.** A prototype stops at static checks and a few examples. A long-lived core module is expected to reach property or model-based tests.
 - **A test is not always the evidence.** When a test would need broad harness setup, production-only state, or brittle substitutes for a small change, use the closest executable check instead: a repro script, a command, browser automation, a log assertion. No new test beats a bad test.
 

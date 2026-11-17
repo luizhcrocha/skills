@@ -24,7 +24,7 @@ Training data is mostly pre-0.15. Before writing I/O, containers, `main`, or `bu
 
 ## Taste
 
-TigerBeetle's [TIGER_STYLE.md](https://github.com/tigerbeetle/tigerbeetle/blob/main/docs/TIGER_STYLE.md) (Apache-2.0) is the taste reference Luiz admires. Its rules that carry into ordinary Zig:
+TigerBeetle's [TIGER_STYLE.md](https://github.com/tigerbeetle/tigerbeetle/blob/main/docs/TIGER_STYLE.md) (Apache-2.0) is the taste reference Luiz admires. Bound and Assert and Own the Nondeterminism (`tstack:principles`) carry its habits into every language; static allocation and zero dependencies apply only where a repo's AGENTS.md adopts them. Its rules in Zig:
 
 - **Assertions in production code.** "The assertion density of the code must average a minimum of two assertions per function." Assert arguments, return values, pre- and postconditions, and invariants with `std.debug.assert`; pair them (assert a property where it is written and again where it is read). Assert relationships between constants at comptime (`comptime { assert(block_size % sector_size == 0); }`).
 - **Bounds on everything.** Loops, queues and buffers have a stated maximum as a named constant. Prefer allocating at startup (or per request into an arena) over allocating in a hot loop.

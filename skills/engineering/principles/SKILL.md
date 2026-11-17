@@ -7,7 +7,7 @@ description: "Engineering principles. Use when a design, refactor, debugging, te
 
 One line per principle: when it applies, then its file. Read the file in full before you apply a principle, and name the principles that shaped a decision in your reply. Cite only principles whose file you read this session.
 
-Adapted from poteto's pstack, MIT (synced through `upstreams.toml`; local edits merge on each sync).
+Adapted from poteto's pstack, MIT (synced through `upstreams.toml`; local edits merge on each sync). Bound and Assert and Own the Nondeterminism adapt TigerBeetle's TigerStyle, Apache-2.0 ([references/TIGER_STYLE.md](references/TIGER_STYLE.md), synced the same way).
 
 ## Core
 
@@ -27,6 +27,8 @@ Adapted from poteto's pstack, MIT (synced through `upstreams.toml`; local edits 
 - **Model the Domain** ([model-the-domain.md](model-the-domain.md)). Stateful logic, heavy branching, a shape assumption repeated across files: encode it in a structure.
 - **Boundary Discipline** ([boundary-discipline.md](boundary-discipline.md)). Validation, error handling, framework adapters: guards at the boundary, pure logic inside.
 - **Type System Discipline** ([type-system-discipline.md](type-system-discipline.md)). Designing types or a signature: illegal states unrepresentable, parse at the boundary.
+- **Bound and Assert** ([bound-and-assert.md](bound-and-assert.md)). Writing or reviewing a function, loop, queue, retry or state transition: a limit on everything, assertions on what the code believes, crash on a broken belief (TigerStyle).
+- **Own the Nondeterminism** ([own-the-nondeterminism.md](own-the-nondeterminism.md)). Code that reads the clock, draws randomness, does I/O or reacts to outside events: each through a port, so one seed replays any run.
 - **Make Operations Idempotent** ([make-operations-idempotent.md](make-operations-idempotent.md)). Commands, lifecycle steps or loops that crash and retry: converge to the same end state.
 - **Migrate Callers Then Delete Legacy APIs** ([migrate-callers-then-delete-legacy-apis.md](migrate-callers-then-delete-legacy-apis.md)). A new internal API while old callers exist: migrate and delete in one wave.
 - **Separate Before Serializing Shared State** ([separate-before-serializing-shared-state.md](separate-before-serializing-shared-state.md)). Concurrent actors may write the same file, bookmark, key or object: remove the sharing first.
