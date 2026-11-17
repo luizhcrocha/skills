@@ -5,9 +5,7 @@ description: "Hand complex work found mid-session, outside your task, to a desig
 
 # Spin-off
 
-Work found mid-session that lies outside your task and is too big to fold into it leaves to a designer, a tab in the Rex session `designers` that holds every designer. The designer (`tstack:designer`) owns the work from there.
-
-Work this session will do, however large, is `tstack:figure-it-out`'s. Work that should leave to its own team is a spin-off.
+Work found mid-session, outside your task and too big to fold into it, leaves to a designer (`tstack:designer`), a tab in the Rex session `designers`, which owns it from there. Work this session will do, however large, is `tstack:figure-it-out`'s.
 
 ## Steps
 
@@ -18,10 +16,10 @@ Work this session will do, however large, is `tstack:figure-it-out`'s. Work that
    - `evidence`: the failures you observed: what happened, where and when, measured, with paths to the logs, recordings and code (file:line) that show it, and what was tried. A list of directories is not evidence.
    - `constraints`: Luiz's words, quoted, and the facts any design must survive. Never the solution or a direction to confirm.
    - `out-of-scope`: what you keep doing yourself.
-   - `waits-for`: the slug of the designer this one opens after, or `none`.
+   - `waits-for`: the slug whose landed design this one opens after, or `none`.
 
-   The file carries the problem; the designer owns the model. It never splits the work into lanes, owners or seams: a redesign of one system is one spin-off. Point at files; paste nothing a path can carry. The file is read-only once the designer opens. Done when every section has content or says `none`.
-3. **One architecture, one designer at a time.** Several spin-offs that share one architecture, a context file or seams between them open in order: only the designer for the spin-off the others build on opens now, and each other file names it in `waits-for`. That designer opens them after its gate 1, so each reads an approved model instead of guessing its neighbours'. Luiz may ask for them all at once, in his own words. Done when every file but one says `none` or names an earlier slug, or Luiz asked for all at once.
+   The file carries the problem; the designer owns the model, so the file names no lanes, owners or seams, and a redesign of one system is one spin-off. Point at files rather than pasting. The file is read-only once the designer opens. Done when every section has content or says `none`.
+3. **One architecture, one designer at a time.** Spin-offs that share an architecture, a context file or seams open in order: the one the others build on opens now, and each other file names it in `waits-for`. That designer opens them once Luiz has approved its design and plan and its docs have landed, so each reads the landed model instead of guessing. Work with no shared seams opens at once, as does whatever Luiz asks for in his own words. Done when every file that shares seams with an earlier one names it in `waits-for`.
 4. **Open the designer's tab** for each file whose `waits-for` is `none`: label `<slug>-designer`, Rex session `designers`, folder `<repo>`, the Designer row of [models.md](../../../docs/models.md), opening `/tstack:tuca-mode /tstack:designer <spin-off file>`. `<model>` and `<effort>` below are that row's pair. Inside Rex (`$REX_SESSION` is set), when `rex ls` lists `<session>`:
 
    ```sh

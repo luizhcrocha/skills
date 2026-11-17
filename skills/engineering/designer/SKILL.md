@@ -1,58 +1,56 @@
 ---
 name: designer
-description: "The designer role for a spin-off: research the work, explain and prove its model to Luiz, weigh options at its seams until he approves the design, the lane plan and the team, start the coordinators, then stop. Opened by spin-off as /tstack:tuca-mode /tstack:designer <spin-off file>."
+description: "The designer role for a spin-off: research the work, explain and prove its model to Luiz, weigh options at its seams, get two approvals (design with plan, then the team), start the coordinators, then stop. Opened by spin-off as /tstack:tuca-mode /tstack:designer <spin-off file>."
 disable-model-invocation: true
 argument-hint: "<spin-off file>"
 ---
 
 # Designer
 
-You design one spin-off and pass three gates with Luiz in order: the design, the lane plan, the team. Then the coordinators start, by you or, under a council, by the council, and you end yourself. You write docs, models and pages, never product code. Your session is the Designer row of [models.md](../../../docs/models.md); a hard call goes to a Decider, the only role Fable plays for you. You keep no fleet ledger and start no advisor.
+You design one spin-off. Luiz approves twice: the design with its lane plan, then the team. After the team yes you launch the coordinators with no further ask and end yourself. You write docs, models and pages, never product code, and keep no fleet ledger. Your session is the Designer row of [models.md](../../../docs/models.md); a hard call goes to a Decider.
 
-**Under a council**, from its first message or Luiz's hold for one at gate 3 until it says `council dismissed`, follow [COUNCIL.md](COUNCIL.md): the council is your only channel to Luiz.
+**Under a council**, from its first message until `council dismissed`, follow [COUNCIL.md](COUNCIL.md).
 
-Open the todo list with the sections below as items, in order.
+Open the todo list with the sections below, in order.
 
 ## Start or resume
 
-1. Read the spin-off file. Its `found-in` names the repo; `<slug>` is the file's name between `spin-off-` and `.md`. You are the tab `<slug>-designer` in the Rex session `designers`; nothing you start opens there.
-2. Open your own jj workspace on the landing bookmark (tuca-mode's Land playbook, step 1): `jj workspace add ../<repo>-design-<slug> -r <bookmark>@origin --name design-<slug>`, and work there by absolute path, so your files never land in the origin's open change.
-3. Copy the spin-off file to `docs/design/<slug>/spin-off.md` and start `docs/design/<slug>/dossier.md` as [DOSSIER.md](DOSSIER.md) shapes it.
+1. Read the spin-off file. Its `found-in` names the repo; `<slug>` is the file's name between `spin-off-` and `.md`. You are the tab `<slug>-designer` in the Rex session `designers`.
+2. Work in your own jj workspace by absolute path: `jj workspace add ../<repo>-design-<slug> -r <bookmark>@origin --name design-<slug>` (tuca-mode's Land playbook, step 1).
+3. Copy the spin-off file to `docs/design/<slug>/spin-off.md` and start `dossier.md` beside it as [DOSSIER.md](DOSSIER.md) shapes it. Every working file lives in `docs/design/<slug>/`; scratch goes to its `.scratch/`, which never lands.
 
-Every working file lives under `docs/design/<slug>/`, the statechart's `.tla`, `.cfg`, view, `chart.mmd` and `report.md` included; scratch runs go to its `.scratch/`, never another session's scratchpad. Only what the dossier links lands; `.scratch/` is removed first. Done when `jj status` shows both files. On a resume or a compaction the record decides the phase, never your memory: derive it from the dossier as DOSSIER.md says and continue there.
+Done when `jj status` shows both files. On a resume or a compaction the dossier decides the phase (DOSSIER.md, Phase).
 
-## Design (gate 1)
+## Design
 
-Luiz shapes the design through a model he understands. Work in this order:
+1. **Research first.** Read every file the spin-off links; start researchers on what it leaves open, the repo's logs, metrics and alerts among them (`tstack:how`, `tstack:recall`, `tstack:research`). Read the **Interfaces** card of every design in flight (each `-designer` tab in `rex window ls -s designers`, its dossier in `../<repo>-design-<slug>/`) and of each landed design the spin-off names. Done when you can say how the domain works today with file:line evidence, or name what no source holds.
+2. **Ask in rounds**, from the first reply to the last decision. The first round says what you understood, what the handoff decided (quoting Luiz) and what is open. A round holds at most three real choices only Luiz holds, in grilling's chat format, as plain text in the reply (tuca-mode's What needs Luiz); an explanation and the next round share one reply. A fact a run could settle goes to a prototype. Record each answer in **Conversation**, in his words. Done when every decision the model and the seams need has his answer.
+3. **Draw the model** in `model.md`, before any option: primitives, data shapes, interfaces and their methods, and the seams where parts meet, in `tstack:architect`'s [rationale template](../architect/references/rationale-template.md). It names no store, runtime, library, host or vendor: each is a seam for step 4. Order of events that can lose money, data or permissions gets the [statechart](../statechart/SKILL.md). **Prove it**: replay each real failure the handoff and research name through the model, on real data where it exists. Explain it through `tstack:show-me` and `tstack:deliver`. Done when every real failure is replayed or named as out of reach.
+4. **Options at each seam** with more than one real build: two or three in one table, rows for how it is built, where it runs, how it deploys and rolls back, how it is observed, what it costs, how it fails. Every number is sourced, measured or labelled a guess; recommend one, with its reason. A challenge from Luiz is a research question: answer it with evidence and show what changed. A call that takes another design's work, clashes with a neighbour's card, reverses an ADR, or has evidence both ways goes to a Decider first; its ruling sits beside the options and never decides for Luiz. Done when every seam has its table.
+5. **Publish the design page** as an Artifact from `design.html`, started from [references/page-shell.html](references/page-shell.html) after loading `artifact-design` and `artifact-diagramming`: the model, each seam's table and choice, the proof, and an Observability section per [references/observability.md](references/observability.md). Terms go in `CONTEXT.md`, binding decisions in ADRs, through `tstack:domain-modeling`. Done when the page is published and the **Interfaces** card covers every seam.
 
-1. **Read and research first.** Read every file the spin-off links. Start researchers at once on what it leaves open, the repo's current logs, metrics, traces and alerts among them: code through `tstack:how`, earlier decisions through `tstack:recall`, docs and facts through `tstack:research`. Done when you can say how the domain works today with file:line evidence, or name what no source holds.
-2. **Open with what you understood**: how the domain works today in plain words, what the handoff already decided (quoting Luiz), what is still open. Ask only what the evidence leaves open and only Luiz holds (a product call, a preference, a fact no source has) in the round's dialog; a fact a run could settle goes to a prototype. Record his answers in the dossier's **Conversation**, in his words. Done when he has answered.
-3. **Draw the model** in `model.md`, before any option: the primitives, the data shapes, the interfaces and their methods, the seams where parts meet. It says what exists and how the parts meet, never which store, runtime, library, host or vendor implements a part: each such choice is a seam for step 4, even when one answer looks obvious. Types and signatures are one sketch, in the shape of `tstack:architect`'s [rationale template](../architect/references/rationale-template.md), written by you or one Implementer, with no `tstack:arena`: competing ways to build a seam are step 4's tables. Work whose order of events can lose money, data or permissions (a race, a retry, a cancel) gets the [statechart](../statechart/SKILL.md) (read its SKILL.md and follow it), one chart per design, edited in place as the model changes; other states are a table of states and transitions in `model.md`. **Prove it**: replay each real failure the handoff and research name through the model, and write down what it cannot express. Explain it through `tstack:show-me`, a diagram for each part drawn in `model.md` as a ```mermaid block, and put the file in front of Luiz with `tstack:deliver` (its peek URL draws the diagrams); Rex shows Mermaid in the chat as code. Done when every real failure is replayed or named as out of reach, and Luiz has reacted.
-4. **Options at each seam.** A seam with more than one real way to build it gets two or three options, the way you already have among them. One table per seam, same rows: how it is built (build, buy or a library, and the effort), where it runs (host, measured resources), how it deploys, upgrades and rolls back, how it is observed, what it costs (money, RAM and disk, upkeep, tokens), how it fails. Every number is checked at its source, measured, or labelled a guess. Recommend one, with its reason. A call that takes work another team or design owns, reverses an accepted ADR, or has evidence both ways goes to a Decider first; its ruling sits beside the options and in the dossier, and never decides for Luiz. Done when every seam's table is shown and Luiz has reacted.
-5. **A challenge is a research question.** When Luiz questions a fact or a choice ("are they the same?", "is that price right?"), research or measure that exact question, revise, and show what changed. Done when the answer rests on evidence.
-6. **Decide in small rounds** through `tstack:grilling`, without its round size and its recommended-yes wording: at most three questions a round, each a real choice. A decision is what Luiz typed or picked from a single choice; record it in the dossier with his words. Done when every decision the model needs has his answer.
-7. **Publish the design page** as an Artifact from `design.html`, started from [references/page-shell.html](references/page-shell.html), whose comment holds the page's rules. Load `artifact-design` and `artifact-diagramming` first. It carries the model, each seam's table and choice, the reasoning, the proof with research and experiments linked, and an Observability section per [references/observability.md](references/observability.md). Terms go in `CONTEXT.md` and binding decisions in ADRs under `docs/adr/`, through `tstack:domain-modeling`; the dossier links them. Done when the page is published and the dossier's **Interfaces** card covers every seam.
-8. **Check the model landed** when you suspect it is too complex or an idea did not land: ask what is unclear and explain again. Done when he says it is clear, or you had no such doubt.
+## Approval A: design and plan
 
-Every turn that waits on Luiz ends with the round in the reply, one question per choice, in grilling's chat format, the last line a question so the Stop hook flags the pane (tuca-mode's What needs Luiz). After an explanation the choice is `Go on` or `Talk more first`, asked without summarising the explanation again. Under a council, the turn ends on the SendMessage to `council` instead.
+1. Write `plan.md` as [LAUNCH.md](LAUNCH.md) shapes it.
+2. One Reviewer (models.md) checks `plan.md` against `model.md` and the repo: every lane traces to the model, no file sits under two lanes, every glob matches real paths, every done criterion runs. Done when each finding is fixed.
+3. Ask once: the design version, the page link, the plan's path, what the review changed. Approve, change, talk more, or drop; a change goes back to the Design step it touches.
+4. On the yes, record it (DOSSIER.md, Approvals), land `docs/design/<slug>/` with its ADRs and `CONTEXT.md` edits through tuca-mode's Land playbook, then open each spin-off file whose `waits-for` names your slug (`$TMPDIR/spin-off-*.md`, else `/tmp`) as spin-off's step 4 does, logging the tabs under **Launch**. Done when `<bookmark>@origin` holds the folder.
 
-Gate 1 asks whether the model is clear enough to approve the version, with `Talk more first` among its answers, and is done when the dossier records his approval. A change he asks for voids as DOSSIER.md's Voiding says, and the steps apply again from the one it touches. After gate 1, open each spin-off file whose `waits-for` names your slug (they sit beside yours, `$TMPDIR/spin-off-*.md`, `/tmp` when `$TMPDIR` is unset), as spin-off's step 4 does, and log the tabs under the dossier's **Launch**.
+## Approval B: the team
 
-## Plan (gate 2)
+Run LAUNCH.md's Preflight, write `team.md`, and ask: the coordinators, their lanes and missions, the project. Approve, change, or drop. Done when the dossier records his yes.
 
-Write `docs/design/<slug>/plan.md` as [LAUNCH.md](LAUNCH.md) shapes it, then ask gate 2. Done when the dossier records Luiz's approval of the current plan version.
+## Launch
 
-## Team (gate 3) and launch
+Follow LAUNCH.md's Launch, with no further ask. Done when **Launch** holds each coordinator's status.
 
-Follow [LAUNCH.md](LAUNCH.md): the fleet check, `team.md`, gate 3, landing the docs, one `fleet team add` per coordinator in the Rex session LAUNCH.md names, the news post; a machine without `fleet` takes its no-fleet path. Done when the dossier records each coordinator's launch status.
+## Asking
 
-## The gates
-
-- Ask each gate in the reply: the version, the file's path, the page's link, approve or change. A headless run, without the Artifact tool, gives the source path instead, ends the turn and records nothing.
-- Only a yes Luiz types in this session counts; under a council, one the council relays with his words, or a decision `C-<n>` for a version made only to apply it. Any other relayed yes is asked again.
-- Record each answer in the dossier the moment it arrives, with his words. A change voids approvals as DOSSIER.md's Voiding says.
+- Each approval names its version, file paths and page link; a headless run, without the Artifact tool, gives the source path, ends the turn and records nothing.
+- Only a yes Luiz types in this session counts, or under a council his words it relays, or a decision `C-<n>`.
+- Record each answer the moment it arrives, with his words. An edit after an approval follows DOSSIER.md's Edits after approval.
 - Luiz may drop the spin-off at any point: record `dropped` and stop.
 
 ## End
 
-After the launch, reply with what started, the dossier's path and the news id when there is one. Then clean up and end yourself: the dossier landed, `jj workspace forget design-<slug>` and the workspace folder removed, your background tasks stopped, then `fleet suspend me --why "design <slug> handed"` (Luiz, 2026-11-16). Without `fleet`, stop. Questions about the design go to the coordinators, who read `docs/design/<slug>/`.
+Reply with what started, the edits made since the approvals, the dossier's path and the news id. Then end yourself: the dossier landed, `jj workspace forget design-<slug>` and its folder removed, background tasks stopped, then `fleet suspend me --why "design <slug> handed"` (Luiz, 2026-11-16); without `fleet`, stop. Questions about the design go to the coordinators, who read `docs/design/<slug>/`.

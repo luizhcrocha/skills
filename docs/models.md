@@ -16,7 +16,7 @@ Every agent tstack spawns plays one of the roles below. The role fixes its model
 | Advisor | A fleet's long-lived judge, asked many times (the fleet plugin's `advisor` agent). | Fable high | Opus high, restarted | |
 | Coordinator | The session running a fleet (the `coordinator` skill): routes, briefs, records, integrates. | Opus medium | Sonnet medium | |
 | Manager | The session over every coordinator on the machine (the `manager` skill): landing order, the gate, health across fleets. | Opus medium | Sonnet medium | |
-| Council | The council session (the `council` skill), a tab in `designers`: it routes and records decisions between designers, asks their gates and starts their coordinators, and a Decider judges. | Opus medium | Sonnet medium | |
+| Council | The council session (the `council` skill), a tab in `designers`: it routes and records decisions between designers, asks their approvals and starts their coordinators, and a Decider judges. | Opus medium | Sonnet medium | |
 | Designer | The spin-off designer session (the `designer` skill): long-lived, interactive with Luiz, writes no code. A hard call goes to a Decider. | Opus high | Sonnet xhigh | |
 
 A Quick review (Review levels in the fleet plugin's coordinator skill, INTEGRATE.md) is a Reviewer on Sonnet high, not on the fallback pair: it is the cheap level, and the fallback costs 2 to 3 times more ($1.07 to $3.32 per FC rollout, $1.64 to $4.09 per AA index run).
