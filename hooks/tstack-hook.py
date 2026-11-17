@@ -143,6 +143,22 @@ def _fleet(hook, *args):
     return done.returncode == 0
 
 
+def fleet_asks(hook):
+    """True when the installed fleet plugin's own Stop hook flags a reply that ends asking: its
+    hooks/ask-handlers.json says {"stop": true} (fleet fd2a6443). tstack then steps aside, so the pane gets one mark
+    and the phone one push."""
+    home = Path(hook.env.get("CLAUDE_CONFIG_DIR") or Path(hook.env.get("HOME", "/nonexistent")) / ".claude")
+    try:
+        installed = json.loads((home / "plugins" / "installed_plugins.json").read_text())
+        for row in installed.get("plugins", {}).get("fleet@fleet", []):
+            flags = json.loads((Path(row["installPath"]) / "hooks" / "ask-handlers.json").read_text())
+            if flags.get("stop") is True:
+                return True
+    except (OSError, ValueError, KeyError, TypeError, AttributeError):
+        return False
+    return False
+
+
 _FENCE = re.compile(r"^```.*?(?:^```[^\n]*$|\Z)", re.M | re.S)
 _CODE_SPAN = re.compile(r"`[^`\n]*`")
 _ENDS_ASKING = re.compile(r"\?[\s*_)\]\"']*$")
@@ -153,6 +169,8 @@ def ask_flag(hook):
     ntfy notice (`fleet notify`), so the session shows as waiting on Luiz without a dialog holding the agent
     (Luiz, 2026-11-17: the ask tool "is blocking all agents, stopping work"). The mark comes off on his next prompt."""
     if hook.is_worker or hook.headless or hook.input.get("stop_hook_active") or not hook.env.get("REX_BLOCK"):
+        return None
+    if fleet_asks(hook):
         return None
     text = _FENCE.sub("", str(hook.input.get("last_assistant_message") or "")).strip()
     last = _CODE_SPAN.sub("", text.splitlines()[-1]) if text else ""

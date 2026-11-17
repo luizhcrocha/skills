@@ -540,6 +540,20 @@ class AskFlagTest(HookCase):
         self.hook("UserPromptSubmit", self.base("UserPromptSubmit", prompt="hi"))
         self.assertEqual(self.ran(), [])
 
+    def test_it_steps_aside_when_the_fleet_plugin_flags_asks_itself(self):
+        plugin = self.tmp / "fleet-plugin"
+        (plugin / "hooks").mkdir(parents=True)
+        (plugin / "hooks" / "ask-handlers.json").write_text('{"v":1,"stop":true,"userPromptSubmit":true}')
+        plugins = self.tmp / "home" / ".claude" / "plugins"
+        plugins.mkdir(parents=True)
+        (plugins / "installed_plugins.json").write_text(json.dumps(
+            {"plugins": {"fleet@fleet": [{"scope": "user", "installPath": str(plugin)}]}}))
+        self.stop("Should I push it?")
+        self.assertEqual(self.ran(), [])
+        (plugin / "hooks" / "ask-handlers.json").write_text('{"v":1,"stop":false}')
+        self.stop("Should I push it?")
+        self.assertEqual(len(self.ran()), 1)
+
     def test_skipped_for_workers_headless_runs_an_active_stop_hook_and_outside_rex(self):
         text = "Should I push it?"
         self.stop(text, agent_id="worker-1")
