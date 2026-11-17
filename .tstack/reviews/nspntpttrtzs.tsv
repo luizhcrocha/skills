@@ -1,0 +1,1 @@
+nspntpttrtzs@42b839f6cfb7	2026-11-17T14:29:07-05:00	opus	land	coordinator read the 45-line diff in full: fleet_asks reads installed_plugins.json and the signal file, fails closed to tstack flagging; new test covers stop true and false; no dialog text left but the never-a-dialog rule	b1b0908bfd941741
