@@ -487,39 +487,67 @@ class TucaModeTest(HookCase):
         self.assertCheap("SessionStart (tuca-mode)", "SessionStart", payload)
 
 
-class AskNudgeTest(HookCase):
+class AskFlagTest(HookCase):
+    """A reply ending on a question marks the Rex pane blocked through `fleet notify`; Luiz's next prompt clears it."""
+
+    def setUp(self):
+        super().setUp()
+        bin_dir = self.tmp / "bin"
+        bin_dir.mkdir()
+        self.calls = self.tmp / "fleet.log"
+        fleet = bin_dir / "fleet"
+        fleet.write_text(f"#!{sys.executable}\nimport sys, json\n"
+                         f"open({str(self.calls)!r}, 'a').write(json.dumps(sys.argv[1:]) + '\\n')\n")
+        fleet.chmod(0o755)
+        self.env.update(PATH=f"{bin_dir}{os.pathsep}{self.env['PATH']}", REX_BLOCK="block:1")
+
     def stop(self, text, env=None, **extra):
         return self.hook("Stop", self.base("Stop", stop_hook_active=False, last_assistant_message=text, **extra),
                          env=env)
 
-    def nudge(self, result):
-        self.assertEqual(result.returncode, 0, result.stderr)
-        context = json.loads(result.stdout)["hookSpecificOutput"]["additionalContext"]
-        self.assertIn("AskUserQuestion", context)
-        return context
+    def ran(self):
+        return [json.loads(line) for line in self.calls.read_text().splitlines()] if self.calls.exists() else []
 
-    def test_a_reply_ending_on_a_question_is_sent_to_ask_user_question(self):
-        self.nudge(self.stop("Done: the gate passed.\n\nShould I push it to master?"))
-        self.nudge(self.stop("Two options.\n\n- A\n- B\n\n**Which one do you want?**"))
-        self.nudge(self.stop("Run this in your terminal, then tell me when it's done (did 1Password approve?)"))
-        self.nudge(self.stop("Should I push it?\n\n```nu\njj git push --bookmark master\n```"))
+    def test_a_reply_ending_on_a_question_flags_the_pane_with_its_last_line(self):
+        result = self.stop("Done: the gate passed.\n\n**Should I push it to master?**")
+        self.assertSilent(result)
+        self.assertEqual(self.ran(), [["notify", "repo: waiting on you", "Should I push it to master?"]])
+        for text in ("Two options.\n\n- A\n- B\n\nWhich one do you want?",
+                     "Run this, then tell me when it's done (did 1Password approve?)",
+                     "Should I push it?\n\n```nu\njj git push --bookmark master\n```"):
+            self.stop(text)
+        self.assertEqual(len(self.ran()), 4)
+
+    def test_the_next_prompt_clears_the_flag_once(self):
+        self.stop("Should I push it?")
+        self.assertSilent(self.hook("UserPromptSubmit", self.base("UserPromptSubmit", prompt="yes")))
+        self.hook("UserPromptSubmit", self.base("UserPromptSubmit", prompt="and then?"))
+        self.assertEqual([c[:2] for c in self.ran()], [["notify", "repo: waiting on you"], ["notify", "--clear"]])
+
+    def test_a_failed_notice_is_still_cleared_since_the_pane_may_be_marked(self):
+        fleet = self.tmp / "bin" / "fleet"
+        fleet.write_text(fleet.read_text() + "sys.exit(1)\n")
+        self.stop("Should I push it?")
+        self.hook("UserPromptSubmit", self.base("UserPromptSubmit", prompt="yes"))
+        self.assertEqual([c[:2] for c in self.ran()], [["notify", "repo: waiting on you"], ["notify", "--clear"]])
 
     def test_a_question_earlier_in_the_reply_or_in_code_is_not_one_for_the_user(self):
-        self.assertSilent(self.stop("Why did it fail? The cache was stale.\n\nFixed and pushed."))
-        self.assertSilent(self.stop("Done.\n\n```nu\nls | where size > 1mb # big?\n```"))
-        self.assertSilent(self.stop("Done.\n\n```nu\nls # big?"))
-        self.assertSilent(self.stop("Replaced each unwrap() with `?`"))
-        self.assertSilent(self.stop("He asked:\n\n> Should I push it?"))
-        self.assertSilent(self.stop("## Open questions?"))
-        self.assertSilent(self.stop(""))
+        for text in ("Why did it fail? The cache was stale.\n\nFixed and pushed.",
+                     "Done.\n\n```nu\nls | where size > 1mb # big?\n```", "Done.\n\n```nu\nls # big?",
+                     "Replaced each unwrap() with `?`", "He asked:\n\n> Should I push it?", "## Open questions?", ""):
+            self.assertSilent(self.stop(text))
         self.assertSilent(self.hook("Stop", self.base("Stop", stop_hook_active=False)))
+        self.hook("UserPromptSubmit", self.base("UserPromptSubmit", prompt="hi"))
+        self.assertEqual(self.ran(), [])
 
-    def test_skipped_for_workers_headless_runs_and_an_active_stop_hook(self):
+    def test_skipped_for_workers_headless_runs_an_active_stop_hook_and_outside_rex(self):
         text = "Should I push it?"
-        self.assertSilent(self.stop(text, agent_id="worker-1"))
-        self.assertSilent(self.stop(text, env={"TSTACK_ROLE": "worker"}))
-        self.assertSilent(self.stop(text, env={"CLAUDE_CODE_SESSION_ATTENDED": "0"}))
-        self.assertSilent(self.hook("Stop", self.base("Stop", stop_hook_active=True, last_assistant_message=text)))
+        self.stop(text, agent_id="worker-1")
+        self.stop(text, env={"TSTACK_ROLE": "worker"})
+        self.stop(text, env={"CLAUDE_CODE_SESSION_ATTENDED": "0"})
+        self.stop(text, env={"REX_BLOCK": ""})
+        self.hook("Stop", self.base("Stop", stop_hook_active=True, last_assistant_message=text))
+        self.assertEqual(self.ran(), [])
 
 
 class NeverBreakTest(HookCase):

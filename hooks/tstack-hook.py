@@ -121,26 +121,62 @@ def tape_build(hook):
     return None
 
 
-ASK = (
-    "Your reply ends on a question for the user. A turn that ends in text shows as done in the terminal, not as "
-    "waiting on them: Rex and Claude Code mark a session blocked only while a dialog is open. If you need their answer, "
-    "ask it now with AskUserQuestion: its options are the choices, or, for a step only they can take (a login, a "
-    "1Password approval, a command in their terminal), the step's words with Done and Not now. In a fleet session "
-    "the question goes on a card instead (`fleet state <dir> decision`). If the question was rhetorical, carry on."
-)
+NOTIFY_S = 8  # under the 10 s hooks.json gives Stop and UserPromptSubmit
+
+
+def _notified(hook):
+    safe = re.sub(r"[^A-Za-z0-9_.-]", "_", hook.session_id) or "unknown"
+    return hook.data_dir / "sessions" / safe / "notified"
+
+
+def _fleet(hook, *args):
+    """Run `fleet` in the foreground: notify finds the Rex pane by walking up its parents to claude, so a detached
+    child, reparented once the hook exits, would mark nothing. True when it exited 0."""
+    import shutil
+    import subprocess
+    fleet = shutil.which("fleet", path=hook.env.get("PATH"))
+    if not fleet:
+        return False
+    env = {**hook.env, "CLAUDE_CODE_SESSION_ID": hook.session_id} if hook.session_id else dict(hook.env)
+    done = subprocess.run([fleet, *args], env=env, cwd=hook.cwd, stdin=subprocess.DEVNULL,
+                          stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=NOTIFY_S, check=False)
+    return done.returncode == 0
+
+
 _FENCE = re.compile(r"^```.*?(?:^```[^\n]*$|\Z)", re.M | re.S)
 _CODE_SPAN = re.compile(r"`[^`\n]*`")
 _ENDS_ASKING = re.compile(r"\?[\s*_)\]\"']*$")
 
 
-def ask_nudge(hook):
-    """Stop: when the reply's last line asks the user something, point the agent at AskUserQuestion, whose dialog
-    reports the session as blocked on the user (OSC 7501 state=blocked, kind=question); an ended turn reports done."""
-    if hook.is_worker or hook.headless or hook.input.get("stop_hook_active"):
+def ask_flag(hook):
+    """Stop: when the reply's last line asks the user something, mark the Rex pane blocked on a question and send the
+    ntfy notice (`fleet notify`), so the session shows as waiting on Luiz without a dialog holding the agent
+    (Luiz, 2026-11-17: the ask tool "is blocking all agents, stopping work"). The mark comes off on his next prompt."""
+    if hook.is_worker or hook.headless or hook.input.get("stop_hook_active") or not hook.env.get("REX_BLOCK"):
         return None
     text = _FENCE.sub("", str(hook.input.get("last_assistant_message") or "")).strip()
     last = _CODE_SPAN.sub("", text.splitlines()[-1]) if text else ""
-    return ASK if not last.lstrip().startswith((">", "#")) and _ENDS_ASKING.search(last) else None
+    if last.lstrip().startswith((">", "#")) or not _ENDS_ASKING.search(last):
+        return None
+    words = re.sub(r"[*_`]", "", last).strip()
+    title = f"{Path(hook.cwd).name}: waiting on you"
+    # Marked first: notify writes the pane's mark before it posts to ntfy, so a notice that fails or times out
+    # may still have marked the pane, and only this file sends the --clear that takes it off.
+    mark = _notified(hook)
+    mark.parent.mkdir(parents=True, exist_ok=True)
+    mark.write_text(title + "\n")
+    _fleet(hook, "notify", title, words[:200])
+    return None
+
+
+def ask_clear(hook):
+    """UserPromptSubmit: Luiz answered, so take out the blocked mark ask_flag set for this session."""
+    mark = _notified(hook)
+    if hook.is_worker or not mark.is_file():
+        return None
+    _fleet(hook, "notify", "--clear")
+    mark.unlink(missing_ok=True)
+    return None
 
 
 JJ_HINTS = """\
@@ -1410,7 +1446,8 @@ def _rm_shown(path, home):
 
 HANDLERS = {
     "SessionStart": [memo_start, jj_hints, tuca_mode, tape_build],
-    "Stop": [ask_nudge],
+    "Stop": [ask_flag],
+    "UserPromptSubmit": [ask_clear],
     "PreToolUse": [push_attribution, rm_guard],
 }
 

@@ -34,7 +34,7 @@ Luiz shapes the design through a model he understands. Work in this order:
 7. **Publish the design page** as an Artifact from `design.html`, started from [references/page-shell.html](references/page-shell.html), whose comment holds the page's rules. Load `artifact-design` and `artifact-diagramming` first. It carries the model, each seam's table and choice, the reasoning, the proof with research and experiments linked, and an Observability section per [references/observability.md](references/observability.md). Terms go in `CONTEXT.md` and binding decisions in ADRs under `docs/adr/`, through `tstack:domain-modeling`; the dossier links them. Done when the page is published and the dossier's **Interfaces** card covers every seam.
 8. **Check the model landed** when you suspect it is too complex or an idea did not land: ask what is unclear and explain again. Done when he says it is clear, or you had no such doubt.
 
-Every turn that waits on Luiz ends with one dialog of single-select questions, one per choice in the round, written as grilling's "Through a dialog" says: the questions and options live in the dialog alone, and the chat holds the explanation and what a dialog cannot show. After an explanation the choice is `Go on` or `Talk more first`, asked without summarising the explanation again. Under a council, the turn ends on the SendMessage to `council` instead, with no dialog.
+Every turn that waits on Luiz ends with the round in the reply, one question per choice, in grilling's chat format, the last line a question so the Stop hook flags the pane (tuca-mode's What needs Luiz). After an explanation the choice is `Go on` or `Talk more first`, asked without summarising the explanation again. Under a council, the turn ends on the SendMessage to `council` instead.
 
 Gate 1 asks whether the model is clear enough to approve the version, with `Talk more first` among its answers, and is done when the dossier records his approval. A change he asks for voids as DOSSIER.md's Voiding says, and the steps apply again from the one it touches. After gate 1, open each spin-off file whose `waits-for` names your slug (they sit beside yours, `$TMPDIR/spin-off-*.md`, `/tmp` when `$TMPDIR` is unset), as spin-off's step 4 does, and log the tabs under the dossier's **Launch**.
 
@@ -48,7 +48,7 @@ Follow [LAUNCH.md](LAUNCH.md): the fleet check, `team.md`, gate 3, landing the d
 
 ## The gates
 
-- Ask each gate with `AskUserQuestion`: the version, the file's path, the page's link, approve or change. A headless run, without `AskUserQuestion` or the Artifact tool, asks in its reply with the source path, ends the turn and records nothing.
+- Ask each gate in the reply: the version, the file's path, the page's link, approve or change. A headless run, without the Artifact tool, gives the source path instead, ends the turn and records nothing.
 - Only a yes Luiz types in this session counts; under a council, one the council relays with his words, or a decision `C-<n>` for a version made only to apply it. Any other relayed yes is asked again.
 - Record each answer in the dossier the moment it arrives, with his words. A change voids approvals as DOSSIER.md's Voiding says.
 - Luiz may drop the spin-off at any point: record `dropped` and stop.

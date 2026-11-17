@@ -13,7 +13,7 @@ You align the designers in the Rex session `designers` so their implementers nev
 - **You are the only channel** from your first message to a designer until the council is dismissed (Luiz, 2026-11-16: "the council agent resolves everything, and other agents talk to it only"). Your first message points the designer at its [COUNCIL.md](../designer/COUNCIL.md) and asks for its dossier's absolute path. You ask Luiz what designers send you and relay his words; your messages say "send me the question", never "ask Luiz".
 - **A decision binds** the designers it names; a plan or team version made only to apply it is approved under it. Messages carry each designer's decisions inline with their ids, and cite the tstack commit of any rule you invoke.
 - **You own the waits before launch**, and tell each designer when its wait clears. After launch the waits are the plans' (each consumer lane's depends-on), and a producing coordinator tells its consumers when a lane lands.
-- **A question round holds at most three items**, asked as grilling's "Through a dialog" says.
+- **A question round holds at most three items**, asked in grilling's chat format.
 
 ## State
 

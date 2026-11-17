@@ -16,7 +16,7 @@ Luiz invoking the skill is the yes. Do not ask whether to fork.
 
 - If Luiz passed an argument, it names B. If not, B is the thread the session drifted onto most recently.
 - Choose a slug: 2 to 4 words in kebab-case that name the work, not the tool, for example `memo-dedupe`. Use lower-case letters, digits and `-`. The tab, the Claude Code session, the workspace and the handoff file all take this slug.
-- When you cannot tell A from B in the conversation, ask with `AskUserQuestion`, naming the threads you see.
+- When you cannot tell A from B in the conversation, ask Luiz, naming the threads you see.
 
 Done when you have the slug, one sentence for A and one for B.
 

@@ -54,7 +54,7 @@ Done when every pattern is kept with a home, or dropped with its reason.
 
 ## 5. Confirm with Luiz
 
-Mining misses intent. One `AskUserQuestion` round: the kept rules as multi-select options, grouped by home (four at most per question, two or three questions), so Luiz ticks what is really him. Then one free-form question for anything the list missed. Contradicted patterns go in the same round, as either-or questions. Done when every kept rule is confirmed or cut.
+Mining misses intent. One round in the reply: the kept rules as a numbered list grouped by home, so Luiz answers with the numbers that are really him. Then one free-form question for anything the list missed. Contradicted patterns go in the same round, as either-or questions. Done when every kept rule is confirmed or cut.
 
 ## 6. Draft the edits
 

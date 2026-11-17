@@ -29,7 +29,7 @@ Sort every active rule into one bucket:
 - **Keeps firing**: true hits in two or more repos in the last 90 days, or more hits than the run before. The lint catches it, but the lesson is not landing where code gets written: name the skill that should teach it (the `lang-*` skill, or `tdd`, `codebase-design`...), the section, and the one-line rule it lacks, as a proposal for that skill.
 - **Holds**: the rest.
 
-Then one `AskUserQuestion` round with Luiz: promotions and retirements as multi-select options, four per question, each option naming the rule, its runs and hits. Nothing moves without his tick. Done when every active rule has a bucket and every promotion or retirement has his answer.
+Then one round with Luiz, in the reply (tuca-mode's What needs Luiz): promotions and retirements as a numbered list, each naming the rule, its runs and hits, for him to answer by number. Nothing moves without his yes. Done when every active rule has a bucket and every promotion or retirement has his answer.
 
 ## 4. Apply
 
