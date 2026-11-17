@@ -19,7 +19,7 @@ Done when every lane has all five and no file appears under two lanes.
 `command -v fleet` finds nothing: take [No fleet](#no-fleet). Otherwise run `fleet ls`. When it fails, set the phase to `parked`, tell Luiz in one line that the fleet is down, and end the turn; on his next message run it again. When it answers, check:
 
 - **Names.** Each coordinator's name meets `fleet team add --help` and is absent from `fleet ls`.
-- **Missions.** Each meets the limits in `fleet team add --help`, is plain ASCII, and has no `|`, `*`, `\` or `$`. It points at `docs/design/<slug>/plan.md` and names its lanes instead of restating them.
+- **Missions.** Each meets the limits in `fleet team add --help`, is plain ASCII, and has no `|`, `*`, `\` or `$`. It points at `docs/design/<slug>/plan.md` and names its lanes instead of restating them. When another fleet waits on one of its lanes, it names its tells: "on landing a lane, fleet news post --to <fleets> naming the lane and commit".
 - **Files.** No lane's files overlap the lanes of a fleet already running in the same repo (`lanes:` in `fleet ls`, then that fleet's ledger).
 - **Project.** A new project's id in `team.md` is absent from `fleet project list`.
 
