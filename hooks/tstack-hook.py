@@ -183,8 +183,22 @@ def ask_flag(hook):
     mark = _notified(hook)
     mark.parent.mkdir(parents=True, exist_ok=True)
     mark.write_text(title + "\n")
-    _fleet(hook, "notify", title, words[:200])
+    _fleet(hook, "notify", *_ask_flag(hook), title, words[:200])
     return None
+
+
+def _ask_flag(hook):
+    """`--ask` when this fleet's notify has it (agents' A9): the broker then pushes the phone for the question, and
+    notify posts to ntfy only while the broker is down, so Luiz gets one push, not two."""
+    import shutil
+    import subprocess
+    fleet = shutil.which("fleet", path=hook.env.get("PATH"))
+    try:
+        shown = subprocess.run([fleet, "notify", "--help"], env=dict(hook.env), capture_output=True, text=True,
+                               timeout=2, check=False) if fleet else None
+    except subprocess.TimeoutExpired:
+        return ()
+    return ("--ask",) if shown and "--ask" in shown.stdout + shown.stderr else ()
 
 
 def ask_clear(hook):

@@ -506,7 +506,8 @@ class AskFlagTest(HookCase):
                          env=env)
 
     def ran(self):
-        return [json.loads(line) for line in self.calls.read_text().splitlines()] if self.calls.exists() else []
+        calls = [json.loads(line) for line in self.calls.read_text().splitlines()] if self.calls.exists() else []
+        return [c for c in calls if "--help" not in c]
 
     def test_a_reply_ending_on_a_question_flags_the_pane_with_its_last_line(self):
         result = self.stop("Done: the gate passed.\n\n**Should I push it to master?**")
@@ -539,6 +540,12 @@ class AskFlagTest(HookCase):
         self.assertSilent(self.hook("Stop", self.base("Stop", stop_hook_active=False)))
         self.hook("UserPromptSubmit", self.base("UserPromptSubmit", prompt="hi"))
         self.assertEqual(self.ran(), [])
+
+    def test_a_notify_that_knows_ask_gets_it_so_the_broker_pushes_once(self):
+        fleet = self.tmp / "bin" / "fleet"
+        fleet.write_text(fleet.read_text() + "if '--help' in sys.argv: print('  --ask   a question: ntfy only when the broker is down')\n")
+        self.stop("Should I push it?")
+        self.assertEqual(self.ran(), [["notify", "--ask", "repo: waiting on you", "Should I push it?"]])
 
     def test_it_steps_aside_when_the_fleet_plugin_flags_asks_itself(self):
         plugin = self.tmp / "fleet-plugin"
