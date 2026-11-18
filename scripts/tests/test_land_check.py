@@ -947,6 +947,16 @@ class ReviewRecordTest(RepoCase):
         self.assertEqual(review["state"], "missing")
         self.assertIn("its patch fingerprint", review["why"])
 
+    def test_a_change_whose_latest_record_says_fix_stops_the_landing(self):
+        change = self.stack()
+        [read] = self.read()
+        self.record(read, change, verdict="FIX")
+        result = self.check()
+        self.assertEqual(result["verdict"], "stop")
+        self.assertTrue(any("says FIX" in r and change in r for r in result["reasons"]), result["reasons"])
+        self.record(read, change, verdict="LAND")
+        self.assertNotEqual(self.check()["verdict"], "stop")
+
     def test_from_a_subdirectory_records_and_record_only_changes_read_from_the_workspace_root(self):
         self.trunk(("feat: a", {"a.ts": "a\n", "sub/x.ts": "x\n"}))
         self.change("feat: b", {"b.ts": self.lines(301)})

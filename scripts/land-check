@@ -96,7 +96,9 @@ workspace. Exit 0 when the verdict is "push", 1 for "ask" or "stop", 2 on error.
                        verdict TAB note TAB patch (`--fingerprint`; older rows
                        have none and are read by their commit alone). Only the
                        stack's changes' records are read. Report only, unless
-                       --require-reviews
+                       --require-reviews, with one exception: a change whose
+                       latest record's verdict is FIX stops the landing in every
+                       mode, until a later record says otherwise
 
 --ledger DIR names the fleet's dashboard directory; else $FLEET_DIR, else the
 fleet whose registry entry's pid is among this process's parents.
@@ -692,10 +694,15 @@ def land_check(repo, bookmark, head_rev=None, remote=LANDING_REMOTE, apply_skip_
     unreviewed = False
     if stack:
         try:
-            result["review"] = review_status(repo, base, head["commit"], stack, ledger_dir,
-                                             review_records(repo, head["commit"], tracked, stack))
+            records = review_records(repo, head["commit"], tracked, stack)
+            result["review"] = review_status(repo, base, head["commit"], stack, ledger_dir, records)
             result["reviews"] = result["review"].pop("per_change")
             reasons += review_reasons(result["review"])
+            fixes = fix_verdicts(stack, records)
+            reasons += [f"{r['change']}: its latest review record ({clock(r['at'])}, {r['reviewer'] or 'reviewer'}) "
+                        f"says FIX: fix what it found, review again and record the new verdict in "
+                        f"{REVIEWS_DIR}{r['change']}.tsv" for r in fixes]
+            unreviewed = bool(fixes)
             if require_reviews and result["review"]["needed"]:
                 required = required_reasons(result["reviews"])
                 reasons += required
@@ -1043,6 +1050,17 @@ def review_records(repo, head, tracked, stack):
                 out.append({"change": change, "commit": commit, "at": cols[1], "reviewer": cols[2] or None,
                             "verdict": cols[3] or None, "patch": cols[5] or None})
     return out
+
+
+def fix_verdicts(stack, records):
+    """The latest record of each change of the stack, when its verdict is FIX (any case): the reviewer said the
+    change must not land as it is, so it stops the landing until a later record says otherwise."""
+    latest = {}
+    for r in sorted(records, key=lambda r: utc_seconds(r["at"]) or r["at"]):  # stable: same time keeps file order
+        for rev in stack:
+            if rev["change"].startswith(r["change"]) or r["change"].startswith(rev["change"]):
+                latest[rev["change"]] = {**r, "change": rev["change"]}
+    return [r for r in latest.values() if (r["verdict"] or "").lower() == "fix"]
 
 
 def record_only_changes(repo, stack):
