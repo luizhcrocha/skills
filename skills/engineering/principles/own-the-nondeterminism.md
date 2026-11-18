@@ -11,6 +11,7 @@ Time, randomness, the network, the disk, thread or task scheduling and generated
 **Why:** with every source behind a port, a test supplies a fake, and a simulation supplies one seeded implementation of all of them. Then any run, including a failing one, replays from its seed. This is how TigerBeetle's VOPR compresses days of faults into a minute ([tdd's simulation.md](../tdd/simulation.md)). The ports cost almost nothing on day one; adding them later means touching every caller.
 
 **The pattern:**
+- **Value before port.** What the core can be handed, hand it as an argument (`now`, a fresh id, a random draw). A port object is for what the core must ask for in the middle of a decision (codebase-design's CORE.md).
 - Core logic takes the ports as arguments or constructor fields. Production passes the real adapters; tests pass fakes; a simulator passes seeded ones.
 - **Run at your own pace.** Outside events go into a bounded queue; the core drains it in batches on its own tick, rather than doing work inside each callback. Control flow stays the program's, the work per tick stays bounded (Bound and Assert), and a simulator can drive the ticks.
 - One seed drives every random choice in a run. A randomized test prints its seed; a failure is reproduced only when its seed replays it.
