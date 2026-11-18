@@ -28,7 +28,12 @@ TigerBeetle runs its whole database in a deterministic simulator with injected c
 - **Nondeterminism behind ports from day one**, and every randomized run replays from its seed: Own the Nondeterminism (`tstack:principles`).
 - **Limits on everything, and assertions in production code**: Bound and Assert (`tstack:principles`). A smaller state space is one a test can cover, and an assertion is what a property test, a fuzzer or a simulation trips on.
 
-Building rung 8 itself: [simulation.md](simulation.md).
+- **A fuzzer per component** (rungs 4 and 6), each a `main(seed, events_max)` behind one registry, with a smoke target that runs them all on one seed under a time cap. Find the component's minimal interface (plain values, no framework types) and stub the rest. Write one fuzzer for the positive space, exhaustive where a rigged PRNG can enumerate it, and one for the negative space, biased toward the valid/invalid boundary. Count the cases and assert both kinds occur; run once on a fixed seed to check the distribution and once on a random seed for coverage.
+- **Snapshot tests** as self-updating literals (`UPDATE=1` rewrites the expected text in the source; a marker masks volatile parts): rung 3 at the cost of an example test.
+- **Marks** tie a test to a line: production code logs a mark, the test asserts it was hit, so a test that stops reaching its branch fails.
+- **Coverage by reflection**: a model-based test that enumerates the public operations fails when a new one has no command yet.
+
+Building rung 8 itself: [simulation.md](simulation.md); how TigerBeetle does all of this, with sources: [references/tigerbeetle-testing.md](references/tigerbeetle-testing.md).
 
 ## Evidence tiers
 
