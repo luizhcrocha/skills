@@ -16,6 +16,8 @@ The principles named below are files in the **principles** skill's folder; read 
 - Validate at boundaries, trust types inside, per the **boundary-discipline** principle. The core takes values and returns its decision: shape it per codebase-design's CORE.md, and name the rung.
 - Single source of truth per invariant. Derive instead of sync.
 - Idempotent state transitions where applicable, per the **make-operations-idempotent** principle. Ask what happens if the operation runs twice or crashes halfway.
+- Walk the failures before you finish. For each write the design makes, three runs: the process crashes right after it, two callers run it at the same moment, and it lands late, after a newer write. For each, say what state remains, which record wins, and what the next step does with that state. A run with no good answer changes the sketch.
+- Size to the requirements. Each limit, file, table and background mechanism names the stated requirement it serves; one that serves none goes under Alternatives considered or Open questions, not into the sketch. Between two designs that meet every requirement, the smaller wins.
 - Short call chains. If tracing the flow needs more than three files, flatten the hierarchy, per the **laziness-protocol** and **minimize-reader-load** principles.
 
 You are one of several runners, each under a different design constraint. Produce the best design your constraint allows. Don't hedge against the others. Differences between candidates are the signal used to pick a base and graft. Converging on a safe-looking middle defeats the exploration.
