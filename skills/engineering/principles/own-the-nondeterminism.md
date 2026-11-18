@@ -15,6 +15,7 @@ Time, randomness, the network, the disk, thread or task scheduling and generated
 - **Run at your own pace.** Outside events go into a bounded queue; the core drains it in batches on its own tick, rather than doing work inside each callback. Control flow stays the program's, the work per tick stays bounded (Bound and Assert), and a simulator can drive the ticks.
 - One seed drives every random choice in a run. A randomized test prints its seed; a failure is reproduced only when its seed replays it.
 - Iteration order that affects output is fixed: sort, or use ordered maps.
+- Core logic has no threads, executors or blocking calls: concurrency is the event loop's, and work that waits returns a future the loop completes. Enforce it with a check that fails the build: a lint rule (`tstack:lint-evolve`) or an architecture test, like the ArchUnit `DeterminismRulesTest` in Unmesh Joshi's DST article (linked from tdd's simulation.md), banning the clock, randomness, threads and unordered maps in core packages.
 
 **The tests:**
 - "Can a test set this code's current time?" If not, the clock is ambient.

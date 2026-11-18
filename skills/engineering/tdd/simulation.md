@@ -1,21 +1,22 @@
 # Deterministic simulation
 
-Rung 8 of [the ladder](ladder.md): run the real code in one thread, with every source of nondeterminism replaced by a seeded fake that also injects faults, and check invariants after every step. TigerBeetle's VOPR is the model ([references/vopr.md](references/vopr.md)); FoundationDB works similarly; Antithesis gets the same determinism from a hypervisor, with no ports in the code. It needs the ports from Own the Nondeterminism (`tstack:principles`) and an existing rung 5 model. Without the ports, adding them is the first lane of the work.
+Rung 8 of [the ladder](ladder.md): run the real code in one thread, with every source of nondeterminism replaced by a seeded fake that also injects faults, and check invariants after every step. TigerBeetle's VOPR is the model ([references/vopr.md](references/vopr.md)); FoundationDB works similarly; Antithesis gets the same determinism from a hypervisor, with no ports in the code. Unmesh Joshi's [Deterministic Simulation Testing](https://martinfowler.com/articles/deterministic-simulation-testing.html) (martinfowler.com, 2026-11-17) builds one step by step in Java ([tickloom](https://github.com/unmeshjoshi/tickloom)). It needs the ports from Own the Nondeterminism (`tstack:principles`) and an existing rung 5 model. Without the ports, adding them is the first lane of the work.
 
 ## The harness
 
 1. **One seed.** The run takes a seed (`u64`) from its arguments, or draws one and prints it first. One PRNG seeded from it makes every choice below. The seed and the commit are the whole reproduction.
 2. **Swarm the fault rates.** The seed first picks this run's parameters: how many nodes, the drop, delay, reorder, duplicate and partition rates, the crash and restart rates, the disk-fault rate, the clock-drift range. A run with every fault turned up at once finds fewer bugs than many runs with different mixes (swarm testing).
-3. **Simulated clock.** Time is a counter the harness advances by ticks; nothing sleeps. A run covers hours of timeouts in seconds.
-4. **Simulated network.** Messages go into a queue the harness owns; each tick it delivers, delays, drops, reorders or duplicates some, by the PRNG, and partitions nodes from each other.
-5. **Simulated storage.** Reads and writes go to memory. Faults stay inside the fault model the system claims to survive: a torn or lost write, a corrupted read on one node, never on every copy at once.
-6. **Crashes.** A node stops between any two steps and restarts from what its storage holds, losing memory and anything not yet fsynced.
+3. **Simulated clock.** Time is a counter the harness advances by ticks; nothing sleeps. Every component is a `tick()` the loop calls in a fixed order, and each handler runs to completion without blocking: I/O returns a future that completes on a later tick. A timeout is a count of ticks, never a time-of-day reading (etcd-raft's `ElectionTick` works this way). A run covers hours of timeouts in seconds.
+4. **Simulated network.** Messages go into a priority queue the harness owns, keyed by delivery tick and a sequence number so ties stay ordered; each tick it delivers, delays, drops, reorders or duplicates some, by the PRNG, and partitions nodes from each other. Simulating whole messages never runs the framing and codec code; simulating bytes (FoundationDB) does. At message level, those codecs get their own rung 4 or 6.
+5. **Simulated storage.** Reads and writes go to memory, as two copies per file: visible bytes, and durable bytes that `sync()` copies them to. Faults stay inside the fault model the system claims to survive: a torn or lost write, a corrupted read on one node, never on every copy at once.
+6. **Crashes.** A node stops between any two steps and restarts from its durable bytes, losing memory and every write not yet synced.
 7. **Workload.** A seeded client sends operations from the rung 5 model's command set, valid and invalid.
-8. **Checkers after every tick.** The code's own assertions (Bound and Assert) plus checkers outside it: the system's state matches the rung 5 model; replicas that agree on a point agree byte for byte; every acknowledged write is still there after a crash.
+8. **Checkers after every tick.** The code's own assertions (Bound and Assert) plus checkers outside it: the system's state matches the rung 5 model; replicas that agree on a point agree byte for byte; every acknowledged write is still there after a crash. For a store others read and write, record the client history (invoke and complete, Jepsen-style) and check it is linearizable (Knossos, Porcupine, or the article's checker).
 9. **Liveness phase.** After the faults, heal everything: reconnect the network, restart nodes, stop injecting. Assert the system converges and serves requests within a bounded number of ticks. Safety alone passes a system that stops making progress.
 
 ## Running it
 
+- **Replay and search are two uses of one seed.** Replay reruns a known seed to debug; fast-forward runs many fresh seeds to find bugs, which only works because simulated time costs nothing.
 - **In CI**: a fixed set of seeds on every change, so a known failure stays fixed. **Locally or overnight**: fresh random seeds for as long as the budget allows, many runs in parallel.
 - A failing seed is the bug report: the seed, the commit, the run's parameters, and the last ticks of a trace. Replay it, minimize it, fix it, then add the seed to the CI set.
 - A rare hard case (a split brain at one exact moment) gets a scripted test on the same harness, which steers the faults by hand.
