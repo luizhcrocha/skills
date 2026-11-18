@@ -10,13 +10,14 @@ Luiz is checking on this session from outside. Tell him, from the record, whethe
 
 ## 1. Sweep (read-only)
 
-Change nothing in this step. Check each source and note what it shows:
+Change nothing in this step but the asks and answers unblock sends. Check each source and note what it shows:
 
 - **His asks.** Every request Luiz made in this session, each one: done, in progress, dropped, or replaced by a later ask. A request answered only with a plan or an offer is not done.
 - **Promises and offers.** Every "I'll …", "next …" and offer this session made that has no answer or no follow-through.
 - **Agents and tasks.** Subagents and background tasks: still running, finished with a report not yet acted on, or stopped.
 - **History.** `jj st`, `jj log -r 'trunk()..@'` in each workspace this session used and `jj workspace list`: undescribed or unpushed changes, conflicts, and workspaces this session added.
 - **Shipping.** For each change this session made: landed, pushed, deployed or reinstalled where its repo does that. A gate this session holds (`fleet gate`).
+- **Blockers.** Read and follow [unblock](../unblock/SKILL.md) (a user-invoked skill, so read the file): it finds what this session waits on and what waits on it, and asks each owning agent for the action that clears it. Carry its result into the report.
 - **Durable state.** Knowledge that lives only in this chat or the scratchpad and belongs in memo, a dossier, a plan or the repo.
 
 A **loose end** is anything from this sweep that nobody will pick up once the session ends.
@@ -30,6 +31,7 @@ Then, in plain words, one short bullet each:
 - **Done**: what came of each ask, in his words, with where it lives (pushed commit, artifact, file).
 - **Doing**: what runs now and what ends it.
 - **Waiting on you**: each call that is his, with your pick and the reason, so he can answer from this reply.
+- **Blocked**: each blocker `/unblock` found, its owner, and what was asked or delivered.
 - **Loose ends**: each one, with what you would do about it. Say "none found" when the sweep found none.
 
 Leave out any section with nothing in it, except loose ends.
