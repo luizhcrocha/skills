@@ -201,6 +201,22 @@ def _ask_flag(hook):
     return ("--ask",) if shown and "--ask" in shown.stdout + shown.stderr else ()
 
 
+SUSPEND = (
+    "Luiz asked you to suspend. Stop your background tasks (TaskStop), say in two lines where the work stands and "
+    "where its state is written, then run `fleet suspend me --why \"<what you were on, and where to pick up>\"`: it "
+    "frees this session's memory once the turn ends. Stopping the tasks alone is not suspending."
+)
+_SUSPEND = re.compile(r"\bsuspen\w*\s+(?:your\s*self|you|this\s+session)\b|\bfleet\s+suspend\s+me\b", re.I)
+
+
+def suspend_hint(hook):
+    """UserPromptSubmit: "suspend yourself" means `fleet suspend me`; agents stopped their tasks and stayed up
+    (Luiz, 2026-11-17: "agent's are not getting this")."""
+    if hook.is_worker or not _SUSPEND.search(str(hook.input.get("prompt") or "")):
+        return None
+    return SUSPEND
+
+
 def ask_clear(hook):
     """UserPromptSubmit: Luiz answered, so take out the blocked mark ask_flag set for this session."""
     mark = _notified(hook)
@@ -1479,7 +1495,7 @@ def _rm_shown(path, home):
 HANDLERS = {
     "SessionStart": [memo_start, jj_hints, tuca_mode, tape_build],
     "Stop": [ask_flag],
-    "UserPromptSubmit": [ask_clear],
+    "UserPromptSubmit": [ask_clear, suspend_hint],
     "PreToolUse": [push_attribution, rm_guard],
 }
 

@@ -571,6 +571,23 @@ class AskFlagTest(HookCase):
         self.assertEqual(self.ran(), [])
 
 
+class SuspendHintTest(HookCase):
+    def prompt(self, text, **extra):
+        return self.hook("UserPromptSubmit", self.base("UserPromptSubmit", prompt=text, **extra))
+
+    def test_a_suspend_request_points_at_fleet_suspend_me(self):
+        for text in ("suspend yourself. we deal with this later", "suspens yourself with fleet suspend",
+                     "please Suspend yourself", "ok, fleet suspend me now"):
+            result = self.prompt(text)
+            context = json.loads(result.stdout)["hookSpecificOutput"]["additionalContext"]
+            self.assertIn("fleet suspend me", context)
+
+    def test_other_prompts_and_workers_get_nothing(self):
+        for text in ("why did the suspend fail?", "fleet suspend gocli", "resume the work"):
+            self.assertSilent(self.prompt(text))
+        self.assertSilent(self.prompt("suspend yourself", agent_id="w1"))
+
+
 class NeverBreakTest(HookCase):
     """Whatever the input or the state of the machine: exit 0, nothing on stdout."""
 
