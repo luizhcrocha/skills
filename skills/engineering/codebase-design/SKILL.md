@@ -1,6 +1,6 @@
 ---
 name: codebase-design
-description: "Deep-module design vocabulary (module, interface, seam, depth). Use to design an interface, place a seam, make code testable, or when another skill needs it."
+description: "Deep-module design vocabulary (module, interface, seam, depth) and its references for call sites, primitives, data shapes and the core. Use to design an interface, an API or a data shape, place a seam, make code testable, or when another skill needs it."
 ---
 
 # Codebase Design
@@ -51,8 +51,9 @@ Use these terms exactly: don't substitute "component," "service," "API," or "bou
 └─────────────────────────────────┘
 ```
 
-When designing an interface, ask:
+When designing an interface, write the call a caller makes before the signature, then ask:
 
+- Does the call read like the plain code the caller would have written?
 - Can I reduce the number of methods?
 - Can I simplify the parameters?
 - Can I hide more complexity inside?
@@ -82,6 +83,8 @@ When designing an interface, ask:
 
 - **Deepening a cluster given its dependencies**, see [DEEPENING.md](DEEPENING.md): dependency categories, seam discipline, and replace-don't-layer testing.
 - **Exploring alternative interfaces**, see [DESIGN-IT-TWICE.md](DESIGN-IT-TWICE.md): design the interface several radically different ways in parallel (through `tstack:arena`), then compare on depth, locality, and seam placement.
+- **Shaping the call site**, see [CALL-SITE.md](CALL-SITE.md): when callers write code against the interface (an SDK, a client, a handler API, a CLI). Five call sites worth copying, each with its check.
 - **Cutting primitives**, see [PRIMITIVES.md](PRIMITIVES.md): when the design exposes several operations to callers. Meaning, laws, mechanism or policy, plumbing and porcelain.
+- **Shaping the records**, see [DATA.md](DATA.md): when the design stores or sends records. Index card, identity, facts, closed shape, one shape in the core.
 - **Shaping the core and testing it**, see [CORE.md](CORE.md): when the module holds state or causes effects. Values in, decision out, before any port.
 - **Screening a design**, see [RED-FLAGS.md](RED-FLAGS.md): check every candidate shape against every flag in it before choosing one.

@@ -29,10 +29,10 @@ Run `tstack:arena` with this as its frame; its phases do the fan-out, the blind 
 - **One constraint per runner**, each producing a **radically different** interface:
   - Runner 1: "Minimize the interface: aim for 1–3 entry points max. Maximise leverage per entry point."
   - Runner 2: "Primitives first: the smallest closed set of composable operations that every use case is built from, with their meaning and laws ([PRIMITIVES.md](PRIMITIVES.md)), then the porcelain over them."
-  - Runner 3: "Optimise for the most common caller: make the default case trivial."
+  - Runner 3: "Call site first: write the most common caller's code as the plain program they would write without the module, then add the least that makes it run ([CALL-SITE.md](CALL-SITE.md))."
   - Runner 4 (when the module holds state or causes effects): "The core returns its effects. It calls nothing; values in, decisions and effect values out, the shell performs them ([CORE.md](CORE.md), rung 1)."
 - **The vocabulary.** Both [SKILL.md](SKILL.md) vocabulary and CONTEXT.md vocabulary in the brief, so each runner names things consistently with the architecture language and the project's domain language.
-- **The rubric.** Depth (leverage at the interface), locality (where change concentrates), seam placement, what a test of the core needs (a literal, a fake or a mock), how many modules each likely change touches, and whatever this candidate's constraints add. Screen each candidate against [RED-FLAGS.md](RED-FLAGS.md) before picking.
+- **The rubric.** How the call site reads with the module's own words struck out ([CALL-SITE.md](CALL-SITE.md)), depth (leverage at the interface), locality (where change concentrates), seam placement, each record's identity and what mutates ([DATA.md](DATA.md)), what a test of the core needs (a literal, a fake or a mock), how many modules each likely change touches, and whatever this candidate's constraints add. Screen each candidate against [RED-FLAGS.md](RED-FLAGS.md) before picking.
 
 ### 3. Present and compare
 
