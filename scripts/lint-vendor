@@ -16,7 +16,8 @@ typescript, Cargo.toml, *.csproj/*.sln/*.slnx, pyproject.toml, go.mod,
 CMakeLists.txt/meson.build or C/C++ sources, flake.nix/devenv.nix).
 
 Where packs land, relative to --repo:
-    ts     tools/oxlint/anti-slop/, tools/oxlint/tstack/   (anti-slop's own layout; *.test.ts left out)
+    ts     tools/oxlint/anti-slop/, tools/oxlint/landmines/, tools/oxlint/tstack/
+           (the forks' own layouts; *.test.ts and landmines' rule.test-utils.ts left out)
     other  tools/lint/tstack/<lang>/
 The manifest, tools/lint/tstack/manifest.toml, records the tstack revision and,
 per file, where it came from and its base: the git blob id of the bytes
@@ -72,12 +73,21 @@ SKIP_DIRS = {".git", ".jj", "node_modules", "target", "dist", "build", ".venv", 
 def pack_dirs(lang: str) -> list[tuple[str, str]]:
     """(pack directory in tstack, directory in the repo) pairs for a language."""
     if lang == "ts":
-        return [("lint/ts/anti-slop", "tools/oxlint/anti-slop"), ("lint/ts/tstack", "tools/oxlint/tstack")]
+        return [
+            ("lint/ts/anti-slop", "tools/oxlint/anti-slop"),
+            ("lint/ts/landmines", "tools/oxlint/landmines"),
+            ("lint/ts/tstack", "tools/oxlint/tstack"),
+        ]
     return [(f"lint/{lang}", f"tools/lint/tstack/{lang}")]
 
 
 def vendored(name: str) -> bool:
-    return not name.endswith(".test.ts")
+    """Tests, and the helper landmines' tests share, stay in tstack."""
+    return not name.endswith(".test.ts") and name != "rule.test-utils.ts"
+
+
+# The registry's plugin segment (ts/<plugin>/<rule>) -> the jsPlugin name the rules are registered under.
+JS_PLUGIN = {"landmines": "landmines-testing"}
 
 
 def pack_files(source: Path, lang: str) -> dict[str, str]:
@@ -440,11 +450,12 @@ def ts_wiring(source: Path, repo: Path) -> list[str]:
         plugin, name = r["id"].split("/", 2)[1:]
         if plugin == "anti-slop-effect" and not effect:
             continue
-        lines.append(f'    "{plugin}/{name}": "{r["status"]}",')
+        lines.append(f'    "{JS_PLUGIN.get(plugin, plugin)}/{name}": "{r["status"]}",')
     config = next((c for c in ("vite.config.ts", "oxlint.config.ts", ".oxlintrc.json") if (repo / c).exists()), None)
     oxlint = dependency(pkg, "oxlint") or dependency(pkg, "vite-plus")
     plugins = [
         '    { name: "anti-slop", specifier: "./tools/oxlint/anti-slop/index.ts" },',
+        '    { name: "landmines-testing", specifier: "./tools/oxlint/landmines/plugins/testing.ts" },',
         '    { name: "tstack", specifier: "./tools/oxlint/tstack/index.ts" },',
     ]
     if effect:
@@ -459,6 +470,9 @@ def ts_wiring(source: Path, repo: Path) -> list[str]:
         "  rules: {  // the registry's warn and error rules; trial rules stay off",
         *lines,
         "  },",
+        "  overrides: [  // hand-written doubles live in one directory, where no-test-doubles is off",
+        '    { files: ["src/testing/doubles/**"], rules: { "landmines-testing/no-test-doubles": "off" } },',
+        "  ],",
     ]
     if oxlint:
         out.append(f"  dependency: @oxlint/plugins pinned exactly to the Oxlint in use ({'vite-plus ' if dependency(pkg, 'oxlint') is None else 'oxlint '}{oxlint}; Vite+ bundles its own Oxlint).")

@@ -71,6 +71,10 @@ class LintVendor(unittest.TestCase):
             "lint/ts/anti-slop/index.ts": "export default {};\n",
             "lint/ts/anti-slop/rules/a.ts": RULE,
             "lint/ts/anti-slop/rules/a.test.ts": "test\n",
+            "lint/ts/landmines/plugins/testing.ts": "export default {};\n",
+            "lint/ts/landmines/rules/x.ts": RULE,
+            "lint/ts/landmines/rules/x.test.ts": "test\n",
+            "lint/ts/landmines/rules/rule.test-utils.ts": "helper\n",
             "lint/ts/tstack/index.ts": "export default {};\n",
             "lint/registry.toml": REGISTRY,
         }.items():
@@ -125,6 +129,31 @@ class LintVendor(unittest.TestCase):
         self.assertIn('"anti-slop/a": "error"', out)
         self.assertNotIn("tstack/b", out, "trial rules stay off")
         self.assertIn('specifier: "./tools/oxlint/anti-slop/index.ts"', out)
+
+    def test_landmines_vendors_its_testing_plugin_under_its_registered_name(self):
+        self.write_src("lint/registry.toml", REGISTRY + """
+[[rule]]
+id = "ts/landmines/x"
+lang = "ts"
+engine = "oxlint"
+kind = "custom"
+status = "warn"
+summary = "x"
+where = "lint/ts/landmines/rules/x.ts"
+created = "2026-11-17"
+evidence = ["upstream:landmines"]
+history = [{ date = "2026-11-17", status = "warn", note = "seed" }]
+""")
+        self.commit_src("landmines rule")
+        code, out = self.vendor("add", "ts")
+        self.assertEqual(code, 0, out)
+        self.assertEqual(self.text("tools/oxlint/landmines/rules/x.ts"), RULE)
+        self.assertFalse((self.repo / "tools/oxlint/landmines/rules/x.test.ts").exists())
+        self.assertFalse((self.repo / "tools/oxlint/landmines/rules/rule.test-utils.ts").exists(),
+                         "the tests' helper stays in tstack")
+        self.assertIn('{ name: "landmines-testing", specifier: "./tools/oxlint/landmines/plugins/testing.ts" }', out)
+        self.assertIn('"landmines-testing/x": "warn"', out)
+        self.assertIn('{ files: ["src/testing/doubles/**"], rules: { "landmines-testing/no-test-doubles": "off" } }', out)
 
     def test_nothing_is_committed_in_the_target(self):
         self.vendor("add", "py")
@@ -283,7 +312,7 @@ class RealPacks(unittest.TestCase):
             with self.subTest(lang):
                 files = lv.pack_files(ROOT, lang)
                 self.assertTrue(files)
-                self.assertFalse([f for f in files if f.endswith(".test.ts")])
+                self.assertFalse([f for f in files if f.endswith(".test.ts") or f.endswith("rule.test-utils.ts")])
 
 
 if __name__ == "__main__":
