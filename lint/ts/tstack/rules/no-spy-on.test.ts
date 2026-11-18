@@ -39,6 +39,7 @@ tester.run("tstack/no-spy-on", noSpyOnRule, {
     },
     { code: "import { vi } from 'vitest'; vi.spyOn(console, 'warn');", errors: [error] },
     { code: "import { vi as testApi } from 'vitest'; testApi.spyOn(store, 'save');", errors: [error] },
+    { code: "import { vi } from 'vite-plus/test'; vi.spyOn(console, 'warn');", errors: [error] },
     { code: "jest.spyOn(store, 'save');", errors: [error] },
     { code: "import { jest } from '@jest/globals'; jest.spyOn(store, 'save');", errors: [error] },
     { code: "vi['spyOn'](console, 'warn');", errors: [error] },

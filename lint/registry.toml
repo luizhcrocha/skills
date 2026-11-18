@@ -464,11 +464,11 @@ id = "ts/tstack/no-spy-on"
 lang = "ts"
 engine = "oxlint"
 kind = "custom"
-status = "proposed"
+status = "warn"
 summary = "vi.spyOn and jest.spyOn in place of a seam (console silencing included)"
 where = "lint/ts/tstack/rules/no-spy-on.ts"
 created = "2026-09-30"
-last_hit = ""
+last_hit = "2026-11-17"
 evidence = [
   "skill:lang-ts SKILL.md (vi.mock and vi.spyOn are out) and references/sources.md open question (16 spies)",
   "skill:tdd substitutes.md (never method-spy APIs)",
@@ -480,8 +480,25 @@ evidence = [
 ]
 history = [
   { date = "2026-09-30", status = "proposed", note = "written with RuleTester cases from the custom-mcp-servers spies; not trialled" },
+  { date = "2026-11-17", status = "trial", note = "trial across Luiz's TypeScript repos, beside landmines' no-test-doubles" },
+  { date = "2026-11-17", status = "warn", note = "trial clean after one rework (vi from vite-plus/test): 14 TS repos, 297 hits (custom-mcp-servers 282, fleet 11, cancel-maintenance 3, investimentos 1), 0 false positives" },
 ]
-runs = []
+runs = [
+  { repo = "~/repos/coelhorocha/cancel-maintenance", date = "2026-11-17", hits = 3, false_positives = 0, note = "vi.spyOn, mostly console silencing (vi imported from vite-plus/test, caught after the rework)" },
+  { repo = "~/repos/coelhorocha/chimr", date = "2026-11-17", hits = 0, false_positives = 0, note = "no hits" },
+  { repo = "~/repos/coelhorocha/custom-mcp-servers", date = "2026-11-17", hits = 282, false_positives = 0, note = "vi.spyOn, mostly console silencing (vi imported from vite-plus/test, caught after the rework)" },
+  { repo = "~/repos/coelhorocha/durable-automations", date = "2026-11-17", hits = 0, false_positives = 0, note = "no hits" },
+  { repo = "~/repos/coelhorocha/email-automations", date = "2026-11-17", hits = 0, false_positives = 0, note = "no hits" },
+  { repo = "~/repos/coelhorocha/infra-monorepo", date = "2026-11-17", hits = 0, false_positives = 0, note = "no hits" },
+  { repo = "~/repos/coelhorocha/princexml-templates-documentos-rj", date = "2026-11-17", hits = 0, false_positives = 0, note = "no hits" },
+  { repo = "~/repos/coelhorocha/process-contract", date = "2026-11-17", hits = 0, false_positives = 0, note = "no hits" },
+  { repo = "~/repos/coelhorocha/public-site", date = "2026-11-17", hits = 0, false_positives = 0, note = "no hits" },
+  { repo = "~/repos/coelhorocha/slack-bot", date = "2026-11-17", hits = 0, false_positives = 0, note = "no hits" },
+  { repo = "~/repos/coelhorocha/slopjus", date = "2026-11-17", hits = 0, false_positives = 0, note = "no hits" },
+  { repo = "~/repos/luizhcrocha/fleet", date = "2026-11-17", hits = 11, false_positives = 0, note = "vi.spyOn, mostly console silencing (vi imported from vite-plus/test, caught after the rework)" },
+  { repo = "~/repos/luizhcrocha/investimentos", date = "2026-11-17", hits = 1, false_positives = 0, note = "vi.spyOn, mostly console silencing (vi imported from vite-plus/test, caught after the rework)" },
+  { repo = "~/repos/luizhcrocha/picasso", date = "2026-11-17", hits = 0, false_positives = 0, note = "no hits" },
+]
 
 [[rule]]
 id = "rust/clippy-all"
@@ -952,3 +969,163 @@ runs = [
   { repo = "~/repos/luizhcrocha/hyprnotes", date = "2026-11-09", hits = 0, false_positives = 0, note = "no hits" },
   { repo = "~/repos/luizhcrocha/ocrgrab", date = "2026-11-09", hits = 0, false_positives = 0, note = "no hits" },
 ]
+
+[[rule]]
+id = "ts/landmines/no-fixed-sleep"
+lang = "ts"
+engine = "oxlint"
+kind = "custom"
+status = "warn"
+summary = "awaiting a fixed real-time sleep (setTimeout promise, timers/promises, scheduler.wait, Bun.sleep) in a test or hook body"
+where = "lint/ts/landmines/rules/no-fixed-sleep.ts"
+created = "2026-11-17"
+last_hit = "2026-11-17"
+evidence = [
+  "upstream:landmines@92084b1 packages/landmines/src/rules/no-fixed-sleep.ts",
+  "skill:tdd SKILL.md section 6 (a test waits on a signal, never a fixed sleep)",
+]
+history = [
+  { date = "2026-11-17", status = "proposed", note = "vendored from landmines@92084b1 (Luiz, 2026-11-17)" },
+  { date = "2026-11-17", status = "trial", note = "trial across Luiz's TypeScript repos" },
+  { date = "2026-11-17", status = "warn", note = "trial clean: 14 TS repos, 385 hits (custom-mcp-servers 136, fleet 127, picasso 116, email-automations 4, chimr 1, public-site 1), 0 false positives" },
+]
+runs = [
+  { repo = "~/repos/coelhorocha/cancel-maintenance", date = "2026-11-17", hits = 0, false_positives = 0, note = "no hits" },
+  { repo = "~/repos/coelhorocha/chimr", date = "2026-11-17", hits = 1, false_positives = 0, note = "awaited setTimeout promises and Bun.sleep in test bodies (setTimeout 0 yields included)" },
+  { repo = "~/repos/coelhorocha/custom-mcp-servers", date = "2026-11-17", hits = 136, false_positives = 0, note = "awaited setTimeout promises and Bun.sleep in test bodies (setTimeout 0 yields included)" },
+  { repo = "~/repos/coelhorocha/durable-automations", date = "2026-11-17", hits = 0, false_positives = 0, note = "no hits" },
+  { repo = "~/repos/coelhorocha/email-automations", date = "2026-11-17", hits = 4, false_positives = 0, note = "awaited setTimeout promises and Bun.sleep in test bodies (setTimeout 0 yields included)" },
+  { repo = "~/repos/coelhorocha/infra-monorepo", date = "2026-11-17", hits = 0, false_positives = 0, note = "no hits" },
+  { repo = "~/repos/coelhorocha/princexml-templates-documentos-rj", date = "2026-11-17", hits = 0, false_positives = 0, note = "no hits" },
+  { repo = "~/repos/coelhorocha/process-contract", date = "2026-11-17", hits = 0, false_positives = 0, note = "no hits" },
+  { repo = "~/repos/coelhorocha/public-site", date = "2026-11-17", hits = 1, false_positives = 0, note = "awaited setTimeout promises and Bun.sleep in test bodies (setTimeout 0 yields included)" },
+  { repo = "~/repos/coelhorocha/slack-bot", date = "2026-11-17", hits = 0, false_positives = 0, note = "no hits" },
+  { repo = "~/repos/coelhorocha/slopjus", date = "2026-11-17", hits = 0, false_positives = 0, note = "no hits" },
+  { repo = "~/repos/luizhcrocha/fleet", date = "2026-11-17", hits = 127, false_positives = 0, note = "awaited setTimeout promises and Bun.sleep in test bodies (setTimeout 0 yields included)" },
+  { repo = "~/repos/luizhcrocha/investimentos", date = "2026-11-17", hits = 0, false_positives = 0, note = "no hits" },
+  { repo = "~/repos/luizhcrocha/picasso", date = "2026-11-17", hits = 116, false_positives = 0, note = "awaited setTimeout promises and Bun.sleep in test bodies (setTimeout 0 yields included)" },
+]
+
+[[rule]]
+id = "ts/landmines/no-flake-masking"
+lang = "ts"
+engine = "oxlint"
+kind = "custom"
+status = "trial"
+summary = "retried tests and raised test timeouts, which hide a flake instead of fixing it"
+where = "lint/ts/landmines/rules/no-flake-masking.ts"
+created = "2026-11-17"
+last_hit = "2026-11-17"
+evidence = [
+  "upstream:landmines@92084b1 packages/landmines/src/rules/no-flake-masking.ts",
+  "skill:tdd SKILL.md section 6 (a flaky test is fixed or removed, never retried or given a raised timeout)",
+]
+history = [
+  { date = "2026-11-17", status = "proposed", note = "vendored from landmines@92084b1 (Luiz, 2026-11-17)" },
+  { date = "2026-11-17", status = "trial", note = "trial across Luiz's TypeScript repos" },
+]
+runs = [
+  { repo = "~/repos/coelhorocha/cancel-maintenance", date = "2026-11-17", hits = 1, false_positives = 0, note = "raised per-test or per-suite timeouts" },
+  { repo = "~/repos/coelhorocha/chimr", date = "2026-11-17", hits = 0, false_positives = 0, note = "no hits" },
+  { repo = "~/repos/coelhorocha/custom-mcp-servers", date = "2026-11-17", hits = 163, false_positives = 3, note = "raised per-test or per-suite timeouts; false positives: 3 calls on a variable named suite (bench/suites/retrieval/suite.test.ts:312,319,329), read as vitest's suite()" },
+  { repo = "~/repos/coelhorocha/durable-automations", date = "2026-11-17", hits = 8, false_positives = 0, note = "raised per-test or per-suite timeouts" },
+  { repo = "~/repos/coelhorocha/email-automations", date = "2026-11-17", hits = 4, false_positives = 0, note = "raised per-test or per-suite timeouts" },
+  { repo = "~/repos/coelhorocha/infra-monorepo", date = "2026-11-17", hits = 0, false_positives = 0, note = "no hits" },
+  { repo = "~/repos/coelhorocha/princexml-templates-documentos-rj", date = "2026-11-17", hits = 0, false_positives = 0, note = "no hits" },
+  { repo = "~/repos/coelhorocha/process-contract", date = "2026-11-17", hits = 0, false_positives = 0, note = "no hits" },
+  { repo = "~/repos/coelhorocha/public-site", date = "2026-11-17", hits = 0, false_positives = 0, note = "no hits" },
+  { repo = "~/repos/coelhorocha/slack-bot", date = "2026-11-17", hits = 0, false_positives = 0, note = "no hits" },
+  { repo = "~/repos/coelhorocha/slopjus", date = "2026-11-17", hits = 0, false_positives = 0, note = "no hits" },
+  { repo = "~/repos/luizhcrocha/fleet", date = "2026-11-17", hits = 180, false_positives = 0, note = "raised per-test or per-suite timeouts" },
+  { repo = "~/repos/luizhcrocha/investimentos", date = "2026-11-17", hits = 10, false_positives = 0, note = "raised per-test or per-suite timeouts" },
+  { repo = "~/repos/luizhcrocha/picasso", date = "2026-11-17", hits = 22, false_positives = 0, note = "raised per-test or per-suite timeouts" },
+]
+
+[[rule]]
+id = "ts/landmines/no-unsignaled-poll"
+lang = "ts"
+engine = "oxlint"
+kind = "custom"
+status = "warn"
+summary = "expect.poll and vi.waitFor on request recorders and spy state, racing a deadline instead of awaiting a signal"
+where = "lint/ts/landmines/rules/no-unsignaled-poll.ts"
+created = "2026-11-17"
+last_hit = "2026-11-17"
+evidence = [
+  "upstream:landmines@92084b1 packages/landmines/src/rules/no-unsignaled-poll.ts",
+  "skill:tdd SKILL.md section 6 (never a poll on a recorder)",
+]
+history = [
+  { date = "2026-11-17", status = "proposed", note = "vendored from landmines@92084b1 (Luiz, 2026-11-17)" },
+  { date = "2026-11-17", status = "trial", note = "trial across Luiz's TypeScript repos" },
+  { date = "2026-11-17", status = "warn", note = "trial clean: 14 TS repos, 95 hits (fleet 79, custom-mcp-servers 16), 0 false positives" },
+]
+runs = [
+  { repo = "~/repos/coelhorocha/cancel-maintenance", date = "2026-11-17", hits = 0, false_positives = 0, note = "no hits" },
+  { repo = "~/repos/coelhorocha/chimr", date = "2026-11-17", hits = 0, false_positives = 0, note = "no hits" },
+  { repo = "~/repos/coelhorocha/custom-mcp-servers", date = "2026-11-17", hits = 16, false_positives = 0, note = "vi.waitFor and expect.poll on recorder arrays and counters" },
+  { repo = "~/repos/coelhorocha/durable-automations", date = "2026-11-17", hits = 0, false_positives = 0, note = "no hits" },
+  { repo = "~/repos/coelhorocha/email-automations", date = "2026-11-17", hits = 0, false_positives = 0, note = "no hits" },
+  { repo = "~/repos/coelhorocha/infra-monorepo", date = "2026-11-17", hits = 0, false_positives = 0, note = "no hits" },
+  { repo = "~/repos/coelhorocha/princexml-templates-documentos-rj", date = "2026-11-17", hits = 0, false_positives = 0, note = "no hits" },
+  { repo = "~/repos/coelhorocha/process-contract", date = "2026-11-17", hits = 0, false_positives = 0, note = "no hits" },
+  { repo = "~/repos/coelhorocha/public-site", date = "2026-11-17", hits = 0, false_positives = 0, note = "no hits" },
+  { repo = "~/repos/coelhorocha/slack-bot", date = "2026-11-17", hits = 0, false_positives = 0, note = "no hits" },
+  { repo = "~/repos/coelhorocha/slopjus", date = "2026-11-17", hits = 0, false_positives = 0, note = "no hits" },
+  { repo = "~/repos/luizhcrocha/fleet", date = "2026-11-17", hits = 79, false_positives = 0, note = "vi.waitFor and expect.poll on recorder arrays and counters" },
+  { repo = "~/repos/luizhcrocha/investimentos", date = "2026-11-17", hits = 0, false_positives = 0, note = "no hits" },
+  { repo = "~/repos/luizhcrocha/picasso", date = "2026-11-17", hits = 0, false_positives = 0, note = "no hits" },
+]
+
+[[rule]]
+id = "ts/landmines/no-test-doubles"
+lang = "ts"
+engine = "oxlint"
+kind = "custom"
+status = "trial"
+summary = "replacing a test dependency's behavior (vi.mock, vi.fn implementations, stubGlobal, prototype and global patching) instead of using the real implementation"
+where = "lint/ts/landmines/rules/no-test-doubles.ts"
+created = "2026-11-17"
+last_hit = "2026-11-17"
+evidence = [
+  "upstream:landmines@92084b1 packages/landmines/src/rules/no-test-doubles.ts",
+  "skill:tdd substitutes.md (behavior replaced only through a seam)",
+]
+history = [
+  { date = "2026-11-17", status = "proposed", note = "vendored from landmines@92084b1 (Luiz, 2026-11-17)" },
+  { date = "2026-11-17", status = "trial", note = "trial across Luiz's TypeScript repos" },
+]
+runs = [
+  { repo = "~/repos/coelhorocha/cancel-maintenance", date = "2026-11-17", hits = 5, false_positives = 0, note = "Worker-binding fakes 0, doubles directory 0, other 5" },
+  { repo = "~/repos/coelhorocha/chimr", date = "2026-11-17", hits = 30, false_positives = 0, note = "Worker-binding fakes 3, doubles directory 0, other 27" },
+  { repo = "~/repos/coelhorocha/custom-mcp-servers", date = "2026-11-17", hits = 402, false_positives = 28, note = "Worker-binding fakes 0, doubles directory 0, other 374; false positives: 26 typeof-fetch fakes passed through a prop or parameter (a seam), 2 Playwright route.fulfill" },
+  { repo = "~/repos/coelhorocha/durable-automations", date = "2026-11-17", hits = 89, false_positives = 0, note = "Worker-binding fakes 0, doubles directory 0, other 89" },
+  { repo = "~/repos/coelhorocha/email-automations", date = "2026-11-17", hits = 26, false_positives = 0, note = "Worker-binding fakes 0, doubles directory 0, other 26" },
+  { repo = "~/repos/coelhorocha/infra-monorepo", date = "2026-11-17", hits = 0, false_positives = 0, note = "no hits" },
+  { repo = "~/repos/coelhorocha/princexml-templates-documentos-rj", date = "2026-11-17", hits = 0, false_positives = 0, note = "no hits" },
+  { repo = "~/repos/coelhorocha/process-contract", date = "2026-11-17", hits = 2, false_positives = 0, note = "Worker-binding fakes 0, doubles directory 0, other 2" },
+  { repo = "~/repos/coelhorocha/public-site", date = "2026-11-17", hits = 5, false_positives = 0, note = "Worker-binding fakes 0, doubles directory 0, other 5" },
+  { repo = "~/repos/coelhorocha/slack-bot", date = "2026-11-17", hits = 0, false_positives = 0, note = "no hits" },
+  { repo = "~/repos/coelhorocha/slopjus", date = "2026-11-17", hits = 0, false_positives = 0, note = "no hits" },
+  { repo = "~/repos/luizhcrocha/fleet", date = "2026-11-17", hits = 100, false_positives = 3, note = "Worker-binding fakes 0, doubles directory 0, other 97; false positives: 2 typeof-fetch fakes passed through a prop or parameter (a seam), 1 the no-live-ports fetch guard" },
+  { repo = "~/repos/luizhcrocha/investimentos", date = "2026-11-17", hits = 2, false_positives = 0, note = "Worker-binding fakes 0, doubles directory 0, other 2" },
+  { repo = "~/repos/luizhcrocha/picasso", date = "2026-11-17", hits = 40, false_positives = 0, note = "Worker-binding fakes 0, doubles directory 0, other 40" },
+]
+
+[[rule]]
+id = "ts/landmines/strict-msw"
+lang = "ts"
+engine = "oxlint"
+kind = "custom"
+status = "proposed"
+summary = "MSW started without onUnhandledRequest: \"error\", letting unhandled requests reach the network"
+where = "lint/ts/landmines/rules/strict-msw.ts"
+created = "2026-11-17"
+last_hit = ""
+evidence = [
+  "upstream:landmines@92084b1 packages/landmines/src/rules/strict-msw.ts",
+]
+history = [
+  { date = "2026-11-17", status = "proposed", note = "vendored from landmines@92084b1 (Luiz, 2026-11-17)" },
+]
+runs = []
