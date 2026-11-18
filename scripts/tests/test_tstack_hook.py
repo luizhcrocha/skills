@@ -587,6 +587,13 @@ class SuspendHintTest(HookCase):
             self.assertSilent(self.prompt(text))
         self.assertSilent(self.prompt("suspend yourself", agent_id="w1"))
 
+    def test_a_relayed_agent_report_naming_suspend_gets_nothing(self):
+        for text in (
+            'Another Claude session sent a message:\n<agent-message from="a1">\n  [Subagent hand-back] then run `fleet suspend me --why "x"`',
+            "<task-notification>\nsuspend yourself\n</task-notification>",
+        ):
+            self.assertSilent(self.prompt(text))
+
 
 class NeverBreakTest(HookCase):
     """Whatever the input or the state of the machine: exit 0, nothing on stdout."""
