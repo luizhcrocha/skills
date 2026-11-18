@@ -66,7 +66,7 @@ SUITES = {
 DEFAULT_LIMIT = 900
 LIMITS = {
     "test-scripts": 240,
-    "test-lint-ts": 120,             # 8-14 s
+    "test-lint-ts": 120,             # 8-14 s; about 22 s with the landmines vitest suites (2026-11-17)
     "test-mods": 300,               # 1.2 s (2026-11-06, one mod)
     "validate": 300,
     "_deps-lint": 600,

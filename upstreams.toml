@@ -238,6 +238,46 @@ map = [
   { from = "LICENSE", to = "lint/ts/anti-slop/LICENSE" },
 ]
 
+# Interfere's landmines (MIT): Oxlint JS rules for tests agents write. Only the
+# testing plugin is taken (Luiz, 2026-11-17): its files under
+# packages/landmines/src map into lint/ts/landmines with the LICENSE;
+# lint-vendor copies them into repos at tools/oxlint/landmines (tests left
+# out). Local patches are listed in lint/ts/landmines/UPSTREAM.md and 3-way
+# merge on the next sync.
+[upstream.landmines]
+url = "https://github.com/interfere-inc/landmines.git"
+base = "92084b12872103b0f9245c0325ab571df00a574b"
+units = ["packages/landmines/src/*/*"]
+# Decided, not copied (Luiz, 2026-11-17): repo plumbing; the style, structure
+# and types plugins, their rules (no-comments, colocated-tests,
+# test-file-names, package-exports, no-explicit-return-types) and tests, and
+# lib/test-owner.ts, which only they use and which needs oxc-resolver and Babel.
+ignore = [
+  ".*", "LICENSE", "README.md", "bun.lock", "bunfig.toml", "package.json",
+  "tsconfig.base.json", "turbo.json",
+  "packages/landmines/*.*", "packages/landmines/configs",
+  "packages/landmines/src/plugins/structure.ts",
+  "packages/landmines/src/plugins/style.ts",
+  "packages/landmines/src/plugins/types.ts",
+  "packages/landmines/src/lib/test-owner.ts",
+  "packages/landmines/src/rules/colocated-tests.*",
+  "packages/landmines/src/rules/no-comments.*",
+  "packages/landmines/src/rules/no-explicit-return-types.*",
+  "packages/landmines/src/rules/package-exports.*",
+  "packages/landmines/src/rules/test-file-names.*",
+]
+map = [
+  { from = "packages/landmines/src/lib/allowlist.ts", to = "lint/ts/landmines/lib/allowlist.ts" },
+  { from = "packages/landmines/src/plugins/testing.ts", to = "lint/ts/landmines/plugins/testing.ts" },
+  { from = "packages/landmines/src/rules/no-fixed-sleep*", to = "lint/ts/landmines/rules/no-fixed-sleep{1}" },
+  { from = "packages/landmines/src/rules/no-flake-masking*", to = "lint/ts/landmines/rules/no-flake-masking{1}" },
+  { from = "packages/landmines/src/rules/no-test-doubles*", to = "lint/ts/landmines/rules/no-test-doubles{1}" },
+  { from = "packages/landmines/src/rules/no-unsignaled-poll*", to = "lint/ts/landmines/rules/no-unsignaled-poll{1}" },
+  { from = "packages/landmines/src/rules/strict-msw*", to = "lint/ts/landmines/rules/strict-msw{1}" },
+  { from = "packages/landmines/src/rules/rule.test-utils*", to = "lint/ts/landmines/rules/rule.test-utils{1}" },
+  { from = "packages/landmines/LICENSE", to = "lint/ts/landmines/LICENSE" },
+]
+
 # Emil Kowalski's UI and animation skills (MIT), imported 2026-10-01
 # (docs/tstack-plan.md D15). Each file is adapted in place: frontmatter, the
 # "Initial Response" greeting and the author's self-citations removed, the

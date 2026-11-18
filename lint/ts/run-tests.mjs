@@ -1,5 +1,6 @@
 // Runs every RuleTester suite in the pack (anti-slop/, tstack/), one node process each, the .ts run as it is
-// (Node strips the types; tsx is not needed). The suites run under node, not bun: oxlint's RuleTester refuses
+// (Node strips the types; tsx is not needed), then the landmines fork's suites (landmines/), which are
+// vitest files that lint fixtures with the oxlint binary in node_modules. The suites run under node, not bun: oxlint's RuleTester refuses
 // "other runtimes" (rawTransferSupported). bun installs the pack (bun.lock).
 // anti-slop's require-readable-spacing-cli test shells out to `pnpm exec oxlint`;
 // it runs only where pnpm is installed.
@@ -31,6 +32,19 @@ for (const file of ["anti-slop", "tstack"]
     continue;
   }
   const run = spawnSync("node", [file], { stdio: "inherit" });
+  ran += 1;
+  if (run.status !== 0) failed.push(name);
+  console.log(`${run.status === 0 ? "ok  " : "FAIL"} ${name}`);
+}
+// no-test-doubles' "through the repository config" case lints with upstream's own .oxlintrc.jsonc, which
+// is not vendored: it is filtered out here rather than patched in the fork.
+const upstreamOnly = "^(?!.*through the repository config)";
+for (const file of tests(join(root, "landmines")).sort()) {
+  const name = relative(root, file);
+  const vitest = join(root, "node_modules", ".bin", "vitest");
+  const run = spawnSync(vitest, ["run", "--root", root, "--reporter", "dot", "-t", upstreamOnly, name], {
+    stdio: "inherit",
+  });
   ran += 1;
   if (run.status !== 0) failed.push(name);
   console.log(`${run.status === 0 ? "ok  " : "FAIL"} ${name}`);

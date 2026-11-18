@@ -2,12 +2,14 @@
   "name": "tstack-lint-ts",
   "private": true,
   "type": "module",
-  "description": "Test harness for tstack's TypeScript lint pack: the RuleTester suites of the anti-slop fork and of tstack's own rules. Not vendored into repos.",
+  "description": "Test harness for tstack's TypeScript lint pack: the RuleTester suites of the anti-slop fork and of tstack's own rules, and the landmines fork's vitest suites. Not vendored into repos.",
   "scripts": {
     "test": "bun run-tests.mjs"
   },
   "devDependencies": {
     "@oxlint/plugins": "1.93.0",
-    "oxlint": "1.93.0"
+    "oxlint": "1.93.0",
+    "vite": "8.3.8",
+    "vitest": "5.1.0"
   }
 }

@@ -4,7 +4,7 @@ Lessons that repeat become lint rules in each language's native linter (docs/tst
 
 | pack | linter | files | vendored to |
 |---|---|---|---|
-| `ts/` | Oxlint JS plugins | `anti-slop/` (fork of dmmulroy/anti-slop, synced through `upstreams.toml`), `tstack/` (our rules) | `tools/oxlint/anti-slop/`, `tools/oxlint/tstack/` |
+| `ts/` | Oxlint JS plugins | `anti-slop/` (fork of dmmulroy/anti-slop), `landmines/` (fork of interfere-inc/landmines' testing plugin), both synced through `upstreams.toml`; `tstack/` (our rules) | `tools/oxlint/anti-slop/`, `tools/oxlint/landmines/`, `tools/oxlint/tstack/` |
 | `rust/` | Clippy | `lints.toml` (`[workspace.lints]` tables), `clippy.toml` | `tools/lint/tstack/rust/` |
 | `cs/` | .NET analyzers | `Directory.Build.props` (import it), `tstack.globalconfig` (severities) | `tools/lint/tstack/cs/` |
 | `py/` | ruff | `ruff.toml` (the repo's config `extend`s it) | `tools/lint/tstack/py/` |
@@ -16,12 +16,12 @@ Each pack is seeded only with what its `lang-*` skill's gates already prescribe.
 
 ## Custom rules
 
-- **TypeScript**: an Oxlint JS rule in `ts/tstack/rules/<id>.ts` with a RuleTester suite beside it (`<id>.test.ts`), registered in `ts/tstack/index.ts`. `just test-lint-ts` runs every suite (the anti-slop fork's too) on the Oxlint pinned in `ts/package.json`. Tests are not vendored.
+- **TypeScript**: an Oxlint JS rule in `ts/tstack/rules/<id>.ts` with a RuleTester suite beside it (`<id>.test.ts`), registered in `ts/tstack/index.ts`. `just test-lint-ts` runs every suite (the anti-slop fork's too, and the landmines fork's vitest suites) on the Oxlint pinned in `ts/package.json`. Tests are not vendored.
 - **Rust**: Clippy takes no plugins. A custom lint is a [dylint](https://github.com/trailofbits/dylint) library (`cargo dylint new <name>`, tests under `ui/` with the incident as a `.rs` file and its expected `.stderr`), kept under `rust/dylint/<name>/` and run with `cargo dylint --all`.
 - **C#**: a Roslyn analyzer project; until one exists, rules are severities in `tstack.globalconfig`.
 - **Python, Go, C/C++, Nix**: config only (ruff rule selection, golangci-lint linters and settings, clang-tidy checks, statix lints). A lesson none of them can express stays in the skill as prose.
 
-Upstream anti-slop edits arrive through `just sync-upstream --upstream anti-slop`, which 3-way merges them into `ts/anti-slop/`.
+Upstream edits arrive through `just sync-upstream --upstream anti-slop` (or `landmines`), which 3-way merges them into `ts/anti-slop/` (or `ts/landmines/`, whose local patches are listed in its `UPSTREAM.md`).
 
 ## Vendoring
 
