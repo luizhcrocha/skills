@@ -9,7 +9,7 @@ A **blocker** is a step one party waits on before its work can go on: a lane lan
 
 ## 1. Find the blockers
 
-For each, note its owner, the action that clears it, and since when it waits.
+For each, note its owner, the action that clears it, and since when it waits. Check each blocker at its source first (`jj git fetch`, then the commit on `<bookmark>@origin`; the deploy's own status): one already cleared is dropped, and the work goes on.
 
 **This session waits on:**
 - Lanes its plan, ledger or dossier waits on that have not landed.
@@ -23,11 +23,12 @@ For each, note its owner, the action that clears it, and since when it waits.
 
 ## 2. Put each blocker in front of its owner
 
-- **Another agent.** `fleet msg ask <agent> "<action>: <what it unblocks, for whom>" --key unblock-<blocker>`, specific enough to do without asking back; the key reuses an open thread. An agent of this session's own team gets SendMessage. A suspended owner (`fleet suspended`) stays suspended: its resume is Luiz's call.
+- **Another agent.** `fleet msg ask <agent> "<action>: <what it unblocks, for whom>" --key unblock-<blocker>`, specific enough to do without asking back; the key reuses an open thread. Then arm the wake as a background Bash command (`run_in_background`): `fleet msg wait <ask id>` (30 minutes by default; on a timeout it says so on stderr). Work on what does not depend on it. An agent of this session's own team gets SendMessage. A suspended owner (`fleet suspended`) stays suspended: its resume is Luiz's call.
+- **The wait times out.** Check the source again. Cleared: go on, and `fleet msg cancel <thread>`. Still blocked: ask again with the same `--key` (it joins the thread and wakes the owner), naming the time waited, and arm the wait once more. A second timeout makes it Luiz's: the blocker, its owner, since when and both asks, as the reply's last line.
 - **This session.** Deliver it now, then answer the asker: `fleet msg answer <thread> "<done, where>" --final`. When it cannot be delivered yet, answer with what it waits on.
 - **Luiz.** Name the call, your pick and its reason.
 
-Done when every blocker has an ask, an answer or a line for Luiz.
+Done when every blocker has an armed wait, an answer or a line for Luiz.
 
 ## 3. Report
 
