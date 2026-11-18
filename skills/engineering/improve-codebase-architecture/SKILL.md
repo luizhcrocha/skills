@@ -31,8 +31,9 @@ Then spawn a sub-agent with a fresh context window, playing the Researcher role 
 - Where have pure functions been extracted just for testability, but the real bugs hide in how they're called (no **locality**)?
 - Where do tightly-coupled modules leak across their seams?
 - Which parts of the codebase are untested, or hard to test through their current interface?
+- Which files in different modules change in the same commits? Co-change across a seam is leakage you can count.
 
-Apply the **deletion test** to anything you suspect is shallow: would deleting it concentrate complexity, or just move it? A "yes, concentrates" is the signal you want. Name each friction by codebase-design's red flags (shallow module, information leakage, temporal decomposition, pass-through method; [RED-FLAGS.md](../codebase-design/RED-FLAGS.md)) where one fits.
+Apply the **deletion test** to anything you suspect is shallow: would deleting it concentrate complexity, or just move it? A "yes, concentrates" is the signal you want. Name each friction by codebase-design's red flags ([RED-FLAGS.md](../codebase-design/RED-FLAGS.md)) where one fits.
 
 ### 2. Present candidates as an HTML report
 
