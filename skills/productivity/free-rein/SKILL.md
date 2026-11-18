@@ -25,7 +25,7 @@ Collect the Claude Code permission rules your remaining work needs: the commands
 
 ## 4. Telling other agents
 
-Only when the arguments say so (`tell <agents>`, or `tell all but <agents>`): list the live ones (ListAgents; fleet sessions by name), then send each a `fleet msg ask <agent> "<text>" --key free-rein-<date>`. The text quotes Luiz's words verbatim, says it is relayed on his request, gives the end time, and carries sections 2 and 3 in full, asking each to answer with its script's path and rules. Arm `fleet msg wait <id>` for each in the background, and hand Luiz all the scripts in one list when the answers come.
+Only when the arguments say so (`tell <agents>`, or `tell all but <agents>`): list the live ones (ListAgents; fleet sessions by name), then send each a `fleet msg ask <agent> "<text>" --key free-rein-<date>`. The text quotes Luiz's words verbatim, says it is relayed on his request, gives the end time, and carries sections 2 and 3 in full, asking each to answer with its script's path and rules. The answers arrive in your mailbox; hand Luiz all the scripts in one list once they are in.
 
 ## 5. Close
 
