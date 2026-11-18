@@ -28,11 +28,11 @@ Run `tstack:arena` with this as its frame; its phases do the fan-out, the blind 
   5. Trade-offs: where leverage is high, where it's thin
 - **One constraint per runner**, each producing a **radically different** interface:
   - Runner 1: "Minimize the interface: aim for 1–3 entry points max. Maximise leverage per entry point."
-  - Runner 2: "Maximise flexibility: support many use cases and extension."
+  - Runner 2: "Primitives first: the smallest closed set of composable operations that every use case is built from, with their meaning and laws ([PRIMITIVES.md](PRIMITIVES.md)), then the porcelain over them."
   - Runner 3: "Optimise for the most common caller: make the default case trivial."
-  - Runner 4 (if applicable): "Design around ports & adapters for cross-seam dependencies."
+  - Runner 4 (when the module holds state or causes effects): "The core returns its effects. It calls nothing; values in, decisions and effect values out, the shell performs them ([CORE.md](CORE.md), rung 1)."
 - **The vocabulary.** Both [SKILL.md](SKILL.md) vocabulary and CONTEXT.md vocabulary in the brief, so each runner names things consistently with the architecture language and the project's domain language.
-- **The rubric.** Depth (leverage at the interface), locality (where change concentrates), seam placement, and whatever this candidate's constraints add. Screen each candidate against [RED-FLAGS.md](RED-FLAGS.md) before picking.
+- **The rubric.** Depth (leverage at the interface), locality (where change concentrates), seam placement, what a test of the core needs (a literal, a fake or a mock), how many modules each likely change touches, and whatever this candidate's constraints add. Screen each candidate against [RED-FLAGS.md](RED-FLAGS.md) before picking.
 
 ### 3. Present and compare
 

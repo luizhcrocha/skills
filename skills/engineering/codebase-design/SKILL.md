@@ -62,37 +62,7 @@ When designing an interface, ask:
 - **Depth is a property of the interface, not the implementation.** A deep module can be internally composed of small, mockable, swappable parts; they just aren't part of the interface. A module can have **internal seams** (private to its implementation, used by its own tests) as well as the **external seam** at its interface.
 - **The deletion test.** Imagine deleting the module. If complexity vanishes, it was a pass-through. If complexity reappears across N callers, it was earning its keep.
 - **The interface is the test surface.** Callers and tests cross the same seam. If you want to test *past* the interface, the module is probably the wrong shape.
-- **One adapter means a hypothetical seam. Two adapters means a real one.** Don't introduce a seam unless something actually varies across it.
-
-## Designing for testability
-
-Good interfaces make testing natural:
-
-1. **Accept dependencies, don't create them.**
-
-   ```typescript
-   // Testable
-   function processOrder(order, paymentGateway) {}
-
-   // Hard to test
-   function processOrder(order) {
-     const gateway = new StripeGateway();
-   }
-   ```
-
-2. **Return results, don't produce side effects.**
-
-   ```typescript
-   // Testable
-   function calculateDiscount(cart): Discount {}
-
-   // Hard to test
-   function applyDiscount(cart): void {
-     cart.total -= discount;
-   }
-   ```
-
-3. **Small surface area.** Fewer methods = fewer tests needed. Fewer params = simpler test setup.
+- **One adapter means a hypothetical seam. Two adapters means a real one.** Don't introduce a seam unless something actually varies across it. The same holds for a generic, a trait or an interface inside a module: when no code is generic over it, write the plain functions.
 
 ## Relationships
 
@@ -112,4 +82,6 @@ Good interfaces make testing natural:
 
 - **Deepening a cluster given its dependencies**, see [DEEPENING.md](DEEPENING.md): dependency categories, seam discipline, and replace-don't-layer testing.
 - **Exploring alternative interfaces**, see [DESIGN-IT-TWICE.md](DESIGN-IT-TWICE.md): design the interface several radically different ways in parallel (through `tstack:arena`), then compare on depth, locality, and seam placement.
-- **Screening a design**, see [RED-FLAGS.md](RED-FLAGS.md): shallow modules, information leakage, temporal decomposition, pass-through methods. Check every candidate shape against it before choosing one.
+- **Cutting primitives**, see [PRIMITIVES.md](PRIMITIVES.md): when the design exposes several operations to callers. Meaning, laws, mechanism or policy, plumbing and porcelain.
+- **Shaping the core and testing it**, see [CORE.md](CORE.md): when the module holds state or causes effects. Values in, decision out, before any port.
+- **Screening a design**, see [RED-FLAGS.md](RED-FLAGS.md): check every candidate shape against every flag in it before choosing one.

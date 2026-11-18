@@ -55,3 +55,15 @@ Make internals unreachable from outside the module, so an import from outside fa
 Two or more places list the same items, and adding an item means editing every list. An agent that sees one list updates only that one.
 
 Keep one list and derive the others from it. If a list can't be derived, make the build fail when the lists disagree.
+
+## Accidental contract
+
+The interface shows more than it promises: the order of results, error text, extra fields, timing. An agent copies whatever it observes, so each accident gains callers and becomes the contract.
+
+Promise it and test it, or remove it: sort or return a set, return a typed error, omit the field.
+
+## Backwards dependency
+
+A module that changes rarely imports one that changes often: the core imports an adapter or a feature, two modules import each other, or everything imports a `utils` that keeps changing. Each change to the volatile module then reaches the stable ones.
+
+Point every import from the module that changes more to the one that changes less. Break a cycle by merging the two, or with an interface the stable side owns. Fail the build on an import that points the other way.
