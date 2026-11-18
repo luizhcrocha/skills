@@ -357,6 +357,12 @@ class ReviewTest(RepoCase):
     def lines(self, n):
         return "".join(f"line {i}\n" for i in range(n))
 
+    def test_a_diff_with_invalid_utf8_still_checks(self):
+        self.trunk(("feat: a", {"a.ts": "a\n"}))
+        (self.repo / "golden.bin").write_bytes(b"ok \xff\xfe not utf-8\n")
+        self.change("feat: golden with invalid utf-8", {})
+        self.assertEqual(self.check()["verdict"], "push")
+
     def test_a_small_stack_needs_no_review(self):
         self.trunk(("feat: a", {"a.ts": "a\n"}))
         self.change("feat: b", {"b.ts": self.lines(40)})
