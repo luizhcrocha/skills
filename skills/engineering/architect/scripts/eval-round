@@ -1,0 +1,183 @@
+#!/usr/bin/env python3
+"""Stage, blind and score one A/B round of architect's design eval (evals/README.md).
+
+  eval-round stage ROUND [--base REV] [--cand DIR] [--task NAME]... [--constraint N]
+      Snapshot the design skills twice into ROUND/arms/: base from jj revision REV of this repo
+      (default master), cand from DIR, a folder holding architect/, codebase-design/ and
+      principles/ (default this checkout's skills/engineering). Write one sketch brief per arm and
+      task to ROUND/briefs/sketch-<arm>-<task>.md. Tasks default to every file in evals/tasks/.
+  eval-round pair ROUND
+      Once every sketch is in ROUND/sketches/<arm>-<task>/: per task, copy the two sketches into
+      ROUND/judge/<task>/order-1/{A,B} on random sides and order-2/ swapped, record the sides in
+      ROUND/judge/<task>/sides.json, and write ROUND/briefs/judge-<task>-<order>.md.
+  eval-round score ROUND
+      Read each judgement's first line, `OVERALL A=<n> B=<n> PICK=<A|B>`, and print per task the
+      two arms' sums over both orders. Exit 0 when cand is kept (it wins more than half the tasks
+      and its total is higher), 1 when not, 2 when a judgement is missing or unreadable.
+
+Stdlib only. Spawning the runners and judges is the caller's: one agent per brief, the brief as its prompt.
+"""
+import argparse
+import json
+import random
+import re
+import shutil
+import subprocess
+import sys
+from pathlib import Path
+
+HERE = Path(__file__).resolve().parent.parent  # skills/engineering/architect
+EVALS = HERE / "evals"
+SKILLS = ("architect", "codebase-design", "principles")
+HIDDEN = ("architect/evals", "architect/scripts")  # the eval itself: a runner that read the rubric would game it
+ARMS = ("base", "cand")
+ORDERS = ("order-1", "order-2")
+VERDICT = re.compile(r"OVERALL A=(\d+(?:\.\d+)?) B=(\d+(?:\.\d+)?) PICK=([AB])")
+
+
+def fill(template: str, **values: str) -> str:
+    for key, value in values.items():
+        template = template.replace("{{" + key + "}}", value)
+    assert "{{" not in template, f"unfilled placeholder in brief: {template[template.index('{{'):][:40]}"
+    return template
+
+
+def constraint_text(n: int | None, for_judge: bool) -> str:
+    if n is None:
+        return "" if for_judge else "There is no runner constraint: produce the single best design."
+    if for_judge:
+        return f"Both were designed under runner constraint {n} of codebase-design's DESIGN-IT-TWICE.md. "
+    return (f"Your runner constraint is runner {n} in codebase-design/DESIGN-IT-TWICE.md: read it there and design "
+            "under it. Produce the best design that constraint allows; don't hedge toward other shapes.")
+
+
+def snapshot_rev(rev: str, dest: Path, repo: Path) -> None:
+    roots = [f"skills/engineering/{s}" for s in SKILLS]
+    files = subprocess.run(["jj", "file", "list", "-r", rev, "--", *roots], cwd=repo, check=True,
+                           capture_output=True, text=True).stdout.split("\n")
+    for f in filter(None, files):
+        rel = Path(f).relative_to("skills/engineering")
+        if any(rel.is_relative_to(h) for h in HIDDEN):
+            continue
+        out = dest / rel
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_bytes(subprocess.run(["jj", "file", "show", "-r", rev, "--", f], cwd=repo, check=True,
+                                       capture_output=True).stdout)
+
+
+def snapshot_dir(src: Path, dest: Path) -> None:
+    for s in SKILLS:
+        shutil.copytree(src / s, dest / s, ignore=shutil.ignore_patterns("__pycache__"))
+    for h in HIDDEN:
+        shutil.rmtree(dest / h, ignore_errors=True)
+
+
+def stage(round_dir: Path, base: str, cand: Path, tasks: list[str], constraint: int | None, repo: Path) -> list[Path]:
+    assert not (round_dir / "arms").exists(), f"{round_dir} is already staged"
+    snapshot_rev(base, round_dir / "arms" / "base", repo)
+    snapshot_dir(cand, round_dir / "arms" / "cand")
+    names = tasks or sorted(p.stem for p in (EVALS / "tasks").glob("*.md"))
+    (round_dir / "tasks").mkdir(parents=True)
+    for t in names:
+        shutil.copy(EVALS / "tasks" / f"{t}.md", round_dir / "tasks" / f"{t}.md")
+    (round_dir / "round.json").write_text(json.dumps({"base": base, "cand": str(cand), "tasks": names,
+                                                      "constraint": constraint}, indent=1) + "\n")
+    template = (EVALS / "runner-brief.md").read_text()
+    briefs = []
+    for arm in ARMS:
+        for t in names:
+            path = round_dir / "briefs" / f"sketch-{arm}-{t}.md"
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(fill(template, skills=str(round_dir / "arms" / arm) + "/",
+                                 task=str(round_dir / "tasks" / f"{t}.md"),
+                                 out=str(round_dir / "sketches" / f"{arm}-{t}") + "/",
+                                 constraint=constraint_text(constraint, for_judge=False)))
+            briefs.append(path)
+    return briefs
+
+
+def pair(round_dir: Path, rng: random.Random) -> list[Path]:
+    meta = json.loads((round_dir / "round.json").read_text())
+    template = (EVALS / "judge-brief.md").read_text()
+    (round_dir / "briefs").mkdir(exist_ok=True)
+    briefs = []
+    for t in meta["tasks"]:
+        sketches = {arm: round_dir / "sketches" / f"{arm}-{t}" for arm in ARMS}
+        missing = [str(p) for p in sketches.values() if not (p / "design.md").is_file()]
+        assert not missing, f"sketches not written yet: {missing}"
+        first = list(ARMS)
+        rng.shuffle(first)
+        sides = {ORDERS[0]: {"A": first[0], "B": first[1]}, ORDERS[1]: {"A": first[1], "B": first[0]}}
+        task_dir = round_dir / "judge" / t
+        for order, side in sides.items():
+            for letter, arm in side.items():
+                shutil.copytree(sketches[arm], task_dir / order / letter)
+            path = round_dir / "briefs" / f"judge-{t}-{order}.md"
+            path.write_text(fill(template, task=str(round_dir / "tasks" / f"{t}.md"),
+                                 a=str(task_dir / order / "A") + "/", b=str(task_dir / order / "B") + "/",
+                                 out=str(task_dir / order / "judgement.md"),
+                                 constraint=constraint_text(meta["constraint"], for_judge=True)))
+            briefs.append(path)
+        (task_dir / "sides.json").write_text(json.dumps(sides, indent=1) + "\n")
+    return briefs
+
+
+def score(round_dir: Path) -> tuple[list[dict], int]:
+    meta = json.loads((round_dir / "round.json").read_text())
+    rows, complete = [], True
+    for t in meta["tasks"]:
+        task_dir = round_dir / "judge" / t
+        sides = json.loads((task_dir / "sides.json").read_text())
+        sums = {arm: 0.0 for arm in ARMS}
+        picks = {arm: 0 for arm in ARMS}
+        for order, side in sides.items():
+            judgement = task_dir / order / "judgement.md"
+            m = VERDICT.search(judgement.read_text()) if judgement.is_file() else None
+            if not m:
+                complete = False
+                continue
+            sums[side["A"]] += float(m.group(1))
+            sums[side["B"]] += float(m.group(2))
+            picks[side[m.group(3)]] += 1
+        rows.append({"task": t, **{f"{a}_sum": sums[a] for a in ARMS}, "cand_picks": picks["cand"],
+                     "winner": "cand" if sums["cand"] > sums["base"] else "base" if sums["base"] > sums["cand"] else "tie"})
+    if not complete:
+        return rows, 2
+    wins = sum(r["winner"] == "cand" for r in rows)
+    kept = wins * 2 > len(rows) and sum(r["cand_sum"] for r in rows) > sum(r["base_sum"] for r in rows)
+    return rows, 0 if kept else 1
+
+
+def main(argv: list[str]) -> int:
+    p = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
+    sub = p.add_subparsers(dest="cmd", required=True)
+    s = sub.add_parser("stage")
+    s.add_argument("round", type=Path)
+    s.add_argument("--base", default="master")
+    s.add_argument("--cand", type=Path, default=HERE.parent)
+    s.add_argument("--task", action="append", default=[])
+    s.add_argument("--constraint", type=int)
+    for name in ("pair", "score"):
+        sub.add_parser(name).add_argument("round", type=Path)
+    a = p.parse_args(argv)
+    round_dir = a.round.resolve()
+    if a.cmd == "stage":
+        repo = HERE.parents[2]
+        for b in stage(round_dir, a.base, a.cand.resolve(), a.task, a.constraint, repo):
+            print(b)
+        return 0
+    if a.cmd == "pair":
+        for b in pair(round_dir, random.SystemRandom()):
+            print(b)
+        return 0
+    rows, code = score(round_dir)
+    print(f"{'task':<14}{'base':>7}{'cand':>7}  cand picks  winner")
+    for r in rows:
+        print(f"{r['task']:<14}{r['base_sum']:>7g}{r['cand_sum']:>7g}  {r['cand_picks']:>10}  {r['winner']}")
+    print({0: "kept: cand wins more than half the tasks and its total is higher",
+           1: "not kept", 2: "incomplete: a judgement is missing or has no OVERALL line"}[code])
+    return code
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

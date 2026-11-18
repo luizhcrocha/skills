@@ -21,4 +21,5 @@ The fleet (CLI, coordinator and manager skills, advisor agent, fleet hook) lives
 
 - `just test-changed [REVSET]` runs only the suites whose inputs changed in REVSET (default `master@origin..@`, the stack) and prints which it chose and why. The table is `SCOPE` in `scripts/gates`; a path it doesn't name runs everything. A worker runs this before it reports.
 - `just test` runs every suite in parallel, each one's output grouped under its PASS/FAIL line and duration. The lead runs it once per landing, on the stack's head, not after each worker.
+- A change to the design skills (`architect`, `codebase-design`, `principles`) that should change how agents design runs architect's eval first and lands only when it is kept: [skills/engineering/architect/evals/README.md](skills/engineering/architect/evals/README.md).
 - One suite alone: `just test-scripts`, `just test-lint-ts`, and the rest in `just --list`.
