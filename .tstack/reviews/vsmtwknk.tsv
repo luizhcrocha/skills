@@ -1,0 +1,1 @@
+vsmtwknk@8129597350c9	2026-11-18T18:39:19-05:00	opus	land	read whole: fix_verdicts takes the latest record per stack change, FIX in any case stops; test goes red-to-stop then LAND clears it; coordinator read	ed52e5a0fdf3b4ac
