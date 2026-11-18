@@ -54,8 +54,7 @@ validate:
 test-mods:
     for m in mods/*/; do claude plugin test "$m" || exit 1; done
 
-# Load master on GitHub into the installed plugin: refresh the marketplace, update, then /reload-plugins in every idle Claude Code pane in Rex
+# Load master on GitHub into the installed plugin: refresh the marketplace, then update; fleet-host reloads the sessions (scripts/reload-plugins without fleet)
 reinstall:
     claude plugin marketplace update tstack
     claude plugin update tstack@tstack
-    scripts/reload-plugins
