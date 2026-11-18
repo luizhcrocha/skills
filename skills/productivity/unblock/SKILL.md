@@ -1,35 +1,34 @@
 ---
 name: unblock
-description: "Find what blocks this session's work and what this session blocks, then ask each owning agent for the action that delivers it. Use for /unblock, or when /heads-up runs."
-disable-model-invocation: true
+description: "Find what blocks this session and what it blocks, and put each blocker in front of its owner with the action that clears it. Use when work stalls on another agent, a gate, a push or an approval, when another agent waits on this session, or for /unblock."
 ---
 
 # Unblock
 
-A **blocker** is a step one party waits on before its work can go on: a lane landing, a push, a deploy, an answer, an approval, a gate. Each has an **owner**, the one party that can clear it. Find every blocker in both directions, and put each in front of its owner with the exact action that clears it.
+A **blocker** is a step one party waits on before its work can go on: a lane landing, a push, a deploy, an answer, an approval, a gate. Its **owner** is the one party that can clear it. Find every blocker in both directions and put each in front of its owner with the exact action that clears it. The `fleet` commands run when `fleet` is on PATH; `<me>` is this session's name.
 
-## 1. Find the blockers (read-only)
+## 1. Find the blockers
 
-**What this session waits on:**
-- Its plans, ledger or dossier: incoming lane edges and waits whose lane has not landed.
-- Its open asks: `fleet msg ls`, and any ask sent by SendMessage with no answer.
-- Its own steps that stalled on something outside it: a gate held by another run, a push refused, an approval pending, a deploy someone else runs.
+For each, note its owner, the action that clears it, and since when it waits.
 
-**What waits on this session:**
-- `fleet msg mailbox`: the asks this session still owes.
-- `fleet waiting`: items naming this session's work.
-- Plans or news naming this session's lane as one they wait on.
+**This session waits on:**
+- Lanes its plan, ledger or dossier waits on that have not landed.
+- Its open asks: `fleet msg ls --from <me>`, and each SendMessage ask without an answer.
+- Its steps stalled outside it: a gate another run holds, a refused push, a pending approval, a deploy someone else runs.
+- Luiz: its fleet's rows in `fleet waiting`. A row marked ANSWERED has his answer: act on it.
 
-For each blocker note its owner, the action that clears it, and since when it has waited.
+**Waits on this session:**
+- `fleet msg mailbox`: the asks it still owes.
+- Plans or news naming its lane as one they wait on.
 
 ## 2. Put each blocker in front of its owner
 
-- **Another agent owns it.** Ask for the action, specific enough to do without asking back: `fleet msg ask <agent> "<action>: <what it unblocks, and for whom>" --key unblock-<blocker>`. The key joins an existing thread instead of opening a second one. For an agent of this session's own team, SendMessage does the same. When the owner is suspended (`fleet suspended`), do not resume it: the resume is Luiz's call, so it goes under his blockers with your pick.
-- **This session owns it.** Deliver it now when you can, then answer the asker's thread with what was done (`fleet msg answer <thread> "<done, where>" --final`). When you cannot yet, answer with what it waits on.
-- **Luiz owns it.** It is his call: name it with your pick and the reason.
+- **Another agent.** `fleet msg ask <agent> "<action>: <what it unblocks, for whom>" --key unblock-<blocker>`, specific enough to do without asking back; the key reuses an open thread. An agent of this session's own team gets SendMessage. A suspended owner (`fleet suspended`) stays suspended: its resume is Luiz's call.
+- **This session.** Deliver it now, then answer the asker: `fleet msg answer <thread> "<done, where>" --final`. When it cannot be delivered yet, answer with what it waits on.
+- **Luiz.** Name the call, your pick and its reason.
 
-The step is done when every blocker has an ask, an answer or a line for Luiz.
+Done when every blocker has an ask, an answer or a line for Luiz.
 
 ## 3. Report
 
-One line per blocker: what waits, on whom, since when, and what you did (asked, with the thread id; delivered; or put to Luiz). Say "no blockers" when there are none.
+One line per blocker: what waits, on whom, since when, and what you did (asked, with the thread id; delivered; put to Luiz). "No blockers" when there are none.
