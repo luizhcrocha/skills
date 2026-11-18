@@ -12,7 +12,7 @@ A **blocker** is a step one party waits on before its work can go on: a lane lan
 For each, note its owner, the action that clears it, and since when it waits. Check each blocker at its source first (`jj git fetch`, then the commit on `<bookmark>@origin`; the deploy's own status): one already cleared is dropped, and the work goes on.
 
 **This session waits on:**
-- Lanes its plan, ledger or dossier waits on that have not landed.
+- Lanes its plan, its `holds.md`, ledger or dossier waits on that have not landed.
 - Its open asks: `fleet msg ls --from <me>`, and each SendMessage ask without an answer.
 - Its steps stalled outside it: a gate another run holds, a refused push, a pending approval, a deploy someone else runs.
 - Luiz: its fleet's rows in `fleet waiting`. A row marked ANSWERED has his answer: act on it.
