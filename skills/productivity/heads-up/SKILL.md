@@ -34,10 +34,14 @@ Lead with what happens next, then the record. Shape, in this order:
 
 Plain words, one line per step or row. Leave out the steps when the report is ✅ Done.
 
-## 4. Done: clean up, then suspend
+## 4. Finish, clean up, then suspend
 
-When the opening line is ✅ **Done**, or all that is left is loose ends you can close yourself, list the cleanup, one short bullet each: changes to land, workspaces to forget, empty changes to abandon, gates to free, tasks to stop, notes to save. End the reply with **Clean up and suspend?**
+Work comes before the offer. Every loose end you can close yourself (a page to update, notes to save, a change to land, a report to act on) is work: do it now, as steps of this turn, and report it done. An offer to suspend with such work still listed is premature.
 
-On his yes: do the cleanup, stop background tasks (TaskStop), then run `fleet suspend me --why "<what was done, and where the record is>"`. Without `fleet` on PATH, say the work is done and cleaned.
+**Cleanup** is only the session's scaffolding: workspaces to forget, empty changes to abandon, gates to free, background tasks to stop.
 
-Otherwise keep working on what you can.
+- **✅ Done** (no step left for anyone): list the cleanup, one short bullet each, and end the reply with **Clean up and suspend?**
+- **🙋 Waiting on you**, with only Luiz's steps left and your own work finished: list the cleanup and end with **Suspend until you <his step>?** On his yes, the `--why` names his step and what the session does once it is taken.
+- **🟢 Working** or **⛔ Blocked**: no offer; keep working on what you can.
+
+On his yes: do the cleanup, stop background tasks (TaskStop), then run `fleet suspend me --why "<what was done, where the record is, and what waits>"`. Without `fleet` on PATH, say the work is done and cleaned.
