@@ -396,7 +396,7 @@ class Repo:
                     'json(conflict) ++ "\\t" ++ json(parents.len()) ++ "\\t" ++ json(description) ++ "\\n"')
         out = self.jj("log", "--no-graph", "--reversed", "-r", revset, "-T", template).stdout
         revs = []
-        for line in out.splitlines():
+        for line in filter(None, out.split("\n")):  # splitlines would also cut at U+2028, which json() leaves as is
             change, commit, empty, conflict, parents, description = map(json.loads, line.split("\t"))
             revs.append({"change": change, "commit": commit, "subject": description.split("\n", 1)[0].strip(),
                          "description": description, "empty": empty, "conflict": conflict, "merge": parents > 1})

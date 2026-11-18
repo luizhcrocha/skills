@@ -222,6 +222,13 @@ class FastForwardTest(RepoCase):
         self.said(result, "2 heads")
         self.assertEqual(self.check("--head", c)["verdict"], "push")
 
+    def test_a_description_with_a_line_separator_is_read_whole(self):
+        self.trunk(("feat: a\u2028b\u2029c", {"a.ts": "a\n"}))
+        self.change("feat: b\u2028c", {"b.ts": "b\n"})
+        result = self.check()
+        self.assertEqual([r["subject"] for r in result["stack"]], ["feat: b\u2028c"])
+        self.assertEqual(result["verdict"], "push")
+
     def test_nothing_to_push(self):
         self.trunk(("feat: a", {"a.ts": "a\n"}))
         result = self.check()
