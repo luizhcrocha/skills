@@ -17,6 +17,7 @@ The principles named below are files in the **principles** skill's folder; read 
 - Single source of truth per invariant. Derive instead of sync.
 - Idempotent state transitions where applicable, per the **make-operations-idempotent** principle. Ask what happens if the operation runs twice or crashes halfway.
 - Walk the failures before you finish. For each write the design makes, three runs: the process crashes right after it, two callers run it at the same moment, and it lands late, after a newer write. For each, say what state remains, which record wins, and what the next step does with that state. A run with no good answer changes the sketch.
+- Trust, start and failure kinds. Name each input the module takes on its caller's word (an actor, an id, a path) and why the caller can be trusted with it; one it cannot is looked up or checked inside. Say how the first record of each kind comes to exist on an empty database. Sort each failure into temporary (retried, with its bound) or final (recorded once, never overwritten).
 - Size to the requirements. Each limit, file, table and background mechanism names the stated requirement it serves; one that serves none goes under Alternatives considered or Open questions, not into the sketch. Between two designs that meet every requirement, the smaller wins.
 - Short call chains. If tracing the flow needs more than three files, flatten the hierarchy, per the **laziness-protocol** and **minimize-reader-load** principles.
 
