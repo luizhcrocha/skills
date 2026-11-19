@@ -6,7 +6,7 @@ disable-model-invocation: true
 
 # Heads-up
 
-Luiz is checking on this session from outside. Tell him from the record where it stands, and find the loose ends: anything nobody will pick up once the session ends. `/ketchup` covers what changed since his last message; a heads-up covers the whole session.
+Luiz is checking on this session from outside. Tell him where it stands, and find the loose ends: anything nobody will pick up once the session ends. `/ketchup` covers what changed since his last message; a heads-up covers the whole session.
 
 ## 1. Sweep
 
@@ -21,7 +21,9 @@ Read only. Done when each source has a note, "nothing" included:
 
 ## 2. Unblock
 
-Invoke the `unblock` skill and keep its lines for the report.
+Run the `unblock` skill's steps in full, in this turn, and keep its lines for the report. The sweep is the record; this step is **live**: every blocker is checked at its source now (the run, the job, the service, the commit on origin), never reported from the ledger, a plan or an owner's last message. A heads-up that says ⛔ Blocked with a blocker it did not check live is premature: Luiz would have to run `/unblock` after it (2026-11-19: a heads-up said "orch reruns n5 and n6"; the rerun n12 already existed, was dead in Nomad, and the adapter stalled on a missing pool socket).
+
+Done when each blocker's line names what was checked live and what it showed.
 
 ## 3. Report
 
