@@ -1,0 +1,136 @@
+#!/usr/bin/env python3
+"""Look at a Rex pane Luiz names (block:<uuid>) and, when a command is running in it, wait for that command to end.
+
+  rex-watch BLOCK [--lines N] [-S SERVER]   print what runs, wait for it to end, then print the screen's last N lines
+  rex-watch --check BLOCK                   print the state and the screen, never wait
+
+A pane is busy while its foreground process is something other than a shell: a command typed into a shell pane, or
+the command a pane was made to run (`rex run -- npm test`). The foreground, not the pane's program, is what counts,
+because on macOS the program of a login pane is `login`, with the shell under it.
+The wait is a subscription: `rex events -s <the block's session> --json` delivers the block's `process_changed` and
+`child_exited`, so nothing polls. `rex events` gives no sign once it has subscribed, so the pane's state is read once
+more if no event comes in the first seconds: a command that ended in that gap is still seen.
+Blind spot: a shell's own built-ins (nu's `sleep`, `http get`, a loop) run inside the shell, so a pane busy with one
+reads idle; read the screen.
+Exit 0 once idle or ended; 2 when the block or its state cannot be read; 3 when the event stream ends first.
+Stdlib only.
+"""
+import argparse
+import json
+import os
+import selectors
+import subprocess
+import sys
+import time
+
+SHELLS = {"bash", "zsh", "nu", "fish", "sh", "dash", "ksh", "mksh", "tcsh", "csh", "pwsh", "elvish", "xonsh"}
+RECHECK_AFTER = 3.0  # seconds without an event before the state is read again, once
+
+
+def rex(server: str | None, *args: str) -> subprocess.CompletedProcess:
+    return subprocess.run(["rex", *(["-S", server] if server else []), *args], capture_output=True, text=True)
+
+
+def label(proc: dict | None) -> str:
+    if not proc:
+        return "nothing"
+    return proc.get("script") or proc.get("argv0") or proc.get("name") or str(proc.get("pid"))
+
+
+def is_shell(proc: dict | None) -> bool:
+    """A shell at its prompt: an interpreter running a script (`nu build.nu`) is busy."""
+    name = (proc or {}).get("argv0") or (proc or {}).get("name") or ""
+    return bool(proc) and not proc.get("script") and name.lstrip("-").rsplit("/", 1)[-1] in SHELLS
+
+
+def busy(state: dict) -> bool:
+    fg = state.get("foreground")
+    return fg is not None and state.get("last_exit") is None and not is_shell(fg)
+
+
+def read_state(server: str | None, block: str) -> dict | None:
+    r = rex(server, "block", "call", "-b", block, "process")
+    return json.loads(r.stdout) if r.returncode == 0 and r.stdout.strip() else None
+
+
+def done_event(line: str, block: str) -> bool:
+    try:
+        ev = json.loads(line)["payload"]["event"]
+    except (ValueError, KeyError, TypeError):
+        return False
+    if ev.get("type") != "block_event" or ev.get("payload", {}).get("block_id") != block:
+        return False
+    name, body = ev["payload"].get("name"), ev["payload"].get("payload") or {}
+    if name == "child_exited":
+        return True
+    return name == "process_changed" and not busy({"foreground": body.get("foreground")})
+
+
+def wait_for_end(stream: subprocess.Popen, server: str | None, block: str) -> int:
+    fd = stream.stdout.fileno()
+    sel = selectors.DefaultSelector()
+    sel.register(fd, selectors.EVENT_READ)
+    recheck_at, pending = time.monotonic() + RECHECK_AFTER, b""  # once, from subscription: other panes' events don't move it
+    while True:
+        timeout = None if recheck_at is None else max(0.0, recheck_at - time.monotonic())
+        if recheck_at is not None and (timeout == 0 or not sel.select(timeout=timeout)):
+            recheck_at = None
+            state = read_state(server, block)
+            if state is None:
+                return 2
+            if not busy(state):
+                return 0
+            continue
+        if recheck_at is None:
+            sel.select()
+        chunk = os.read(fd, 65536)
+        if not chunk:
+            return 3
+        *lines, pending = (pending + chunk).split(b"\n")
+        if any(done_event(line.decode(errors="replace"), block) for line in lines):
+            return 0
+
+
+def main(argv: list[str]) -> int:
+    p = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
+    p.add_argument("block")
+    p.add_argument("--check", action="store_true", help="print the state and the screen, never wait")
+    p.add_argument("--lines", type=int, default=40)
+    p.add_argument("-S", "--server", default=None)
+    a = p.parse_args(argv)
+    found = rex(a.server, "block", "inspect", a.block, "--json")
+    if found.returncode != 0:
+        sys.stderr.write(f"rex-watch: {found.stderr.strip()} (closed, or on another host: rex hosts, then -S)\n")
+        return 2
+    session = json.loads(found.stdout)["session_id"]
+    stream = None
+    if not a.check:
+        stream = subprocess.Popen(["rex", *(["-S", a.server] if a.server else []), "events", "-s", session, "--json"],
+                                  stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, bufsize=0)
+    code = 0
+    try:
+        state = read_state(a.server, a.block)
+        if state is None:
+            sys.stderr.write(f"rex-watch: cannot read the processes of {a.block}\n")
+            return 2
+        running = busy(state)
+        print(f"{a.block} in {session}: {'running ' + label(state.get('foreground')) if running else 'idle'}"
+              f" (program {label(state.get('child'))})", flush=True)
+        if running and stream:
+            code = wait_for_end(stream, a.server, a.block)
+            print(f"{a.block}: " + {0: "ended", 2: "cannot read its processes any more",
+                                     3: "the event stream ended before the command did"}[code], flush=True)
+    finally:
+        if stream:
+            stream.terminate()
+            stream.wait()
+    print(screen(a.server, a.block, a.lines))
+    return code
+
+
+def screen(server: str | None, block: str, lines: int) -> str:
+    return "\n".join(rex(server, "capture", "-b", block, "--trim").stdout.splitlines()[-lines:])
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))
