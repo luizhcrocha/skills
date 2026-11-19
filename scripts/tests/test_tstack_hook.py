@@ -594,6 +594,12 @@ class SuspendHintTest(HookCase):
         ):
             self.assertSilent(self.prompt(text))
 
+    def test_pasted_text_naming_suspend_gets_nothing_but_his_own_words_count(self):
+        paste = '<pasted_content id="7628">\n❯ why didn\'t you suspend yourself\n</pasted_content id="7628">'
+        self.assertSilent(self.prompt("agents are struggling with suspend orders\n\n" + paste))
+        context = json.loads(self.prompt(paste + "\nok, suspend yourself").stdout)["hookSpecificOutput"]["additionalContext"]
+        self.assertIn("fleet suspend me", context)
+
 
 FAKE_REX = r"""#!/usr/bin/env python3
 import json, os, sys, time

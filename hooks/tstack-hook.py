@@ -212,12 +212,15 @@ _SUSPEND = re.compile(r"\bsuspen\w*\s+(?:your\s*self|you|this\s+session)\b|\bfle
 # A relayed agent report or task notification is not Luiz asking: an advisor's text naming `fleet suspend me`
 # made the hint fire (2026-11-18).
 _RELAYED = re.compile(r"<agent-message\b|<task-notification>|\[Subagent hand-back\]")
+# Text Luiz pastes is another session's words, not his ask: a pasted reply "why didn't you suspend yourself" fired the
+# hint twice on 2026-11-19. His own words around the paste still count.
+_PASTED = re.compile(r"<pasted_content\b[^>]*>.*?</pasted_content\b[^>]*>", re.S)
 
 
 def suspend_hint(hook):
     """UserPromptSubmit: "suspend yourself" means `fleet suspend me`; agents stopped their tasks and stayed up
     (Luiz, 2026-11-17: "agent's are not getting this")."""
-    prompt = str(hook.input.get("prompt") or "")
+    prompt = _PASTED.sub("", str(hook.input.get("prompt") or ""))
     if hook.is_worker or _RELAYED.search(prompt) or not _SUSPEND.search(prompt):
         return None
     return SUSPEND
