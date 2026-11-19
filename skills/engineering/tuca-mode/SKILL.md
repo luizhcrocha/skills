@@ -38,6 +38,7 @@ Ask it of every message from Luiz, this invocation's task included:
 - **Finished → say so, unasked.** When the work Luiz asked for is done, the reply says it and offers the cleanup and suspend of `/heads-up`'s last step (read `../../productivity/heads-up/SKILL.md`): your own work is closed first, then the scaffolding, then **Clean up and suspend?**
 - **Done means seen working where Luiz uses it**: the real thing run (his device or client, a fresh session, the deployed app), not a test alone and not a claim. Until then the reply says "not yet seen working" and what would show it.
 - **Land at the end.** Every playbook that changes code ends with the Land playbook. A pull request only when Luiz asks for one.
+- **Broken first.** A break that blocks other lanes or production (a red trunk, a broken gate or tool, failing production work) is fixed through the Hotfix playbook: it lands in minutes on a narrow gate, and the full suite runs right after it lands.
 - **Every prose surface → `tstack:unslop`**: your reply, docs, commit and PR messages, READMEs, skill text, memo notes. Docs people read also follow `tstack:technical-writing`. Commit messages take the repo's form from `jj log`; the worktree-janitor writes them.
 - **Formal checks: you suggest, Luiz starts.** He invokes `/create-formal-verification-skill` and `/maintain-formal-verification-skill`, and won't remember them (2026-11-04). Suggest one in one line (the target, the reason, the command), once per target, on a review finding `Caught by: model`, on a design or fix that turns on the order of events (a race, a retry, a cancel, a state machine) where a break costs money, data or permissions, or on covered code its formal spec no longer describes. In a fleet the coordinator opens the decision. Covered code with a passing spec: run its check.
 - **Broken tstack skill mid-task** → fix it in its own jj change, keep going, and name the fix in the reply.
@@ -109,6 +110,7 @@ Files in [playbooks/](playbooks/). No playbook fits → `tstack:figure-it-out` d
 |---|---|---|
 | Investigation | Read-only question: how does X work, why is Y so, are we sure about Z, X or Y? | [investigation.md](playbooks/investigation.md) |
 | Bug fix | A reported defect to reproduce, root-cause and fix | [bug-fix.md](playbooks/bug-fix.md) |
+| Hotfix | A break already blocking others: trunk red, a broken gate or tool, production failing now | [hotfix.md](playbooks/hotfix.md) |
 | Perf issue | A measured slowness to trace and improve against a baseline | [perf-issue.md](playbooks/perf-issue.md) |
 | Feature | New or changed behaviour | [feature.md](playbooks/feature.md) |
 | Refactoring | Structure changes, behaviour does not (rename, extract, inline, dedupe, move) | [refactoring.md](playbooks/refactoring.md) |

@@ -1,6 +1,6 @@
 # Bug fix
 
-**You own this task. Plan, review, verify.** Delegate the digging and the fix to subagents; stay in the lead.
+**You own this task. Plan, review, verify.** Delegate the digging and the fix to subagents; stay in the lead. The defect already blocks other lanes or production → [Hotfix](hotfix.md) first, then back here for the root cause.
 
 Be scientific. Every line that lands traces to runtime evidence. A belt-and-suspenders change that "might help" is a hypothesis, not a fix, and it does not land. When evidence refutes a hypothesis, revert what it motivated. The smallest change the evidence justifies lands, nothing more. The loop is `tstack:diagnosing-bugs`; its phases are the spine of steps 1 to 5.
 
