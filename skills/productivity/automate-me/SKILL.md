@@ -13,7 +13,7 @@ There is one mode, `tuca-mode`: this skill refines it and never creates another.
 
 ## 1. Scope
 
-- **Projects**: the ones Luiz names, else the current one. Each is a path; its jj workspaces beside it (`<repo>-<lane>`) come along through `--workspaces`. Never read another project's transcripts: they may hold client data this task has no reason to see.
+- **Projects**: the ones Luiz names, else the current one. Each is a path; its jj workspaces (`<repos>/.ws/<repo>/<lane>`, and older ones beside it as `<repo>-<lane>`) come along through `--workspaces`. Never read another project's transcripts: they may hold client data this task has no reason to see.
 - **Window**: Luiz's date, else everything since tuca-mode last changed in the tstack checkout: `jj log -R ~/repos/luizhcrocha/skills -r 'latest(::trunk() & files(root:"skills/engineering/tuca-mode"))' --no-graph -T 'committer.timestamp().format("%Y-%m-%d")'`.
 - **The extractor**: `${CLAUDE_PLUGIN_ROOT}/skills/productivity/automate-me/scripts/human-turns`. Transcripts live in `~/.claude/projects/<slug>/<session>.jsonl` (the slug is the path with `/` and `.` as `-`), subagent transcripts in `<session>/subagents/`. It prints Luiz's own turns as JSONL (`session`, `date`, `cwd`, `text`, and `prev`, the tail of the reply the turn answers) and drops harness noise, peer messages and headless `claude -p` runs. Subagent transcripts carry the lead's briefs, not Luiz's words, so they stay out unless a finding needs to see what a worker was told (`--subagents`).
 
@@ -60,8 +60,8 @@ Mining misses intent. One round in the reply: the kept rules as a numbered list 
 
 One jj workspace per repo touched, off its landing bookmark:
 
-- tstack: `jj workspace add ../skills-automate-me -r master --name automate-me` from `~/repos/luizhcrocha/skills`.
-- dotfiles: `jj workspace add ../dotfiles-automate-me -r nix --name automate-me` from `~/repos/luizhcrocha/dotfiles`.
+- tstack: `ws-add automate-me -r master` from `~/repos/luizhcrocha/skills`.
+- dotfiles: `ws-add automate-me -r nix` from `~/repos/luizhcrocha/dotfiles`.
 
 Edit in place per `tstack:writing-for-agents` and `tstack:unslop`: preserve what Luiz has not contradicted, revise what has new evidence, add a rule only for a genuinely new habit. The mode stays terse; each rule is a line, operational, and says "Luiz" where the mode already does. Other skills appear as pointers, never as pasted excerpts.
 

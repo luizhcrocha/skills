@@ -45,7 +45,7 @@ On "check only", stop here. Done when the table is shown.
 Edits land in a dedicated workspace from trunk, never in Luiz's working copy:
 
 ```sh
-jj workspace add ../skills-lang-refresh -r 'trunk()' --name lang-refresh
+ws-add lang-refresh -r 'trunk()'
 ```
 
 If the workspace exists, run `jj workspace update-stale` in it and start from `trunk()` again. Then, per skill with a verdict of adopt or breaking, one change that is a child of `trunk()` (`jj new 'trunk()'`), so Luiz can take each skill on its own:

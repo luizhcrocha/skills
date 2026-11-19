@@ -4,7 +4,7 @@ tuca-mode's rules for the agents a session spawns, read before the first spawn. 
 
 ## Workspace and context
 
-- **A code-writing worker works in a jj workspace, reused along its lane.** A worker that follows another's lane takes its workspace (`fleet ws <dashboard-dir> add <worker-id> --reuse <workspace>`). A fresh one (`fleet ws <dashboard-dir> add <worker-id> -r <base>`; with no ledger yet, or no `fleet`, `jj workspace add ../<repo>-<lane> -r <base> --name <lane>`) only for parallel workers whose files could meet, a risky experiment, or an arena or swarm comparison.
+- **A code-writing worker works in a jj workspace, reused along its lane.** A worker that follows another's lane takes its workspace (`fleet ws <dashboard-dir> add <worker-id> --reuse <workspace>`). A fresh one (`fleet ws <dashboard-dir> add <worker-id> -r <base>`; with no ledger yet, or no `fleet`, `ws-add <lane> -r <base>`, which puts it in `<repos>/.ws/<repo>/<lane>`) only for parallel workers whose files could meet, a risky experiment, or an arena or swarm comparison.
 - **150k tokens is the line.** A small follow-up goes back to the same worker while its context is under about 150k tokens; past that, a fresh worker takes it with the old worker's handoff in its brief. A brief bounds the reading by name. A worker that reaches 150k finishes the read, edit or test cycle in hand and starts no other, then leaves a resume point and reports. [models.md](../../../docs/models.md) has the evidence and the limits by role.
 
 ## The tests a worker runs

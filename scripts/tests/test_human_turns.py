@@ -34,6 +34,15 @@ class HumanTurns(unittest.TestCase):
             dirs = ht.project_dirs(["/r/proj"], False, root)
             return [t for p in ht.transcripts(dirs, False) for t in ht.turns(p, *args)]
 
+    def test_workspaces_come_from_beside_the_repo_and_from_its_ws_folder(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            for d in (ht.slug("/r/proj"), ht.slug("/r/proj") + "-old", ht.slug("/r/.ws/proj") + "-lane",
+                      ht.slug("/r/.ws/other") + "-lane"):
+                (root / d).mkdir()
+            names = [d.name for d in ht.project_dirs(["/r/proj"], True, root)]
+            self.assertEqual(names, [ht.slug("/r/proj"), ht.slug("/r/.ws/proj") + "-lane", ht.slug("/r/proj") + "-old"])
+
     def test_keeps_typed_turns_with_the_reply_they_answer(self):
         out = self.run_on([assistant("I used git commit."), user("no, use jj describe")])
         self.assertEqual([(t["text"], t["prev"]) for t in out], [("no, use jj describe", "I used git commit.")])

@@ -39,7 +39,7 @@ Done when the engine, the kind and the rule's name are written down, with the ca
 
 ## 3. Author
 
-Work in a tstack workspace of its own: `cd ~/repos/luizhcrocha/skills; jj workspace add ../skills-lint-<name> -r 'trunk()' --name lint-<name>`.
+Work in a tstack workspace of its own: `cd ~/repos/luizhcrocha/skills; ws-add lint-<name> -r 'trunk()'`.
 
 - **Custom TypeScript rule**: `lint/ts/tstack/rules/<name>.ts` in the style of its siblings and the anti-slop fork (`defineRule`, `createOnce`, a message that names the fix), registered in `lint/ts/tstack/index.ts`. Its RuleTester suite, `<name>.test.ts`, takes the incident verbatim as `invalid` cases (trimmed to the statement, one case per distinct shape) and the fix plus the near misses as `valid` ones. `just test-lint-ts` runs it.
 - **Native lint**: the one line in the pack file, its registry id in a comment beside it where the format allows.

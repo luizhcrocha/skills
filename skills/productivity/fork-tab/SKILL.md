@@ -25,7 +25,7 @@ Done when you have the slug, one sentence for A and one for B.
 Two agents never share one jj workspace, so B gets its own workspace, based where A is based:
 
 ```sh
-jj workspace add ../<repo>-<slug> -r @- --name <slug>
+ws=$(ws-add <slug> -r @-)   # <repos>/.ws/<repo>/<slug>
 ```
 
 When B has touched files, move those files out of `@` into the new workspace's change:
@@ -62,7 +62,7 @@ This step needs Rex (`REX_SESSION` and `REX_BLOCK` set). Open the tab in this Re
 
 ```bash
 me=$(rex whoami --json | jq -r .window_id)
-new=$(rex window new -s "$REX_SESSION" <slug> -c ../<repo>-<slug> --focus=false --json \
+new=$(rex window new -s "$REX_SESSION" <slug> -c "$ws" --focus=false --json \
   -- claude --name <slug> --model opus --effort high \
   "/tstack:tuca-mode Continue the work in <handoff file>. Run jj workspace update-stale first, then load the skills it lists." \
   | jq -r .window_id)
@@ -71,7 +71,7 @@ rex window move -s "$REX_SESSION" "$new" --after "$me"
 
 Opus high is the Implementer row of [models.md](../../../docs/models.md). If Luiz names a model, use his.
 
-Outside Rex, give Luiz the launch in nushell instead: `cd ../<repo>-<slug>; claude --name <slug> --model opus --effort high "/tstack:tuca-mode Continue the work in <handoff file>. Run jj workspace update-stale first, then load the skills it lists."`
+Outside Rex, give Luiz the launch in nushell instead: `cd <the path ws-add printed>; claude --name <slug> --model opus --effort high "/tstack:tuca-mode Continue the work in <handoff file>. Run jj workspace update-stale first, then load the skills it lists."`
 
 Done when `rex window ls -s "$REX_SESSION"` lists `<slug>` right after your tab, or Luiz has the command.
 

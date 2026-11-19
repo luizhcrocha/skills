@@ -4,7 +4,7 @@ A trial runs one rule, alone, over every repo of Luiz's that uses its language, 
 
 ## The repos
 
-Luiz's repos are the directories under `~/repos/luizhcrocha/` and `~/repos/coelhorocha/`. Each repo counts once: a jj workspace beside its repo (`<repo>-<lane>`, whose `.jj/repo` is a file pointing at the main one) is skipped, and so is a directory with neither `.jj` nor `.git`. `lint-vendor detect --repo <dir>` names a repo's languages.
+Luiz's repos are the directories under `~/repos/luizhcrocha/` and `~/repos/coelhorocha/`. Each repo counts once: a jj workspace (under `.ws/<repo>/`, or an older one beside its repo as `<repo>-<lane>`; its `.jj/repo` is a file pointing at the main one) is skipped, and so is a directory with neither `.jj` nor `.git`. `lint-vendor detect --repo <dir>` names a repo's languages.
 
 ```sh
 for d in ~/repos/luizhcrocha/*/ ~/repos/coelhorocha/*/; do

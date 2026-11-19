@@ -1,0 +1,63 @@
+#!/usr/bin/env python3
+"""Add a jj workspace where Luiz's workspaces live: <repos>/.ws/<repo>/<slug>, beside the repos, never inside one.
+
+  ws-add SLUG [-r REV] [--name NAME] [-R DIR]   create the workspace (NAME defaults to SLUG), print its path
+  ws-add --path SLUG [-R DIR]                   print the path only, creating nothing
+
+DIR is any workspace of the repo (default: the current directory). From a secondary workspace the repo is still
+the main one, so every workspace of `skills` lands in <repos>/.ws/skills/. Luiz, 2026-11-18: the repos folder had
+311 entries, 243 of them fleet-* workspaces made as ../<repo>-<slug> siblings. Stdlib only.
+"""
+import argparse
+import subprocess
+import sys
+from pathlib import Path
+
+
+def workspace_root(start: Path) -> Path:
+    out = subprocess.run(["jj", "workspace", "root"], cwd=start, capture_output=True, text=True)
+    if out.returncode != 0:
+        sys.exit(f"ws-add: {start} is not in a jj workspace: {out.stderr.strip()}")
+    return Path(out.stdout.strip())
+
+
+def main_root(root: Path) -> Path:
+    """The repo's main workspace: a secondary one's .jj/repo is a file holding the path to the main .jj/repo."""
+    repo = root / ".jj" / "repo"
+    if repo.is_file():
+        return (repo.parent / repo.read_text().strip()).resolve().parent.parent
+    return root.resolve()
+
+
+def path_for(start: Path, slug: str) -> Path:
+    assert slug and "/" not in slug and not slug.startswith("."), f"a slug is one plain name, not {slug!r}"
+    main = main_root(workspace_root(start))
+    return main.parent / ".ws" / main.name / slug
+
+
+def main(argv: list[str]) -> int:
+    p = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
+    p.add_argument("slug")
+    p.add_argument("-r", "--revision", default=None)
+    p.add_argument("--name", default=None)
+    p.add_argument("-R", "--repository", type=Path, default=Path.cwd())
+    p.add_argument("--path", action="store_true", help="print the path only")
+    a = p.parse_args(argv)
+    dest = path_for(a.repository, a.slug)
+    if a.path:
+        print(dest)
+        return 0
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    cmd = ["jj", "workspace", "add", str(dest), "--name", a.name or a.slug]
+    if a.revision:
+        cmd += ["-r", a.revision]
+    r = subprocess.run(cmd, cwd=a.repository, capture_output=True, text=True)
+    if r.returncode != 0:
+        sys.stderr.write(r.stderr)
+        return r.returncode
+    print(dest)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

@@ -13,7 +13,7 @@ Open a todo list with the six steps.
 
 ## 1. Report
 
-Work in a tstack workspace of its own: `cd ~/repos/luizhcrocha/skills; jj workspace add ../skills-lint-audit -r 'trunk()' --name lint-audit` (`lint-audit-<date>` when that name is taken). Run `lint-registry validate`, `lint-registry list` and `lint-registry stale --days 90`. Done when the rules are counted per status and language, with the silent and unmeasured lists.
+Work in a tstack workspace of its own: `cd ~/repos/luizhcrocha/skills; ws-add lint-audit -r 'trunk()'` (`lint-audit-<date>` when that name is taken). Run `lint-registry validate`, `lint-registry list` and `lint-registry stale --days 90`. Done when the rules are counted per status and language, with the silent and unmeasured lists.
 
 ## 2. Measure
 
@@ -37,7 +37,7 @@ For each approved rule, `lint-registry set-status <id> <status> --note "<runs, h
 
 ## 5. Re-vendor
 
-Find the repos that vendor packs: those of Luiz's repos (the list in trials.md) with a `tools/lint/tstack/manifest.toml`. For each where `lint-vendor --source <this workspace> --repo <repo> status` shows a newer tstack version or where a rule's severity changed, work in a jj workspace of that repo off its landing bookmark (`jj workspace add ../<repo>-lint-audit -r <bookmark>@origin --name lint-audit`), never in Luiz's working copy:
+Find the repos that vendor packs: those of Luiz's repos (the list in trials.md) with a `tools/lint/tstack/manifest.toml`. For each where `lint-vendor --source <this workspace> --repo <repo> status` shows a newer tstack version or where a rule's severity changed, work in a jj workspace of that repo off its landing bookmark (`ws-add lint-audit -r <bookmark>@origin -R <repo>`), never in Luiz's working copy:
 
 1. `lint-vendor --source <this workspace> --repo <repo workspace> update`. A conflict is left marked and reported.
 2. Apply the wiring it prints that differs from the repo's config (a promoted rule's severity, a new plugin rule); keep every local override.

@@ -18,7 +18,7 @@ Every runner gets the same task, so the brief is the contract.
 3. **The constraints.** N runners, default 3. Diversity comes from a distinct constraint per runner, all on the same model:
    - A design task (an interface, a module, a seam) takes the constraints from `tstack:codebase-design`'s [DESIGN-IT-TWICE.md](../codebase-design/DESIGN-IT-TWICE.md): minimize the interface, maximize flexibility, optimize for the common caller, and ports & adapters when a dependency crosses the seam.
    - Any other task: write N distinct approaches, each a different whole shape (a different data structure, a different decomposition, a different owner of the hard part), not flavors of one.
-4. **The output paths.** Each runner writes to its own place, per Separate Before Serializing Shared State (`tstack:principles`). In a jj repo: `jj workspace add ../<repo>-arena-<n> -r <base> --name arena-<n>`, one per runner, from the same base. Outside a repo: `<scratchpad>/arena-<slug>/candidate-<n>/`.
+4. **The output paths.** Each runner writes to its own place, per Separate Before Serializing Shared State (`tstack:principles`). In a jj repo: `ws-add arena-<n> -r <base>`, one per runner, from the same base. Outside a repo: `<scratchpad>/arena-<slug>/candidate-<n>/`.
 
 Done when the artifact, the rubric, N constraints and N output paths are written down.
 

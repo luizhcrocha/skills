@@ -51,7 +51,7 @@ Present the synthesizer's full Accepted / Rejected / Backlog output to Luiz and 
 Skill edits land as **one jj change in the repo that owns the skill**, in a jj workspace of its own, never in a workspace another session uses. For tstack skills that repo is `~/repos/luizhcrocha/skills`:
 
 ```
-cd ~/repos/luizhcrocha/skills; jj workspace add ../skills-reflect -r 'trunk()' --name reflect
+cd ~/repos/luizhcrocha/skills; ws-add reflect -r 'trunk()'
 ```
 
 (A workspace named `reflect` already there → `reflect-<date>`.) Then, for each approved Accepted item, follow its Routing:

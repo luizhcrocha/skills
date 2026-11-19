@@ -43,8 +43,10 @@ def project_dirs(paths: list[str], workspaces: bool, root: Path = PROJECTS) -> l
         s = slug(p)
         if (root / s).is_dir():
             dirs.append(root / s)
-        if workspaces:
-            dirs += sorted(d for d in root.glob(f"{s}-*") if d.is_dir())
+        if workspaces:  # beside it (<repo>-<lane>, the old layout) and under <repos>/.ws/<repo>/ (ws-add)
+            home = Path(p).expanduser().resolve()
+            nested = slug(str(home.parent / ".ws" / home.name))
+            dirs += sorted(d for d in [*root.glob(f"{s}-*"), *root.glob(f"{nested}-*")] if d.is_dir())
     return dirs
 
 
@@ -123,7 +125,7 @@ def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--project", action="append", required=True, help="project path (repeatable)")
     ap.add_argument("--since", help="YYYY-MM-DD, inclusive")
-    ap.add_argument("--workspaces", action="store_true", help="also <project>-* dirs (jj workspaces beside it)")
+    ap.add_argument("--workspaces", action="store_true", help="also its jj workspaces: <project>-* beside it and <repos>/.ws/<project>/*")
     ap.add_argument("--subagents", action="store_true", help="also read subagent transcripts")
     ap.add_argument("--headless", action="store_true", help="keep headless (claude -p) sessions")
     ap.add_argument("--list", action="store_true", help="print dirs and session files with turn counts only")
