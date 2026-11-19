@@ -100,13 +100,14 @@ class RexWatch(unittest.TestCase):
         self.assertNotIn("ended", r.stdout)
 
     def test_a_macos_login_pane_is_idle_when_its_shell_has_the_foreground(self):
-        r = self.run_watch({"foreground": NU, "child": LOGIN, "last_exit": None}, [])
+        r = self.run_watch({"foreground": NU, "child": LOGIN, "ancestors": [LOGIN], "last_exit": None}, [])
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertIn("idle (program login)", r.stdout)
 
     def test_a_macos_login_pane_command_ends_when_nu_has_the_foreground_again(self):
-        r = self.run_watch({"foreground": SLEEP, "child": LOGIN, "last_exit": None},
-                           [block_event(BLOCK, "process_changed", {"generation": 5, "foreground": NU})])
+        r = self.run_watch({"foreground": SLEEP, "child": LOGIN, "ancestors": [NU, LOGIN], "last_exit": None},
+                           [block_event(BLOCK, "process_changed", {"generation": 5, "foreground": NU,
+                                                                    "ancestors": [LOGIN]})])
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertIn("ended", r.stdout)
 
@@ -136,6 +137,17 @@ class RexWatch(unittest.TestCase):
         r = self.run_watch([None], [])
         self.assertEqual(r.returncode, 2)
         self.assertIn("cannot read the processes", r.stderr)
+
+    def test_a_bash_script_run_from_nu_is_busy_until_nu_has_the_foreground_again(self):
+        # entropic-switch, 2026-11-18: Rex reports the script as plain bash, no `script`; it read idle while it built
+        script = {"pid": 20, "user_id": 1000, "name": "bash", "argv0": "bash", "script": None}
+        r = self.run_watch({"foreground": script, "child": NU, "ancestors": [NU], "last_exit": None},
+                           [block_event(BLOCK, "process_changed", {"generation": 6, "foreground": script,
+                                                                    "ancestors": [NU]}),
+                            block_event(BLOCK, "process_changed", {"generation": 7, "foreground": NU})])
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("running bash (program nu)", r.stdout)
+        self.assertIn("ended", r.stdout)
 
     def test_a_failed_recheck_exits_2(self):
         r = self.run_watch([{"foreground": SLEEP, "child": NU, "last_exit": None}, None], [])

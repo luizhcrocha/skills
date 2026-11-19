@@ -4,9 +4,9 @@
   rex-watch BLOCK [--lines N] [-S SERVER]   print what runs, wait for it to end, then print the screen's last N lines
   rex-watch --check BLOCK                   print the state and the screen, never wait
 
-A pane is busy while its foreground process is something other than a shell: a command typed into a shell pane, or
-the command a pane was made to run (`rex run -- npm test`). The foreground, not the pane's program, is what counts,
-because on macOS the program of a login pane is `login`, with the shell under it.
+A pane is busy while its foreground process is not the pane's own shell (compared by pid, since a script run from the
+shell can show as plain `bash`), or while a pane made to run one command (`rex run -- npm test`) has not exited. On
+macOS a pane's program is `login`, with the shell straight under it: that shell is the prompt.
 The wait is a subscription: `rex events -s <the block's session> --json` delivers the block's `process_changed` and
 `child_exited`, so nothing polls. `rex events` gives no sign once it has subscribed, so the pane's state is read once
 more if no event comes in the first seconds: a command that ended in that gap is still seen.
@@ -38,14 +38,25 @@ def label(proc: dict | None) -> str:
 
 
 def is_shell(proc: dict | None) -> bool:
-    """A shell at its prompt: an interpreter running a script (`nu build.nu`) is busy."""
+    """Named like a shell and not reported running a script; busy() decides by pid, this only by name."""
     name = (proc or {}).get("argv0") or (proc or {}).get("name") or ""
     return bool(proc) and not proc.get("script") and name.lstrip("-").rsplit("/", 1)[-1] in SHELLS
 
 
 def busy(state: dict) -> bool:
-    fg = state.get("foreground")
-    return fg is not None and state.get("last_exit") is None and not is_shell(fg)
+    """By pid, not by name: a bash script run from nu shows as plain `bash` with no `script` (Luiz's entropic-switch
+    read idle while it built, 2026-11-18). The pane's own program at the foreground is idle when it is a shell, and
+    busy when the pane was made to run a command (`rex run -- npm test`). Any other foreground process is busy, except
+    the shell straight under a macOS `login` program, which is that pane's prompt."""
+    fg, child = state.get("foreground"), state.get("child") or {}
+    if fg is None or state.get("last_exit") is not None:
+        return False
+    if fg.get("pid") == child.get("pid"):
+        return not is_shell(fg)
+    between = state.get("ancestors") or []  # Rex lists them ending with the pane's program itself
+    straight_under = all(p.get("pid") == child.get("pid") for p in between) and len(between) <= 1
+    under_login = straight_under and (child.get("argv0") or child.get("name") or "").lstrip("-") == "login"
+    return not (under_login and is_shell(fg))
 
 
 def read_state(server: str | None, block: str) -> dict | None:
@@ -53,7 +64,7 @@ def read_state(server: str | None, block: str) -> dict | None:
     return json.loads(r.stdout) if r.returncode == 0 and r.stdout.strip() else None
 
 
-def done_event(line: str, block: str) -> bool:
+def done_event(line: str, block: str, child: dict | None) -> bool:
     try:
         ev = json.loads(line)["payload"]["event"]
     except (ValueError, KeyError, TypeError):
@@ -63,10 +74,11 @@ def done_event(line: str, block: str) -> bool:
     name, body = ev["payload"].get("name"), ev["payload"].get("payload") or {}
     if name == "child_exited":
         return True
-    return name == "process_changed" and not busy({"foreground": body.get("foreground")})
+    return name == "process_changed" and not busy({"foreground": body.get("foreground"),
+                                                   "ancestors": body.get("ancestors"), "child": child})
 
 
-def wait_for_end(stream: subprocess.Popen, server: str | None, block: str) -> int:
+def wait_for_end(stream: subprocess.Popen, server: str | None, block: str, child: dict | None) -> int:
     fd = stream.stdout.fileno()
     sel = selectors.DefaultSelector()
     sel.register(fd, selectors.EVENT_READ)
@@ -87,7 +99,7 @@ def wait_for_end(stream: subprocess.Popen, server: str | None, block: str) -> in
         if not chunk:
             return 3
         *lines, pending = (pending + chunk).split(b"\n")
-        if any(done_event(line.decode(errors="replace"), block) for line in lines):
+        if any(done_event(line.decode(errors="replace"), block, child) for line in lines):
             return 0
 
 
@@ -117,7 +129,7 @@ def main(argv: list[str]) -> int:
         print(f"{a.block} in {session}: {'running ' + label(state.get('foreground')) if running else 'idle'}"
               f" (program {label(state.get('child'))})", flush=True)
         if running and stream:
-            code = wait_for_end(stream, a.server, a.block)
+            code = wait_for_end(stream, a.server, a.block, state.get("child"))
             print(f"{a.block}: " + {0: "ended", 2: "cannot read its processes any more",
                                      3: "the event stream ended before the command did"}[code], flush=True)
     finally:
@@ -129,7 +141,7 @@ def main(argv: list[str]) -> int:
 
 
 def screen(server: str | None, block: str, lines: int) -> str:
-    return "\n".join(rex(server, "capture", "-b", block, "--trim").stdout.splitlines()[-lines:])
+    return "\n".join(rex(server, "capture", "-b", block, "--trim").stdout.splitlines()[-lines:] if lines > 0 else [])
 
 
 if __name__ == "__main__":
