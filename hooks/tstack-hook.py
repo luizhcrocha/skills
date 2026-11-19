@@ -233,6 +233,107 @@ def ask_clear(hook):
     return None
 
 
+SIDE_PANES_MAX = 8  # panes read per prompt; a tab holds a few
+SIDE_PANES_BUDGET_S = 3  # every rex call of one prompt together, well under the 10 s hooks.json gives UserPromptSubmit
+SIDE_PANES_HEAD = """\
+# Panes beside you in this Rex tab (changed since your last turn)
+{lines}
+A pane Luiz opened beside you is part of the work. When your task touches what one runs (a server, a test run, a log), read it first (`rex-watch --check <id>`), wait on its running command (`rex-watch <id>`, run_in_background) rather than start a second copy, and say what you saw there."""
+
+
+class _RexUnread(Exception):
+    """A rex call failed, ran past the prompt's budget, or printed something that is not JSON: say nothing this turn."""
+
+
+def _rex_json(hook, deadline, *args):
+    import subprocess
+    left = deadline - time.monotonic()
+    if left <= 0:
+        raise _RexUnread("budget spent")
+    try:
+        r = subprocess.run(["rex", *args], env=dict(hook.env), capture_output=True, text=True,
+                           stdin=subprocess.DEVNULL, timeout=left)
+        if r.returncode != 0:
+            raise _RexUnread(r.stderr.strip()[:200])
+        out = json.loads(r.stdout)
+    except (subprocess.TimeoutExpired, ValueError) as e:
+        raise _RexUnread(str(e)[:200]) from None
+    if not isinstance(out, dict):
+        raise _RexUnread("not a JSON object")
+    return out
+
+
+def _rex_watch():
+    from importlib.machinery import SourceFileLoader
+    from importlib.util import module_from_spec, spec_from_loader
+    loader = SourceFileLoader("tstack_rex_watch", str(ROOT / "scripts" / "rex-watch"))
+    module = module_from_spec(spec_from_loader("tstack_rex_watch", loader))
+    loader.exec_module(module)
+    return module
+
+
+def side_panes(hook):
+    """UserPromptSubmit: the other panes in this agent's Rex tab, one line each (what runs, where), told only when
+    the set or a pane's state changed since the last prompt (Luiz, 2026-11-18: "agent's should be mindful of panels
+    opened besides them"). Outside Rex, for workers and headless runs: nothing."""
+    me = hook.env.get("REX_BLOCK") or ""
+    if hook.is_worker or hook.headless or not me.startswith("block:"):
+        return None
+    import shutil
+    if not shutil.which("rex", path=hook.env.get("PATH")):
+        return None
+    try:
+        lines = _side_pane_lines(hook, me, time.monotonic() + SIDE_PANES_BUDGET_S)
+    except _RexUnread:
+        return None  # a pane's state unknown: the listing keeps its last value rather than tell a wrong one
+    if lines is None:
+        return None
+    seen = _side_panes_seen(hook)
+    now = "\n".join(lines)
+    before = seen.read_text() if seen.is_file() else ""
+    if now == before:
+        return None
+    seen.parent.mkdir(parents=True, exist_ok=True)
+    seen.write_text(now)
+    return SIDE_PANES_HEAD.format(lines=now or "- none now: the panes beside you closed")
+
+
+def _side_panes_seen(hook):
+    safe = re.sub(r"[^A-Za-z0-9_.-]", "_", hook.session_id) or "unknown"
+    return hook.data_dir / "sessions" / safe / "side-panes"
+
+
+def side_panes_reset(hook):
+    """SessionStart after a compaction or resume: the listing left the context with it, so the next prompt tells it
+    again."""
+    if str(hook.input.get("source") or "") in ("compact", "resume"):
+        _side_panes_seen(hook).unlink(missing_ok=True)
+    return None
+
+
+def _side_pane_lines(hook, me, deadline):
+    window = (_rex_json(hook, deadline, "block", "inspect", me, "--json").get("block") or {}).get("window_id")
+    if not window:
+        return None
+    blocks = [b for b in _rex_json(hook, deadline, "block", "ls", "-w", window, "--json").get("blocks", [])
+              if b.get("block_id") != me]
+    watch = _rex_watch()
+    lines = []
+    for b in blocks[:SIDE_PANES_MAX]:
+        bid, name = b["block_id"], b.get("label") or "pane"
+        if not str(b.get("flavor", "")).startswith("com.superlogical.terminal"):
+            lines.append(f"- {bid} ({name}): {b.get('flavor') or 'not a terminal'}")
+            continue
+        state = _rex_json(hook, deadline, "block", "call", "-b", bid, "process")
+        fg = state.get("foreground")
+        where = (fg or {}).get("cwd") or ""
+        doing = f"running {watch.label(fg)}" if watch.busy(state) else "idle" if fg else "exited"
+        lines.append(f"- {bid} ({name}): {doing}" + (f" in {where}" if where else ""))
+    if len(blocks) > SIDE_PANES_MAX:
+        lines.append(f"- and {len(blocks) - SIDE_PANES_MAX} more: rex block ls -w {window}")
+    return lines
+
+
 JJ_HINTS = """\
 # jj
 This repo is jj, colocated with git; a detached git HEAD is normal here, leave it as it is.
@@ -1499,9 +1600,9 @@ def _rm_shown(path, home):
 
 
 HANDLERS = {
-    "SessionStart": [memo_start, jj_hints, tuca_mode, tape_build],
+    "SessionStart": [memo_start, jj_hints, tuca_mode, tape_build, side_panes_reset],
     "Stop": [ask_flag],
-    "UserPromptSubmit": [ask_clear, suspend_hint],
+    "UserPromptSubmit": [ask_clear, suspend_hint, side_panes],
     "PreToolUse": [push_attribution, rm_guard],
 }
 

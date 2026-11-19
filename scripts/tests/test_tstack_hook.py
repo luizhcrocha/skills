@@ -595,6 +595,98 @@ class SuspendHintTest(HookCase):
             self.assertSilent(self.prompt(text))
 
 
+FAKE_REX = r"""#!/usr/bin/env python3
+import json, os, sys, time
+spec = json.load(open(os.environ["FAKE_REX_SPEC"]))
+opts, panes = spec.get("_", {}), {k: v for k, v in spec.items() if k != "_"}
+a = sys.argv[1:]
+verb = a[1] if len(a) > 1 else ""
+if opts.get("hang") == verb:
+    time.sleep(8)
+if opts.get("fail") == verb:
+    sys.exit(1)
+if opts.get("garbage") == verb:
+    print("not json"); sys.exit(0)
+if a[:2] == ["block", "inspect"]:
+    print(json.dumps({"session_id": "session:s", "block": {"block_id": a[2], "window_id": "window:w"}}))
+elif a[:2] == ["block", "ls"]:
+    flavors = opts.get("flavors", {})
+    print(json.dumps({"blocks": [{"block_id": b, "label": "shell",
+                                  "flavor": flavors.get(b, "com.superlogical.terminal.shell")}
+                                 for b in ["block:me", *panes]]}))
+elif a[:2] == ["block", "call"]:
+    print(json.dumps(panes[a[3]]))
+"""
+
+
+class SidePanesTest(HookCase):
+    NU = {"pid": 10, "user_id": 1000, "name": "nu", "argv0": "nu", "cwd": "/repo"}
+    DEV = {"pid": 11, "user_id": 1000, "name": "node", "argv0": "npm", "cwd": "/repo"}
+
+    def setUp(self):
+        super().setUp()
+        bin_dir = self.tmp / "fakebin"
+        bin_dir.mkdir()
+        (bin_dir / "rex").write_text(FAKE_REX)
+        (bin_dir / "rex").chmod(0o755)
+        self.spec = self.tmp / "rex-spec.json"
+        self.rex_env = {"PATH": f"{bin_dir}:{self.env['PATH']}", "REX_BLOCK": "block:me", "FAKE_REX_SPEC": str(self.spec)}
+
+    def prompt(self, panes, **extra):
+        self.spec.write_text(json.dumps(panes))
+        r = self.hook("UserPromptSubmit", self.base("UserPromptSubmit", prompt="go on", **extra), env=self.rex_env)
+        return json.loads(r.stdout)["hookSpecificOutput"]["additionalContext"] if r.stdout.strip() else None
+
+    def test_a_pane_beside_the_agent_is_named_once_then_again_when_it_changes(self):
+        idle = {"block:dev": {"foreground": self.NU, "child": self.NU, "last_exit": None}}
+        first = self.prompt(idle)
+        self.assertIn("block:dev (shell): idle in /repo", first)
+        self.assertIn("rex-watch --check", first)
+        self.assertIsNone(self.prompt(idle))
+        running = {"block:dev": {"foreground": self.DEV, "child": self.NU, "last_exit": None}}
+        self.assertIn("block:dev (shell): running npm in /repo", self.prompt(running))
+        self.assertIn("none now", self.prompt({}))
+        self.assertIsNone(self.prompt({}))
+
+    def test_a_rex_that_fails_hangs_or_prints_garbage_says_nothing_and_keeps_the_last_listing(self):
+        idle = {"block:dev": {"foreground": self.NU, "child": self.NU, "last_exit": None}}
+        self.assertIsNotNone(self.prompt(idle))
+        for broken in ({"fail": "ls"}, {"fail": "call"}, {"garbage": "inspect"}, {"garbage": "call"}):
+            self.assertIsNone(self.prompt({**idle, "_": broken}), broken)
+        started = time.monotonic()
+        self.assertIsNone(self.prompt({**idle, "_": {"hang": "call"}}))
+        self.assertLess(time.monotonic() - started, 7)
+        self.assertIsNone(self.prompt(idle))  # the last listing still stands: nothing changed
+
+    def test_a_pane_that_is_not_a_terminal_is_named_without_a_process_call(self):
+        out = self.prompt({"block:web": {}, "_": {"flavors": {"block:web": "com.superlogical.browser"}}})
+        self.assertIn("block:web (shell): com.superlogical.browser", out)
+
+    def test_past_eight_panes_the_rest_are_counted(self):
+        idle = {"foreground": self.NU, "child": self.NU, "last_exit": None}
+        out = self.prompt({f"block:p{i}": idle for i in range(10)})
+        self.assertEqual(out.count(": idle in /repo"), 8)
+        self.assertIn("and 2 more: rex block ls -w window:w", out)
+
+    def test_a_compaction_tells_the_listing_again(self):
+        idle = {"block:dev": {"foreground": self.NU, "child": self.NU, "last_exit": None}}
+        self.assertIsNotNone(self.prompt(idle))
+        self.assertIsNone(self.prompt(idle))
+        self.hook("SessionStart", self.base("SessionStart", source="compact"))
+        self.assertIn("block:dev", self.prompt(idle))
+
+    def test_the_agent_own_pane_is_left_out(self):
+        self.assertIsNone(self.prompt({}))
+
+    def test_workers_and_sessions_outside_rex_get_nothing(self):
+        panes = {"block:dev": {"foreground": self.NU, "child": self.NU, "last_exit": None}}
+        self.assertIsNone(self.prompt(panes, agent_id="w1"))
+        self.spec.write_text(json.dumps(panes))
+        r = self.hook("UserPromptSubmit", self.base("UserPromptSubmit", prompt="go on"),
+                      env={**self.rex_env, "REX_BLOCK": ""})
+        self.assertSilent(r)
+
+
 class NeverBreakTest(HookCase):
     """Whatever the input or the state of the machine: exit 0, nothing on stdout."""
 
