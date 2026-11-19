@@ -23,13 +23,14 @@ For each, note its owner, the action that clears it, and since when it waits. Ch
 
 ## 2. Put each blocker in front of its owner
 
+- **Clear it yourself first.** A blocker is work, not a report: diagnose it to its cause, and when the fix is in reach, do it in this turn (a rerun you can start, a service you run, your own code, a stale lock or socket you can check and restart, a question the repo or the logs answer). In another agent's lane, deliver the diagnosis and the fix with the ask, so the owner acts without digging. `sudo` and destructive steps go to Luiz, as a command he can copy. Ask the owner only for what needs them.
 - **Another agent.** `fleet msg ask <agent> "<action>: <what it unblocks, for whom>" --key unblock-<blocker>`, specific enough to do without asking back; the key reuses an open thread. Then work on what does not depend on it, or end the turn: the answer arrives in your mailbox and its delivery wakes you. A subagent this session spawned gets SendMessage; every other session goes through `fleet msg`. A suspended owner (`fleet suspended`) stays suspended: its resume is Luiz's call.
 - **Still open the next time you wake.** Check the source again. Cleared: go on, and `fleet msg cancel <thread>`. Still blocked: ask again once with the same `--key` (it joins the thread and wakes the owner), naming how long it has waited. Still open after that: it is Luiz's, the blocker, its owner, since when and both asks, as the reply's last line.
 - **This session.** Deliver it now, then answer the asker: `fleet msg answer <thread> "<done, where>" --final`. When it cannot be delivered yet, answer with what it waits on.
 - **Luiz.** Name the call, your pick and its reason.
 
-Done when every blocker has an ask, an answer or a line for Luiz.
+Done when every blocker is cleared, or has an ask carrying its diagnosis, an answer, or a line for Luiz.
 
 ## 3. Report
 
-One line per blocker: what waits, on whom, since when, and what you did (asked, with the thread id; delivered; put to Luiz). "No blockers" when there are none.
+One line per blocker: what waits, on whom, since when, and what you did (cleared, and how; asked, with the thread id; delivered; put to Luiz). "No blockers" when there are none.

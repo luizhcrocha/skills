@@ -23,7 +23,9 @@ Read only. Done when each source has a note, "nothing" included:
 
 Run the `unblock` skill's steps in full, in this turn, and keep its lines for the report. The sweep is the record; this step is **live**: every blocker is checked at its source now (the run, the job, the service, the commit on origin), never reported from the ledger, a plan or an owner's last message. A heads-up that says ⛔ Blocked with a blocker it did not check live is premature: Luiz would have to run `/unblock` after it (2026-11-19: a heads-up said "orch reruns n5 and n6"; the rerun n12 already existed, was dead in Nomad, and the adapter stalled on a missing pool socket).
 
-Done when each blocker's line names what was checked live and what it showed.
+Act on each blocker as unblock says: clear what this session can in this turn, and send the rest to its owner with the diagnosis. The report comes after; a blocker the session could have cleared is not reported as ⛔ Blocked.
+
+Done when each blocker's line names what was checked live, what it showed, and what was done about it.
 
 ## 3. Report
 
