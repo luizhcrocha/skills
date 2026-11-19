@@ -13,7 +13,7 @@ For each, note its owner, the action that clears it, and since when it waits. Ch
 
 **This session waits on:**
 - Lanes its plan, its `holds.md`, ledger or dossier waits on that have not landed.
-- Its open asks: `fleet msg ls --from <me>`, and each SendMessage ask without an answer.
+- Its open asks: `fleet msg ls --from <me>`, and each ask to its own subagents without an answer.
 - Its steps stalled outside it: a gate another run holds, a refused push, a pending approval, a deploy someone else runs.
 - Luiz: its fleet's rows in `fleet waiting`. A row marked ANSWERED has his answer: act on it.
 
@@ -23,7 +23,7 @@ For each, note its owner, the action that clears it, and since when it waits. Ch
 
 ## 2. Put each blocker in front of its owner
 
-- **Another agent.** `fleet msg ask <agent> "<action>: <what it unblocks, for whom>" --key unblock-<blocker>`, specific enough to do without asking back; the key reuses an open thread. Then work on what does not depend on it, or end the turn: the answer arrives in your mailbox and its delivery wakes you. An agent of this session's own team gets SendMessage. A suspended owner (`fleet suspended`) stays suspended: its resume is Luiz's call.
+- **Another agent.** `fleet msg ask <agent> "<action>: <what it unblocks, for whom>" --key unblock-<blocker>`, specific enough to do without asking back; the key reuses an open thread. Then work on what does not depend on it, or end the turn: the answer arrives in your mailbox and its delivery wakes you. A subagent this session spawned gets SendMessage; every other session goes through `fleet msg`. A suspended owner (`fleet suspended`) stays suspended: its resume is Luiz's call.
 - **Still open the next time you wake.** Check the source again. Cleared: go on, and `fleet msg cancel <thread>`. Still blocked: ask again once with the same `--key` (it joins the thread and wakes the owner), naming how long it has waited. Still open after that: it is Luiz's, the blocker, its owner, since when and both asks, as the reply's last line.
 - **This session.** Deliver it now, then answer the asker: `fleet msg answer <thread> "<done, where>" --final`. When it cannot be delivered yet, answer with what it waits on.
 - **Luiz.** Name the call, your pick and its reason.

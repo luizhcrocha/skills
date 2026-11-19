@@ -23,7 +23,7 @@ With `fleet council` (`fleet council --help` succeeds) the CLI owns the state un
 - each `Q-<n>`: its owners and answers;
 - a **Status** table, rewritten on every report: slug, dossier path, approved versions, docs (change or commit), waits on, launched. Read it before any message that states another design's phase.
 
-Find designers with `rex window ls -s designers`, read the cards in the dossiers they name, and send every message with SendMessage. A `party` is a slug with a card and no designer: a running system, or a design already handed.
+Find designers with `rex window ls -s designers`, read the cards in the dossiers they name, and send every message with `fleet msg ask <designer> "..."` (`note` for an FYI; with no fleet, SendMessage). A `party` is a slug with a card and no designer: a running system, or a design already handed.
 
 ## Steps
 
