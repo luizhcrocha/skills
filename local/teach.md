@@ -4,4 +4,3 @@ disable-model-invocation: ~
 ---
 
 - Orient from the diff: `jj show <change>`, `gh pr diff <n>`. When one reason is enough, read the change description, the PR body or `tstack:recall` instead of running `why`'s full sweep.
-- A spatial picture, or a series of diagrams too long for the chat, goes to `tstack:show-me` as a page.
