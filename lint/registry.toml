@@ -1011,7 +1011,7 @@ id = "ts/landmines/no-flake-masking"
 lang = "ts"
 engine = "oxlint"
 kind = "custom"
-status = "trial"
+status = "warn"
 summary = "retried tests and raised test timeouts, which hide a flake instead of fixing it"
 where = "lint/ts/landmines/rules/no-flake-masking.ts"
 created = "2026-11-17"
@@ -1023,6 +1023,7 @@ evidence = [
 history = [
   { date = "2026-11-17", status = "proposed", note = "vendored from landmines@92084b1 (Luiz, 2026-11-17)" },
   { date = "2026-11-17", status = "trial", note = "trial across Luiz's TypeScript repos" },
+  { date = "2026-11-20", status = "warn", note = "trial 2026-11-20: per-test hits true; 9 config-level slow-by-nature timeouts overridden on the line" },
 ]
 runs = [
   { repo = "~/repos/coelhorocha/cancel-maintenance", date = "2026-11-20", hits = 1, false_positives = 0, note = "raised per-test or per-suite timeout; widening to config timeouts adds none" },
