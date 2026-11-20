@@ -1,6 +1,6 @@
 ---
 name: fork-tab
-description: "Fork an idea the session drifted onto to a fresh tuca-mode agent in its own Rex tab and jj workspace, then resume. Use for /fork-tab or off-task drift."
+description: "Fork an idea the session drifted onto to a fresh tuca-mode agent in its own Rex tab and jj workspace, or work that needs a design first to a designer, then resume. Use for /fork-tab, off-task drift, or \"spin this off\"."
 argument-hint: "[the new idea, in a few words]"
 ---
 
@@ -8,9 +8,9 @@ argument-hint: "[the new idea, in a few words]"
 
 A session works on A. A new idea, B, comes up, and the session starts on B and leaves A behind. fork-tab gives B to a fresh agent in a tab beside this one, and this session goes back to A.
 
-Use spin-off instead when B needs its own design and team. fork-tab is for a thread one agent can carry: no proposal, no designer, no gates.
-
 Luiz invoking the skill is the yes. Do not ask whether to fork.
+
+**Needs a design.** When B is outside your task and needs a design Luiz approves before anyone builds it (several pieces, a choice only he holds), offer it in one line of your reply; "spin this off" is the yes. The handoff then carries the problem, not a solution: `goal` is the outcome for whoever is affected, never a decision to make; `evidence` is measured (what failed, where and when, logs and `file:line`, what was tried); `so-far` quotes Luiz's words. The tab runs `/tstack:designer <handoff file>` in place of tuca-mode, on the Designer row of [models.md](../../../docs/models.md). Work this session will do itself is `tstack:figure-it-out`'s.
 
 ## 1. Name B
 
@@ -51,6 +51,7 @@ Write `$TMPDIR/fork-tab-<slug>.md` (`/tmp` when `$TMPDIR` is unset). Keep it out
 - `mixed`: files left in A's change that B also needs, or `none`.
 - `not-yours`: A, in one sentence, so the new agent leaves it alone.
 - `skills`: the skills the new agent should load, such as `tstack:tdd` or `tstack:lang-ts`.
+- `next`, optional, when B is one piece of several: "after you land, open the next piece with fork-tab from <its handoff file>". A piece that waits on two is named in both their handoffs with "only once <the other> has landed", so the second to land opens it.
 
 Point at files. Do not paste anything a path can carry. Remove secrets.
 
@@ -69,7 +70,7 @@ new=$(rex window new -s "$REX_SESSION" <slug> -c "$ws" --focus=false --json \
 rex window move -s "$REX_SESSION" "$new" --after "$me"
 ```
 
-Opus high is the Implementer row of [models.md](../../../docs/models.md). If Luiz names a model, use his.
+Opus high is the Implementer row of [models.md](../../../docs/models.md); a design takes the Designer row and opens with `/tstack:designer <handoff file>`. If Luiz names a model, use his.
 
 Outside Rex, give Luiz the launch in nushell instead: `cd <the path ws-add printed>; claude --name <slug> --model opus --effort high "/tstack:tuca-mode Continue the work in <handoff file>. Run jj workspace update-stale first, then load the skills it lists."`
 
