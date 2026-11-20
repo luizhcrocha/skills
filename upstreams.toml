@@ -57,35 +57,35 @@ ignore = [
 # Undecided, new at d81f3a1 (v1.3) and so no longer flagged as new: GLOSSARY.md
 # (upstream's own repo glossary), skills/engineering/implement-spec, pr, retro.
 map = [
-  # code-review was renamed review (2026-09-30): Claude Code's built-in /code-review
-  # takes the name. Upstream edits still 3-way merge into the renamed dir.
-  { from = "skills/engineering/code-review", to = "skills/engineering/review" },
-  { from = "skills/engineering/codebase-design", to = "skills/engineering/codebase-design" },
-  { from = "skills/engineering/diagnosing-bugs", to = "skills/engineering/diagnosing-bugs" },
-  # We keep CONTEXT.md / CONTEXT-MAP.md; upstream renamed the convention to
-  # GLOSSARY.md (v1.3). Its GLOSSARY-FORMAT.md is our CONTEXT-FORMAT.md; the
-  # rename itself is declined in every synced file (decided, 2026-09-30).
-  { from = "skills/engineering/domain-modeling/GLOSSARY-FORMAT.md", to = "skills/engineering/domain-modeling/CONTEXT-FORMAT.md" },
-  { from = "skills/engineering/domain-modeling", to = "skills/engineering/domain-modeling" },
-  { from = "skills/engineering/grill-with-docs", to = "skills/engineering/grill-with-docs" },
-  { from = "skills/engineering/implement", to = "skills/engineering/implement" },
-  { from = "skills/engineering/improve-codebase-architecture", to = "skills/engineering/improve-codebase-architecture" },
-  { from = "skills/engineering/prototype", to = "skills/engineering/prototype" },
-  { from = "skills/engineering/research", to = "skills/engineering/research" },
-  # tdd was merged with pstack's tdd and the testing ladder (2026-09-30): only
-  # the files we kept map; mocking.md became substitutes.md and stays out.
-  { from = "skills/engineering/tdd/SKILL.md", to = "skills/engineering/tdd/SKILL.md" },
-  { from = "skills/engineering/tdd/tests.md", to = "skills/engineering/tdd/tests.md" },
-  { from = "skills/engineering/to-spec", to = "skills/engineering/to-spec" },
-  { from = "skills/engineering/triage", to = "skills/engineering/triage" },
-  { from = "skills/engineering/wizard", to = "skills/engineering/wizard" },
-  { from = "skills/productivity/grill-me", to = "skills/productivity/grill-me" },
-  { from = "skills/productivity/grilling", to = "skills/productivity/grilling" },
-  { from = "skills/productivity/handoff", to = "skills/productivity/handoff" },
-  { from = "skills/productivity/teach", to = "skills/productivity/teach" },
-  # wait-what became bro (2026-09-30): pstack's bro merged into its text.
-  { from = "skills/productivity/wait-what", to = "skills/productivity/bro" },
-  { from = "skills/productivity/writing-for-agents", to = "skills/productivity/writing-for-agents" },
+  # Overlay (Luiz, 2026-11-20): the skill is upstream's text verbatim, plus
+  # local/<skill>.md (frontmatter overrides, a few lines of our changes) and the
+  # local/NAMES.md renames on its last line. Mirror: ours, reworked later; the
+  # upstream text sits in upstream/mattpocock/ for reference.
+  # code-review is ours as review (Claude Code's built-in /code-review takes the name).
+  { from = "skills/engineering/code-review", to = "skills/engineering/review", mode = "mirror" },
+  { from = "skills/engineering/codebase-design", to = "skills/engineering/codebase-design", mode = "mirror" },
+  { from = "skills/engineering/diagnosing-bugs", to = "skills/engineering/diagnosing-bugs", mode = "mirror" },
+  # We keep CONTEXT.md / CONTEXT-MAP.md (decided, 2026-09-30): the GLOSSARY.md
+  # and GLOSSARY-MAP.md rows of local/NAMES.md carry it; GLOSSARY-FORMAT.md
+  # keeps upstream's file name so its links resolve.
+  { from = "skills/engineering/domain-modeling", to = "skills/engineering/domain-modeling", mode = "overlay" },
+  { from = "skills/engineering/grill-with-docs", to = "skills/engineering/grill-with-docs", mode = "overlay" },
+  { from = "skills/engineering/implement", to = "skills/engineering/implement", mode = "overlay" },
+  { from = "skills/engineering/improve-codebase-architecture", to = "skills/engineering/improve-codebase-architecture", mode = "overlay" },
+  { from = "skills/engineering/prototype", to = "skills/engineering/prototype", mode = "overlay" },
+  { from = "skills/engineering/research", to = "skills/engineering/research", mode = "overlay" },
+  # tdd is ours, merged with pstack's tdd and the testing ladder (2026-09-30).
+  { from = "skills/engineering/tdd", to = "skills/engineering/tdd", mode = "mirror" },
+  { from = "skills/engineering/to-spec", to = "skills/engineering/to-spec", mode = "overlay" },
+  { from = "skills/engineering/triage", to = "skills/engineering/triage", mode = "overlay" },
+  { from = "skills/engineering/wizard", to = "skills/engineering/wizard", mode = "overlay" },
+  { from = "skills/productivity/grill-me", to = "skills/productivity/grill-me", mode = "overlay" },
+  { from = "skills/productivity/grilling", to = "skills/productivity/grilling", mode = "overlay" },
+  { from = "skills/productivity/handoff", to = "skills/productivity/handoff", mode = "overlay" },
+  { from = "skills/productivity/teach", to = "skills/productivity/teach", mode = "overlay" },
+  # wait-what is ours as bro (2026-09-30): pstack's bro merged into its text.
+  { from = "skills/productivity/wait-what", to = "skills/productivity/bro", mode = "mirror" },
+  { from = "skills/productivity/writing-for-agents", to = "skills/productivity/writing-for-agents", mode = "overlay" },
 ]
 
 # poteto's pstack (MIT). Each overlap is decided with Luiz (docs/tstack-plan.md,

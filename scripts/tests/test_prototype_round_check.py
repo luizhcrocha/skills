@@ -26,7 +26,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent.parent
-SCRIPT = ROOT / "skills" / "engineering" / "prototype" / "scripts" / "round-check.mjs"
+SCRIPT = ROOT / "local" / "scripts" / "round-check.mjs"
 NODE = shutil.which("node")
 CHROMIUM = next((p for p in map(shutil.which, ("chromium", "chromium-browser", "google-chrome")) if p), None)
 QUERY = "/processos?l=123&x=a=b"

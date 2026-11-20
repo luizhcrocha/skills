@@ -8,6 +8,8 @@ The upstream sync (`scripts/sync_upstream.py`, overlay mode) adds to a synced sk
 |---|---|
 | code-review | tstack:review |
 | GLOSSARY.md | CONTEXT.md |
+| GLOSSARY-MAP.md | CONTEXT-MAP.md |
+| setup-matt-pocock-skills | tstack:setup-luizrocha-skills |
 | zoom-out | tstack:how |
 
 ## pstack

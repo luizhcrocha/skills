@@ -1,0 +1,3 @@
+- The explorer sub-agent plays the Researcher role ([models.md](../docs/models.md)).
+- One more friction signal: files in different modules that change in the same commits (co-change across a seam is leakage you can count).
+- Name each friction by codebase-design's red flags ([RED-FLAGS.md](../skills/engineering/codebase-design/RED-FLAGS.md)) where one fits; design-it-twice runs as a `tstack:arena`.

@@ -1,0 +1,2 @@
+- At the end, run only the tests the change touches: `just test-changed` in tstack, elsewhere the scoped command AGENTS.md or CLAUDE.md names (else the narrowest one: a file filter, a package). Say what you ran. The full gate runs once, in the session that lands.
+- Record the work as jj changes, not commits: `jj describe -m "<message>"` per finished unit, then `jj new`, so `@` ends empty; `@` holding several intents goes to `/tstack:worktree-janitor`. Pushing belongs to the Land playbook (`/tuca-mode`) or the user. In a plain git repo, commit.
