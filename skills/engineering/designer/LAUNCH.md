@@ -7,7 +7,7 @@ Record each step in the dossier ([DOSSIER.md](DOSSIER.md)).
 `docs/design/<slug>/plan.md` lists the lanes in dependency order. Landing order is the manager's, so the plan gives none. Per lane:
 
 - **id** and **goal**, one sentence.
-- **files owned**: paths or globs. No two lanes own one file (the partition rule in `tstack:orchestrate`).
+- **files owned**: paths or globs. No two lanes own one file.
 - **depends-on**: lane ids, or none.
 - **suggested role**: from [models.md](../../../docs/models.md), advisory, since the coordinator decides.
 - **done criterion**: a check someone can run or read. A lane that builds a running piece owns its signals and alerts from the design's Observability section, and its criterion includes seeing them work.
@@ -51,4 +51,4 @@ Done when every check passes.
 
 ## No fleet
 
-On a machine without `fleet` (decision D, 2026-11-14), the plan runs in one new tuca-mode tab under `tstack:orchestrate`, in a new Rex session `<slug>`. `team.md` names that tab in place of coordinators: its label, its repo, and the Coordinator row of models.md; Approval B approves it. Then run Launch steps 1 and 2, and open the tab as [spin-off](../spin-off/SKILL.md) step 4 opens one: label `<label>`, Rex session `<slug>`, folder `<repo>`, the Coordinator row, opening `/tstack:tuca-mode /tstack:orchestrate docs/design/<slug>/plan.md`. Record it as the one **Launch** row, set the phase to `handed`, land the dossier, and stop.
+On a machine without `fleet` (decision D, 2026-11-14), the plan runs in one new tuca-mode tab under `tstack:swarm`, in a new Rex session `<slug>`. `team.md` names that tab in place of coordinators: its label, its repo, and the Coordinator row of models.md; Approval B approves it. Then run Launch steps 1 and 2, and open the tab as [spin-off](../spin-off/SKILL.md) step 4 opens one: label `<label>`, Rex session `<slug>`, folder `<repo>`, the Coordinator row, opening `/tstack:tuca-mode /tstack:swarm docs/design/<slug>/plan.md`. Record it as the one **Launch** row, set the phase to `handed`, land the dossier, and stop.

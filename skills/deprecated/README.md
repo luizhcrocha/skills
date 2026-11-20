@@ -6,3 +6,4 @@ Skills no longer used. They are in neither the top-level README nor `.claude-plu
 - **[codebase-design](./codebase-design/SKILL.md)** — Deep-module design vocabulary (module, interface, seam, depth), with references for call sites, primitives, data shapes and the core. Dropped with its references (Luiz, 2026-11-20), to be rethought with tests and reviews.
 - **[show-me](./show-me/SKILL.md)** — Explain the current topic visually with diagrams, code-shape sketches and focused HTML artifacts. Dropped (Luiz, 2026-11-20: it didn't work well).
 - **[writing-for-agents](./writing-for-agents/SKILL.md)** — mattpocock's guide to writing skills and AGENTS.md/CLAUDE.md for agents. Dropped (Luiz, 2026-11-20: it didn't work well); tuca-mode's Authoring a skill playbook covers the workflow.
+- **[orchestrate](./orchestrate/SKILL.md)** — Fan pending tasks out across agents, partitioned by file ownership. Dropped (Luiz, 2026-11-20) for pstack's `swarm` and `arena`.
