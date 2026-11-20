@@ -2156,7 +2156,7 @@ def cmd_note(m, a, out):
     parts = list(a.text)
     if len(parts) == 2 and parts[0] == "open":
         raise Refusal("usage", "memo: work in progress is not a note; it goes to its owner: the dossier, the fleet "
-                               "ledger or an issue (docs/adr/0004). A note is knowledge, true a month from now.")
+                               "ledger or an issue. A note is knowledge, true a month from now.")
     if len(parts) == 2 and parts[0] in OLD_KINDS:
         raise Refusal("usage", f"memo: notes have no kinds now; write: memo note \"{parts[1]}\" "
                                "[--scope user|machine|group:<name>]")

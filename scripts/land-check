@@ -33,7 +33,7 @@ workspace. Exit 0 when the verdict is "push", 1 for "ask" or "stop", 2 on error.
                        push, or a revision jj would refuse to push
     gate_needed        false when every file is a Markdown file, LICENSE or
                        CODEOWNERS at the root, a .md or .txt file in the
-                       top-level docs/, doc/, adr/ or adrs/: the stack
+                       top-level docs/ or doc/: the stack
                        fast-forwards without a gate run. A README or docs
                        folder among code, .mdx, .rst, a requirements.txt,
                        tests and tooling keep it true
@@ -492,13 +492,13 @@ def kind(path):
 
 GATE_FREE = re.compile(
     r"[^/]+\.md|LICENSE(\.(md|txt))?|CODEOWNERS"  # the root's docs
-    r"|(docs?|adrs?)/(.+/)?[^/]+\.(md|txt)")  # the top-level docs and ADR folders
+    r"|docs?/(.+/)?[^/]+\.(md|txt)")  # the top-level docs folder
 GATED_TEXT = re.compile(r"(^|/)((requirements|constraints)[^/]*\.txt|CMakeLists\.txt)$")  # build inputs
 
 
 def gate_free(path):
     """Whether no gate run reads path: a Markdown file, LICENSE or CODEOWNERS at the root, a .md or .txt file in the
-    top-level docs/, doc/, adr/ or adrs/ folder. A README or docs folder among code
+    top-level docs/ or doc/ folder. A README or docs folder among code
     may be what a gate validates or compiles (a skill's README, a crate's through include_str!), .mdx and .rst
     compile, and a requirements.txt or CMakeLists.txt is a build's input."""
     return bool(GATE_FREE.fullmatch(path)) and not GATED_TEXT.search(path)

@@ -657,13 +657,13 @@ class GateNeededTest(RepoCase):
         return self.check()["gate_needed"]
 
     def test_docs_need_no_gate(self):
-        self.assertIs(self.needed({"README.md": "r\n", "CONTEXT.md": "c\n", "docs/adr/0003-x.md": "a\n",
-                                   "docs/guide.md": "g\n", "adr/0001-y.md": "a\n"}), False)
+        self.assertIs(self.needed({"README.md": "r\n", "CONTEXT.md": "c\n", "docs/notes/0003-x.md": "a\n",
+                                   "docs/guide.md": "g\n"}), False)
 
     def test_what_a_gate_may_read_or_compile_is_not_gate_free(self):
-        free = ["README.md", "CONTEXT.md", "LICENSE", "docs/guide.md", "docs/notes.txt", "docs/adr/0003-x.md",
-                "doc/intro.md", "adr/0001-y.md", "adrs/0002-z.txt"]
-        gated = ["skills/x/README.md", "skills/x/docs/a.md", "skills/x/adr/0001.md", "fleet/README.md",
+        free = ["README.md", "CONTEXT.md", "LICENSE", "docs/guide.md", "docs/notes.txt", "docs/notes/0003-x.md",
+                "doc/intro.md"]
+        gated = ["adr/0001-y.md", "skills/x/README.md", "skills/x/docs/a.md", "skills/x/adr/0001.md", "fleet/README.md",
                  "fleet/CONTEXT.md", "crates/core/README.md", "docs/page.mdx", "index.mdx", "docs/requirements.txt",
                  "docs/constraints.txt", "docs/conf.rst", ".tstack/hooks/pre.sh", ".tstack/reviews/abcd.tsv",
                  ".tstack/reviews/sub/abcd.tsv", ".tstack/config.toml", ".tstack/memo/notes/01M6.md",
