@@ -34,6 +34,7 @@ The upstream sync (`scripts/sync_upstream.py`, overlay mode) adds to a synced sk
 | prove-it-works | tstack:principles |
 | separate-before-serializing-shared-state | tstack:principles |
 | sequence-verifiable-units | tstack:principles |
+| .cursor/skills | .claude/skills |
 
 ## emilkowalski
 

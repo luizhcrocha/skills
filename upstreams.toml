@@ -73,7 +73,7 @@ map = [
   { from = "skills/engineering/code-review", to = "skills/deprecated/review", mode = "mirror" },
   # codebase-design: dropped (Luiz, 2026-11-20); our old copy sits in skills/deprecated/codebase-design.
   { from = "skills/engineering/codebase-design", to = "skills/deprecated/codebase-design", mode = "mirror" },
-  { from = "skills/engineering/diagnosing-bugs", to = "skills/engineering/diagnosing-bugs", mode = "mirror" },
+  { from = "skills/engineering/diagnosing-bugs", to = "skills/engineering/diagnosing-bugs", mode = "overlay" },
   # We keep CONTEXT.md / CONTEXT-MAP.md (decided, 2026-09-30): the GLOSSARY.md
   # and GLOSSARY-MAP.md rows of local/NAMES.md carry it; GLOSSARY-FORMAT.md
   # keeps upstream's file name so its links resolve.
@@ -124,11 +124,12 @@ ignore = [
 # skill is ours as it stands (merged or reworked by hand, reworked again later);
 # upstream's copy is only mirrored to upstream/pstack/.
 map = [
-  # Mirror: principles, blast-radius, the two verification skills.
+  # Mirror: principles.
   { from = "skills/principle-*/SKILL.md", to = "skills/engineering/principles/{1}.md", mode = "mirror" },
-  { from = "skills/blast-radius", to = "skills/engineering/blast-radius", mode = "mirror" },
-  { from = "skills/create-verification-skill", to = "skills/engineering/create-verification-skill", mode = "mirror" },
-  { from = "skills/maintain-verification-skill", to = "skills/engineering/maintain-verification-skill", mode = "mirror" },
+  # Overlay (Luiz, 2026-11-20): blast-radius and the two verification skills.
+  { from = "skills/blast-radius", to = "skills/engineering/blast-radius", mode = "overlay" },
+  { from = "skills/create-verification-skill", to = "skills/engineering/create-verification-skill", mode = "overlay" },
+  { from = "skills/maintain-verification-skill", to = "skills/engineering/maintain-verification-skill", mode = "overlay" },
   # tdd: pstack's, nothing of ours kept (Luiz, 2026-11-20).
   { from = "skills/tdd", to = "skills/engineering/tdd", mode = "overlay" },
   # codebase-design/RED-FLAGS.md came from architect's references/design-red-flags.md,

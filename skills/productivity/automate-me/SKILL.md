@@ -103,4 +103,4 @@ Run a description-optimization loop only if the skill's trigger accuracy turns o
 - User wants a task-specific skill (not working conventions): `create-skill` alone, no mining required.
 - User wants to capture one narrow workflow (e.g. "how I write commit messages"). That's a regular skill, not a mode skill.
 
-Local changes (tstack): [local/automate-me.md](../../../local/automate-me.md) · Names here: poteto-mode → tstack:tuca-mode, AskQuestion → AskUserQuestion, create-skill → none: tstack dropped writing-for-agents (Luiz, 2026-11-20)
+Local changes (tstack): [local/automate-me.md](../../../local/automate-me.md) · Names here: poteto-mode → tstack:tuca-mode, AskQuestion → AskUserQuestion, create-skill → none: tstack dropped writing-for-agents (Luiz, 2026-11-20), .cursor/skills → .claude/skills

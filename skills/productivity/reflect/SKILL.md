@@ -16,4 +16,4 @@ Present Accepted (problem, proposal, skill), Rejected (reason) and Backlog, and 
 
 Never edit a skill under `plugins/cache/`. Before approval, show its destination, `.cursor/skills/<skill>/` or `~/.cursor/skills/<skill>/`. After approval, copy the skill folder there and edit the copy. Never open a PR or push.
 
-Local changes (tstack): [local/reflect.md](../../../local/reflect.md)
+Local changes (tstack): [local/reflect.md](../../../local/reflect.md) · Names here: .cursor/skills → .claude/skills

@@ -7,7 +7,7 @@ description: Diagnosis loop for hard bugs and performance regressions. Use when 
 
 A discipline for hard bugs. Skip phases only when explicitly justified.
 
-When exploring the codebase, read `CONTEXT.md` (if it exists) to get a clear mental model of the relevant modules, and check past decisions in the area you're touching (`memo recall`, `jj log`).
+When exploring the codebase, read `GLOSSARY.md` (if it exists) to get a clear mental model of the relevant modules, and check ADRs in the area you're touching.
 
 ## Redact
 
@@ -48,7 +48,7 @@ A 30-second flaky loop is barely better than no loop; a 2-second deterministic o
 
 ### Non-deterministic bugs
 
-The goal is not a clean repro but a **higher reproduction rate**. Loop the trigger 100× in one script that prints the tally, not 100 tool calls; parallelise, add stress, narrow timing windows, inject sleeps. A 50%-flake bug is debuggable; 1% is not, so keep raising the rate until it's debuggable.
+The goal is not a clean repro but a **higher reproduction rate**. Loop the trigger 100×, parallelise, add stress, narrow timing windows, inject sleeps. A 50%-flake bug is debuggable; 1% is not, so keep raising the rate until it's debuggable.
 
 ### When you genuinely cannot build a loop
 
@@ -88,15 +88,6 @@ Do not proceed until you have reproduced **and** minimised.
 ## Phase 3: Hypothesise
 
 Generate **3–5 ranked hypotheses** before testing any of them. Single-hypothesis generation anchors on the first plausible idea.
-
-**Escalate once, behind an evidence gate.** Escalate when (a) every hypothesis of a round is falsified with the minimised repro in hand, or (b) the fix did not turn the loop green. A round falsified on an unminimised repro goes back to building the loop (Phases 1 and 2), not up. Spawn one fresh `general-purpose` agent in the Escalation role ([models.md](../../../docs/models.md); its fallback when the model is unavailable, said in the reply), in the background, once per diagnosis. It writes no code; it may run the loop and read-only probes. Its brief carries:
-
-- the loop command, and how red and green read;
-- the minimised repro, and what was cut;
-- each falsified hypothesis as prediction, probe and observation;
-- the fix tried, and what the loop said.
-
-It answers two questions, in order: (1) which probe would split the surviving causes; (2) the next 3-5 ranked falsifiable hypotheses, each with its probe. "The evidence cannot tell these apart; run probe X" is a valid first answer.
 
 Each hypothesis must be **falsifiable**: state the prediction it makes.
 
@@ -145,3 +136,5 @@ Required before declaring done:
 - [ ] All `[DEBUG-...]` instrumentation removed (`grep` the prefix)
 - [ ] Throwaway prototypes deleted (or moved to a clearly-marked debug location)
 - [ ] The hypothesis that turned out correct is stated in the commit / PR message, so the next debugger learns
+
+Local changes (tstack): [local/diagnosing-bugs.md](../../../local/diagnosing-bugs.md) · Names here: GLOSSARY.md → CONTEXT.md, ADRs → none: tstack keeps no ADRs (Luiz, 2026-11-20); a decision goes to memo or the change's description

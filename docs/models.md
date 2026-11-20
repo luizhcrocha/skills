@@ -12,7 +12,7 @@ Every agent tstack spawns plays one of the roles below. The role fixes its model
 | Reviewer | One lens on a diff or a session, two or three in parallel; a second opinion. | Opus high | Sonnet xhigh | |
 | Verifier | Runs the real product and reports, one agent per item: a PR, a mechanical history task. | Opus medium | Sonnet high | |
 | Decider | One agent whose call decides what follows: the hardest single task, arena's judge, why's and reflect's synthesizers, the trail review after a long absence. | Fable high | Opus xhigh | |
-| Escalation | The hardest call after an attempt failed, once per diagnosis, behind the evidence gate in [diagnosing-bugs](../skills/engineering/diagnosing-bugs/SKILL.md) (Phase 3). | Fable high | Opus high | |
+| Escalation | The hardest call after an attempt failed, once per diagnosis, behind the evidence gate in [local/diagnosing-bugs.md](../local/diagnosing-bugs.md). | Fable high | Opus high | |
 | Advisor | A fleet's long-lived judge, asked many times (the fleet plugin's `advisor` agent). | Fable high | Opus high, restarted | |
 | Coordinator | The session running a fleet (the `coordinator` skill): routes, briefs, records, integrates. | Opus medium | Sonnet medium | |
 | Manager | The session over every coordinator on the machine (the `manager` skill): landing order, the gate, health across fleets. | Opus medium | Sonnet medium | |

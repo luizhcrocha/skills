@@ -1,0 +1,2 @@
+- Loop the trigger in one script that prints the tally, not one tool call per run.
+- Escalate once per diagnosis, only when every hypothesis of a round is falsified on a minimised repro or the fix didn't turn the loop green (an unminimised repro goes back to Phase 1). Spawn one background agent in the Escalation role ([models.md](../docs/models.md)) with the loop, the repro, each falsified hypothesis as prediction, probe and observation, and the fix tried. It writes no code and answers first with the probe that splits the surviving causes, then 3 to 5 ranked hypotheses.
