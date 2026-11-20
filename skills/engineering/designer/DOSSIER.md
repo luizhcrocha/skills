@@ -53,17 +53,17 @@ Every later edit to an approved file is a line here: the date, the file, what ch
 
 ## Artifacts
 
-The design page's link and source, `model.md`, the statechart files, the ADRs and `CONTEXT.md` terms, each by path.
+The design page's link and source, `model.md`, the statechart files and `CONTEXT.md` terms, each by path.
 
 ## Interfaces
 
 The card neighbouring designs and `fleet council check` read to find where designs meet. Its first line is `card for design v<n>`. One row per thing the design touches outside itself:
 
 - **kind**: `owns`, `reads`, `emits`, `consumes`, `replaces`, `needs` or `open`.
-- **id**: `<type>:<name>`, such as `pg:<schema>.<table>`, `host:<domain>`, `event:<name>`, `adr:<n>`, `zoho:fn/<name>`, `role:<name>` or `repo:<path>`. A trailing `*` matches a prefix.
+- **id**: `<type>:<name>`, such as `pg:<schema>.<table>`, `host:<domain>`, `event:<name>`, `zoho:fn/<name>`, `role:<name>` or `repo:<path>`. A trailing `*` matches a prefix.
 - **path**: the repo-relative file that defines it.
 
-Done when every table, event, host, role and ADR the design touches has a row.
+Done when every table, event, host and role the design touches has a row.
 
 ## Constraints
 

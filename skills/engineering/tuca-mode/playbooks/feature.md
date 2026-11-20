@@ -2,7 +2,7 @@
 
 **You own the design. Plan, review, verify.** Delegate the implementation; stay in the lead.
 
-1. Map the affected subsystem: `CONTEXT.md`, the ADRs, the modules and seams the feature touches. `tstack:how` does the reading when it spans more than a few files.
+1. Map the affected subsystem: `CONTEXT.md`, memo (`memo recall`), the modules and seams the feature touches. `tstack:how` does the reading when it spans more than a few files.
 2. Design the shape: name the data shape and its organizing structure (Model the Domain), the module and its interface, the seam it sits behind, with the call site written first. A non-trivial or contested shape → `tstack:architect` sketches it: grounded with how, competing candidates through `tstack:arena` (each runner in its own jj workspace), one synthesized sketch that step 4 implements against.
 3. Write the throughput checkpoint as four todo items. A dimension that does not apply keeps its item with `n/a: <reason>`:
    - **Blocking first steps.** Gates that run before any fan-out (shared types, schemas, config).

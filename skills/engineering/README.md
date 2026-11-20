@@ -3,10 +3,10 @@
 Skills I use daily for code work.
 
 - **[diagnosing-bugs](./diagnosing-bugs/SKILL.md)** — Disciplined diagnosis loop for hard bugs and performance regressions: build a feedback loop that goes red on this bug → minimise → hypothesise → instrument → fix → regression-test.
-- **[grill-with-docs](./grill-with-docs/SKILL.md)** — Grilling session that challenges your plan against the existing domain model, sharpens terminology, and updates `CONTEXT.md` and ADRs inline.
+- **[grill-with-docs](./grill-with-docs/SKILL.md)** — Grilling session that challenges your plan against the existing domain model, sharpens terminology, and updates `CONTEXT.md` inline.
 - **[triage](./triage/SKILL.md)** — Triage issues through a state machine of triage roles.
 - **[improve-codebase-architecture](./improve-codebase-architecture/SKILL.md)** — Scan a codebase for deepening opportunities, present them as a visual HTML report, then grill through whichever one you pick.
-- **[domain-modeling](./domain-modeling/SKILL.md)** — Actively build and sharpen a project's domain model: challenge fuzzy terms, capture the glossary in `CONTEXT.md`, and record hard-to-reverse decisions as ADRs inline.
+- **[domain-modeling](./domain-modeling/SKILL.md)** — Actively build and sharpen a project's domain model: challenge fuzzy terms, and capture the glossary in `CONTEXT.md` inline.
 - **[setup-luizrocha-skills](./setup-luizrocha-skills/SKILL.md)** — Scaffold the per-repo config (issue tracker, triage label vocabulary, domain doc layout) that the other engineering skills consume. Run once per repo before using `to-issues`, `to-spec`, `triage`, `diagnosing-bugs`, `review`, `tdd`, or `improve-codebase-architecture`.
 - **[migrate-to-agents-md](./migrate-to-agents-md/SKILL.md)** — Move a repo's agent instructions from `CLAUDE.md` into `AGENTS.md`, which Claude Code now reads natively, so every coding agent reads one file and no `CLAUDE.md` shadows it: inventory, a per-directory plan with merges you approve, references updated, `/memory` check.
 - **[research](./research/SKILL.md)** — Investigate a question against high-trust primary sources and capture the findings as a cited Markdown file in the repo, run as a background agent.

@@ -1,3 +1,4 @@
 - The explorer sub-agent plays the Researcher role ([models.md](../docs/models.md)).
 - One more friction signal: files in different modules that change in the same commits (co-change across a seam is leakage you can count).
 - Design-it-twice runs as a `tstack:arena`, not through `codebase-design`, which tstack dropped (Luiz, 2026-11-20).
+- There are no ADRs to read or offer: past decisions are in memo (`memo recall`) and `jj log`; a rejected candidate's load-bearing reason becomes a memo note (`tstack:memo`).

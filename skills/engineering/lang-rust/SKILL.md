@@ -68,7 +68,7 @@ The `tdd` skill owns the method and the rungs; this maps them to tools.
 | 0 static | the type system, `clippy -D warnings`, `#[must_use]`, `#![forbid(unsafe_code)]` on crates with no `unsafe` |
 | 1 example | `#[test]` in a `#[cfg(test)] mod tests` beside the code; `cargo nextest run` |
 | 2 integration | `tests/*.rs` against the crate's public API, real filesystem via `tempfile`, real child processes; `#[ignore = "why"]` on tests needing hardware or credentials, run with `--run-ignored` |
-| 3 golden | `insta` (`assert_snapshot!`, `assert_debug_snapshot!`, `assert_json_snapshot!`, redactions behind the `redactions` feature); review with `cargo insta review` and commit the `.snap` files; with `CI` set insta never writes snapshots. A labelled corpus with a baseline file is the same rung (chimr-polish's corpus ratchet, ADR-0022) |
+| 3 golden | `insta` (`assert_snapshot!`, `assert_debug_snapshot!`, `assert_json_snapshot!`, redactions behind the `redactions` feature); review with `cargo insta review` and commit the `.snap` files; with `CI` set insta never writes snapshots. A labelled corpus with a baseline file is the same rung (chimr-polish's corpus ratchet) |
 | 4 property | `proptest` (`proptest!`, `prop_assert!`, strategies built from production constructors); commit `proptest-regressions/` |
 | 5 model-based | `proptest-state-machine` (a reference state machine and the system under test driven by the same generated transitions) |
 | 6 fuzzing | `cargo fuzz` (libFuzzer, nightly toolchain only for the fuzz run) with `arbitrary` for structured input; the corpus under `fuzz/corpus/` |

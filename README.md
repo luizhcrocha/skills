@@ -68,7 +68,7 @@ I felt the same tension with my agents. Agents are usually dropped into a projec
 
 **The Fix** for this is a shared language. It's a document that helps agents decode the jargon used in the project.
 
-This is built into [`/grill-with-docs`](./skills/engineering/grill-with-docs/SKILL.md). It's a grilling session, but that helps you build a shared language with the AI, and document hard-to-explain decisions in ADR's.
+This is built into [`/grill-with-docs`](./skills/engineering/grill-with-docs/SKILL.md). It's a grilling session, but that helps you build a shared language with the AI.
 
 It's hard to explain how powerful this is. It might be the single coolest technique in this repo. Try it, and see.
 
@@ -129,10 +129,10 @@ Software engineering fundamentals matter more than ever. These skills are my bes
 Skills I use daily for code work.
 
 - **[diagnosing-bugs](./skills/engineering/diagnosing-bugs/SKILL.md)** — Disciplined diagnosis loop for hard bugs and performance regressions: build a feedback loop that goes red on this bug → minimise → hypothesise → instrument → fix → regression-test.
-- **[grill-with-docs](./skills/engineering/grill-with-docs/SKILL.md)** — Grilling session that challenges your plan against the existing domain model, sharpens terminology, and updates `CONTEXT.md` and ADRs inline.
+- **[grill-with-docs](./skills/engineering/grill-with-docs/SKILL.md)** — Grilling session that challenges your plan against the existing domain model, sharpens terminology, and updates `CONTEXT.md` inline.
 - **[triage](./skills/engineering/triage/SKILL.md)** — Triage issues through a state machine of triage roles.
 - **[improve-codebase-architecture](./skills/engineering/improve-codebase-architecture/SKILL.md)** — Scan a codebase for deepening opportunities, present them as a visual HTML report, then grill through whichever one you pick.
-- **[domain-modeling](./skills/engineering/domain-modeling/SKILL.md)** — Actively build and sharpen a project's domain model: challenge fuzzy terms, capture the glossary in `CONTEXT.md`, and record hard-to-reverse decisions as ADRs inline.
+- **[domain-modeling](./skills/engineering/domain-modeling/SKILL.md)** — Actively build and sharpen a project's domain model: challenge fuzzy terms, and capture the glossary in `CONTEXT.md` inline.
 - **[setup-luizrocha-skills](./skills/engineering/setup-luizrocha-skills/SKILL.md)** — Scaffold the per-repo config (issue tracker, triage label vocabulary, domain doc layout) that the other engineering skills consume. Run once per repo before using `to-issues`, `to-spec`, `triage`, `diagnosing-bugs`, `review`, `tdd`, or `improve-codebase-architecture`.
 - **[migrate-to-agents-md](./skills/engineering/migrate-to-agents-md/SKILL.md)** — Move a repo's agent instructions from `CLAUDE.md` into `AGENTS.md`, which Claude Code now reads natively, so every coding agent reads one file and no `CLAUDE.md` shadows it: inventory, a per-directory plan with merges you approve, references updated, `/memory` check.
 - **[research](./skills/engineering/research/SKILL.md)** — Investigate a question against high-trust primary sources and capture the findings as a cited Markdown file in the repo, run as a background agent.

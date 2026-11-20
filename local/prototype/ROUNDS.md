@@ -9,7 +9,7 @@ The targets come from a measured case, the Processos case of 2026-10-19. Two mar
 
 Picasso delivers marks in batches: a batch goes 3 minutes after the reviewer's last change, when the reviewer moves to another page of the app, or when the reviewer sends it now. To send at once, the reviewer presses the send button on picasso's rail or Cmd/Ctrl+Shift+Enter (picasso's README; the `picasso` CLI has no send command). Tell the reviewer this once, at the first round.
 
-A project's standing UI rules (its ADRs, read through the `domain-modeling` skill) apply on top of this file.
+A project's standing UI rules (its `CONTEXT.md` and memo notes) apply on top of this file.
 
 ## Before the first round
 
@@ -98,7 +98,7 @@ Every few rounds, sweep all open marks against the live page and close each one 
 
 - **Variant rounds** may open the series: 2 to 4 structurally different variants behind `?v=`, with the picker from [PICKER.md](../../upstream/emilkowalski/skills/prototype/PICKER.md). Once the reviewer picks, a merge round folds the picks into one prototype, and later rounds evolve that one.
 - **Design rounds** change only presentation; features wait for the next feature round. Audit first in `DESIGN-AUDIT.md`: per view, what competes for attention and what can wait behind a click. Count the elements on each view before and after, take screenshots in light, dark and at 390 px, and report the counts as measured when a target is missed.
-- **Terminology rounds** come before any renaming. Write `TERMINOLOGY.md`: each term, its definition in the project's domain docs (`CONTEXT.md` and the ADRs, through the `domain-modeling` skill), where the page uses it, and each collision with one proposed resolution. Rename nothing until the reviewer decides.
+- **Terminology rounds** come before any renaming. Write `TERMINOLOGY.md`: each term, its definition in the project's domain docs (`CONTEXT.md`, through the `domain-modeling` skill), where the page uses it, and each collision with one proposed resolution. Rename nothing until the reviewer decides.
 
 ## Real and simulated
 

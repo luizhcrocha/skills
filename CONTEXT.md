@@ -34,7 +34,7 @@ The directory the hub serves a fleet's `file://` **Links** from: the fleet's DIR
 A kind of act the user approved once, with a plain yes on the page (K1); acts under it are recorded as notices, not asked.
 
 **Frozen twin**:
-The Python fleet (`skills/productivity/coordinator/scripts/*.py` in the fleet repo's plugin): bug fixes only, until it is deleted (ADR 0003, now in the fleet repo).
+The Python fleet (`skills/productivity/coordinator/scripts/*.py` in the fleet repo's plugin): bug fixes only, until it is deleted.
 
 ### Memory
 
@@ -148,8 +148,8 @@ To open a **Summary** into the notes and summaries it stands for.
 
 - "backlog" was previously used to mean both the *tool* hosting issues and the *body of work* inside it — resolved: the tool is the **Issue tracker**; "backlog" is no longer used as a domain term.
 - "backlog backend" / "backlog manager" — resolved: collapsed into **Issue tracker**.
-- "open thread" was a kind of memo note for unfinished work. Resolved: unfinished work is a **Work item** with an **Owner**, and memo holds only **Knowledge** (ADR 0004).
-- "global" meant both facts about Luiz and facts about several repositories. Resolved: **User scope** and **Group scope** are separate, and "global" is no longer a scope (ADR 0005).
-- "wake" and "brief" named the text read at session start, with and without a size limit. Resolved: the text is the **Start read**, and it always has a **Budget** (ADR 0006).
-- "committed in the repo" meant in the repository's code history. Resolved: a repository's **Notes** are committed on its **Memo bookmark**, and no working tree holds them (ADR 0005).
-- "summary" meant a rewritten line in memo and in tape. Resolved for memo: a **Summary** quotes **Notes** and never rewrites them (ADR 0007). tape's summaries are tape's own term.
+- "open thread" was a kind of memo note for unfinished work. Resolved: unfinished work is a **Work item** with an **Owner**, and memo holds only **Knowledge**.
+- "global" meant both facts about Luiz and facts about several repositories. Resolved: **User scope** and **Group scope** are separate, and "global" is no longer a scope.
+- "wake" and "brief" named the text read at session start, with and without a size limit. Resolved: the text is the **Start read**, and it always has a **Budget**.
+- "committed in the repo" meant in the repository's code history. Resolved: a repository's **Notes** are committed on its **Memo bookmark**, and no working tree holds them.
+- "summary" meant a rewritten line in memo and in tape. Resolved for memo: a **Summary** quotes **Notes** and never rewrites them. tape's summaries are tape's own term.

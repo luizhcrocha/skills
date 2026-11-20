@@ -7,7 +7,7 @@ description: "Test-first development and choosing the right evidence (example, p
 
 Every change ends with evidence that it works. This skill decides which evidence, then runs the red → green loop that produces it. Consult every section on every cycle, not after.
 
-When exploring the codebase, read `CONTEXT.md` (if it exists) so test names and interface vocabulary match the project's domain language, and respect ADRs in the area you're touching. Language specifics (runners, property-test libraries, fuzzers) live in the language skill for the file you touch.
+When exploring the codebase, read `CONTEXT.md` (if it exists) so test names and interface vocabulary match the project's domain language, and respect past decisions in the area you're touching (`memo recall`). Language specifics (runners, property-test libraries, fuzzers) live in the language skill for the file you touch.
 
 ## 1. Pick the rung
 

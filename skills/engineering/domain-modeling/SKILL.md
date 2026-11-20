@@ -1,6 +1,6 @@
 ---
 name: domain-modeling
-description: "Build and sharpen a project's domain model. Use for codebase terminology, a CONTEXT.md, or an ADR."
+description: "Build and sharpen a project's domain model. Use for codebase terminology or a CONTEXT.md."
 ---
 
 # Domain Modeling
@@ -73,4 +73,4 @@ Only offer to create an ADR when all three are true:
 
 If any of the three is missing, skip the ADR. Use the format in [ADR-FORMAT.md](./ADR-FORMAT.md).
 
-Names here: GLOSSARY.md → CONTEXT.md, GLOSSARY-MAP.md → CONTEXT-MAP.md
+Local changes (tstack): [local/domain-modeling.md](../../../local/domain-modeling.md) · Names here: GLOSSARY.md → CONTEXT.md, GLOSSARY-MAP.md → CONTEXT-MAP.md, ADR → none: tstack keeps no ADRs (Luiz, 2026-11-20); a decision goes to memo or the change's description, ADRs → none: tstack keeps no ADRs (Luiz, 2026-11-20); a decision goes to memo or the change's description, docs/adr → none: tstack keeps no ADRs (Luiz, 2026-11-20); a decision goes to memo or the change's description

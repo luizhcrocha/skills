@@ -1,6 +1,6 @@
 # Upstream names and ours
 
-The upstream sync (`scripts/sync_upstream.py`, overlay mode) adds to a synced skill's last line every row whose upstream name its text uses, so the verbatim upstream text still points the agent at our skill. One table per upstream; add a row when an upstream text names a skill or file we renamed.
+The upstream sync (`scripts/sync_upstream.py`, overlay mode) adds to a synced skill's last line every row whose upstream name its text uses, so the verbatim upstream text still points the agent at our skill. One table per upstream, plus `everywhere` for names any upstream may use; add a row when an upstream text names a skill or file we renamed.
 
 ## mattpocock
 
@@ -43,3 +43,11 @@ The upstream sync (`scripts/sync_upstream.py`, overlay mode) adds to a synced sk
 | animation-vocabulary | tstack:animate (its naming mode) |
 | write-swift | tstack:lang-swift |
 | animate-expo | none: React Native is outside tstack |
+
+## everywhere
+
+| Upstream | Ours |
+|---|---|
+| ADR | none: tstack keeps no ADRs (Luiz, 2026-11-20); a decision goes to memo or the change's description |
+| ADRs | none: tstack keeps no ADRs (Luiz, 2026-11-20); a decision goes to memo or the change's description |
+| docs/adr | none: tstack keeps no ADRs (Luiz, 2026-11-20); a decision goes to memo or the change's description |

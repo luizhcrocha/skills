@@ -74,4 +74,4 @@ Any further notes about the feature.
 
 </spec-template>
 
-Names here: setup-matt-pocock-skills → tstack:setup-luizrocha-skills
+Names here: setup-matt-pocock-skills → tstack:setup-luizrocha-skills, ADRs → none: tstack keeps no ADRs (Luiz, 2026-11-20); a decision goes to memo or the change's description
