@@ -1,6 +1,5 @@
 ---
 description: "Strip narrating comments from a diff and fix what they papered over. Use before landing, or for \"no comments\", \"deslop the comments\"."
-disable-model-invocation: ~
 ---
 
 - The agent is `tstack:comment-sicko` (Agent tool, `subagent_type: tstack:comment-sicko`).

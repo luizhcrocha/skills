@@ -1,6 +1,5 @@
 ---
 description: "Generate a project-local verify-<app> skill that launches the app and drives it like a user. Use for \"make a verify skill\", or when proving a change means improvising the launch."
-disable-model-invocation: ~
 ---
 
 - Claude Code's `run` skill launches through a project verify skill, so the generated description names "run", "launch", "prove" and "verify". A `.claude/skills/verify-*` already present → `tstack:maintain-verification-skill` instead.

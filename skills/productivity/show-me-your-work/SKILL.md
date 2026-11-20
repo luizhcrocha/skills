@@ -1,6 +1,7 @@
 ---
 name: show-me-your-work
 description: "Keep a reviewable decision log (what, why, evidence, result) for long or unattended work, audited before hand-back. Use for autonomous runs, hillclimbs, bespoke playbooks."
+disable-model-invocation: true
 ---
 
 # Show me your work

@@ -1,6 +1,7 @@
 ---
 name: arena
 description: "Run N parallel attempts at one task under distinct constraints, then graft the best onto a chosen base. Use for \"arena this\" or competing designs."
+disable-model-invocation: true
 ---
 
 # Arena

@@ -1,6 +1,7 @@
 ---
 name: how
 description: "Explain how code works, as onboarding a senior engineer. Use for \"how does X work\", \"zoom out\", a map of an area, unfamiliar code before a change, or \"where should this live\"."
+disable-model-invocation: true
 ---
 
 # How

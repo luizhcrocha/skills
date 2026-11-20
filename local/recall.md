@@ -1,7 +1,6 @@
 ---
 description: "Answer from the record what we knew, did or decided, or catch Luiz up. Use for \"what do we know about X\" or \"where did I leave off\"."
 argument-hint: "[what do we know about X | catch me up (on X) (last N days)]"
-disable-model-invocation: ~
 ---
 
 - A second mode, Lookup ("what do we know about X", "did we decide Y"): search memo (`memo recall <words>`, `memo zoom <id>`), tape (`tape build`, `tape search <words>`, `tape zoom <id>`), `jj log -r 'description(substring-i:"<word>")'`, and fleet ledgers, then answer in a few lines with every claim cited.

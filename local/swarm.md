@@ -1,6 +1,5 @@
 ---
 description: "Fan out N parallel workers over slices or race arms into one report. Use for \"swarm this\", coverage matrices, best-of runs, or check gauntlets."
-disable-model-invocation: ~
 ---
 
 - Workers are background Agent calls on this machine, each in the role its job needs ([models.md](../docs/models.md)): Readers for coverage, checks and measurement, Researchers for exploration, Implementers for arms that write code or judge. Fan-out never runs on Fable.

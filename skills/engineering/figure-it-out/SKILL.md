@@ -1,6 +1,7 @@
 ---
 name: figure-it-out
 description: "Design an auditable bespoke playbook when no tuca-mode playbook fits. Use for \"figure it out\", a large migration or port, a cross-cutting change, or unattended work."
+disable-model-invocation: true
 ---
 
 # Figure it out

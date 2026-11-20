@@ -1,6 +1,7 @@
 ---
 name: no-comments
 description: "Strip narrating comments from a diff and fix what they papered over. Use before landing, or for \"no comments\", \"deslop the comments\"."
+disable-model-invocation: true
 ---
 
 # No comments

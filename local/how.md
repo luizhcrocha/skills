@@ -1,6 +1,5 @@
 ---
 description: "Explain how code works, as onboarding a senior engineer. Use for \"how does X work\", \"zoom out\", a map of an area, unfamiliar code before a change, or \"where should this live\"."
-disable-model-invocation: ~
 ---
 
 - Read `CONTEXT.md` first, and use its names. "Zoom out" (map the modules and callers around this) is a how question.

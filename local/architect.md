@@ -1,6 +1,5 @@
 ---
 description: "Sketch types, signatures and the module map from competing candidates before code, then implement against it. Use for \"architect this\", \"design this first\", \"sketch the types\", or non-trivial work."
-disable-model-invocation: ~
 ---
 
 - Speak the project's `CONTEXT.md`. Ground with `tstack:how`, and `tstack:why` when ownership or layering changes.

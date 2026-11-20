@@ -1,6 +1,5 @@
 ---
 description: "Run N parallel attempts at one task under distinct constraints, then graft the best onto a chosen base. Use for \"arena this\" or competing designs."
-disable-model-invocation: ~
 ---
 
 - Runners are N Implementer agents ([models.md](../docs/models.md)) on one model, in the background. Diversity comes from a distinct constraint per runner, not from model families.

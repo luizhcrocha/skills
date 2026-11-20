@@ -1,6 +1,7 @@
 ---
 name: swarm
 description: "Fan out N parallel workers over slices or race arms into one report. Use for \"swarm this\", coverage matrices, best-of runs, or check gauntlets."
+disable-model-invocation: true
 ---
 
 # Swarm

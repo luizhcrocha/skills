@@ -1,6 +1,5 @@
 ---
 description: "Keep a reviewable decision log (what, why, evidence, result) for long or unattended work, audited before hand-back. Use for autonomous runs, hillclimbs, bespoke playbooks."
-disable-model-invocation: ~
 ---
 
 - Evidence is a jj change id; a dropped attempt's result is `abandoned`.

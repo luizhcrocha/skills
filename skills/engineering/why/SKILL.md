@@ -1,6 +1,7 @@
 ---
 name: why
 description: "Find why code is the way it is. Use for \"why does X work this way\", \"why did we pick Y\", regressions, postmortems, or before changing unexplained code."
+disable-model-invocation: true
 ---
 
 # Why

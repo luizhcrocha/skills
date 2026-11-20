@@ -1,6 +1,7 @@
 ---
 name: architect
 description: "Sketch types, signatures and the module map from competing candidates before code, then implement against it. Use for \"architect this\", \"design this first\", \"sketch the types\", or non-trivial work."
+disable-model-invocation: true
 ---
 
 # Architect

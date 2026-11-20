@@ -1,6 +1,7 @@
 ---
 name: maintain-verification-skill
 description: "Audit a verify-<app> skill and feature map against the live app, fixing them in one change. Use after a failed verify run or UI churn."
+disable-model-invocation: true
 ---
 
 # Maintain a verification skill
