@@ -43,7 +43,7 @@
 
 [upstream.mattpocock]
 url = "https://github.com/mattpocock/skills.git"
-base = "4ae2317ddb22b046e26455e4f9c9b3aaaf62212d"
+base = "abeeaf95660ba9e8b7c753eb38f441ca707a8823"
 units = ["skills/*/*"]
 # Repo plumbing, and bucket READMEs (ours, per AGENTS.md), are never synced.
 ignore = [
