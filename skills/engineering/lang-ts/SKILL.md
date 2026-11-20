@@ -54,7 +54,7 @@ When local code breaks one of these, keep compatibility at the seam and improve 
 
 ## Testing ladder
 
-`tstack:tdd` owns the method (rungs, seams, substitutes, seeds, evidence tiers). The TypeScript tools, and the patterns for each, are in [`references/testing-and-verification.md`](references/testing-and-verification.md):
+Pick the rung the residual risk needs. The TypeScript tools, and the patterns for each, are in [`references/testing-and-verification.md`](references/testing-and-verification.md):
 
 | Rung | Tool |
 |---|---|

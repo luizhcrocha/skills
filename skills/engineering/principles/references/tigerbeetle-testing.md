@@ -1,6 +1,6 @@
 # How TigerBeetle tests
 
-Read from the tigerbeetle repo at a2a3c706 (main, 2026-11-10), the CFO from tag 0.16.39, and the blog at `https://tigerbeetle.com/blog/<slug>`. Paths are relative to the repo. [simulation.md](../simulation.md) adapts this; [vopr.md](vopr.md) and the principles' TIGER_STYLE.md are the vendored originals.
+Read from the tigerbeetle repo at a2a3c706 (main, 2026-11-10), the CFO from tag 0.16.39, and the blog at `https://tigerbeetle.com/blog/<slug>`. Paths are relative to the repo. [simulation.md](simulation.md) adapts this; [vopr.md](vopr.md) and [TIGER_STYLE.md](TIGER_STYLE.md) are the vendored originals.
 
 ## What makes simulation possible
 

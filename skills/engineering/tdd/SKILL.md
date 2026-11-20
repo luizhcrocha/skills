@@ -1,59 +1,42 @@
 ---
 name: tdd
-description: "Test-first development and choosing the right evidence (example, property, model-based, fuzz, mutation). Use when writing tests, fixing a bug test-first, \"red-green-refactor\", or proving a change works."
+description: "Use only when the user explicitly asks for TDD, a failing test, or a regression test, OR when the bug has an obvious cheap local test target. Skip when the test path is unclear, expensive, integration-heavy, or not requested."
+disable-model-invocation: true
 ---
 
-# Test-Driven Development
+# TDD Bug Fix
 
-Every change ends with evidence that it works. This skill decides which evidence, then runs the red → green loop that produces it. Consult every section on every cycle, not after.
+When fixing a bug with a clear, cheap test path, make the broken behavior executable before changing production code. The goal is a focused regression test that fails before the fix and passes after it.
 
-When exploring the codebase, read `CONTEXT.md` (if it exists) so test names and interface vocabulary match the project's domain language, and respect past decisions in the area you're touching (`memo recall`). Language specifics (runners, property-test libraries, fuzzers) live in the language skill for the file you touch.
+Do not force a test when it would be impractical. If the available test would require broad harness setup, brittle mocks, slow end-to-end infrastructure, production-only state, vague reproduction steps, or large unrelated fixture churn, skip adding a new test and use the closest useful verification instead.
 
-## 1. Pick the rung
+## Workflow
 
-Testing is a ladder: static checks, example tests at seams, integration on real dependencies, characterization, property, model-based, fuzzing, mutation, deterministic simulation. Climb only as far as the remaining risk demands. [ladder.md](ladder.md) has each rung, when it applies, and what gates it.
+1. **Understand the bug.** Identify the intended behavior, current behavior, affected path, and smallest observable reproduction.
+2. **Choose the narrowest executable check.** Prefer the closest unit, component, integration, or regression test already used for that codepath. If no practical test path is obvious, do not create one from scratch just to satisfy the workflow.
+3. **Write the failing test first.** Add the smallest focused test that would have caught the bug. The test should encode intended behavior, not mirror the current implementation.
+4. **Run the new test before fixing.** Confirm it fails for the intended reason. If it passes or fails for an unrelated reason, correct the test or reproduction before editing the implementation.
+5. **Fix the bug.** Make the smallest production change that satisfies the intended behavior while preserving nearby contracts.
+6. **Rerun the regression test.** Confirm the test now passes.
 
-- **Choose by residual risk.** An invariant (round trip, idempotence, normalization) → a property test. A state machine or store → model-based. Concurrency, retries, crashes → simulation ([simulation.md](simulation.md)), and only on top of a model-based rung.
-- **Maturity gates the cost.** A prototype stops at static checks and a few examples. A long-lived core module is expected to reach property or model-based tests.
-- **A test is not always the evidence.** When a test would need broad harness setup, production-only state, or brittle substitutes for a small change, use the closest executable check instead: a repro script, a command, browser automation, a log assertion. No new test beats a bad test.
+## If a Failing Test Is Impractical
 
-## 2. Agree the seams
+Use the closest executable regression check instead: a targeted script, manual reproduction command, browser automation, snapshot comparison, log assertion, or focused integration check.
 
-A **seam** is the public boundary you test at: the interface where you observe behavior without reaching inside. Tests live at seams, never against internals. You can't test everything, so seams put the effort on the critical paths and complex logic.
+Prefer no new test over a bad test. A bad test is one that mostly tests mocks, encodes current implementation details, depends on timing or unrelated global state, needs expensive infrastructure for a small fix, or would be deleted immediately after proving the fix.
 
-Name the seams under test before writing any. When the user is present and the right seam is unclear, ask: "What's the public interface, and which seams should we test?" Otherwise pick them, state them in one line, and proceed. Give each seam a one-line note on what it catches and what it misses. When the shape of the interface is itself in question, sketch it with `tstack:architect`.
+## Guardrails
 
-## 3. The loop
+- Do not change tests merely to match a wrong implementation.
+- Do not weaken existing assertions unless the expected behavior has genuinely changed and the reason is clear.
+- Keep the regression test focused on the bug. Avoid broad fixture churn or unrelated coverage expansion.
+- If the bug is flaky, make the test deterministic where possible and document the signal being locked down.
+- If the bug exposes a broader class of failures, first land the focused regression path, then consider additional sibling coverage.
 
-- **Red before green.** Write the failing test first and run it: it must fail for the intended reason. Passing, or failing for an unrelated reason, means the test or the repro is wrong: fix that before touching production code. Then write only enough code to pass.
-- **Vertical slices.** One seam, one test, one minimal implementation per cycle; each test a tracer bullet that responds to what the last cycle taught you. Never all tests first, then all code: bulk tests verify imagined behavior and go insensitive to real changes.
-- **Refactoring is not part of the loop.** It comes after the loop, against a green suite.
-- **Never weaken a test to match wrong code.** Change an assertion only when the expected behavior genuinely changed, and say why.
+## Final Response
 
-## 4. What a good test is
+Report the evidence, not just the outcome:
 
-A good test calls the code the way its users do and asserts what they observe against an independent, literal expected value. It reads like a specification ("user can checkout with valid cart") and survives refactors because it doesn't care about internal structure. [tests.md](tests.md) has examples.
-
-The check before keeping any test: **would it still pass if every function it imports returned `undefined`?** Then it observes no behavior; rewrite the assertion or delete it ([the principle](../principles/test-behavior-not-implementation.md); [tests.md](tests.md) lists the five shapes that fail this check).
-
-- **Implementation-coupled**: substitutes internal collaborators, tests private methods, or verifies through a side channel (querying the database instead of the interface). The tell: it breaks on a refactor that kept behavior.
-- **Tautological**: the expected value is recomputed the way the code computes it, so it can never disagree with the code. Expected values come from a known literal, a worked example, or the spec.
-
-## 5. Substitutes go through seams
-
-Replace behavior only through a real seam: a constructor-injected dependency, a service or layer, a local database, a fake or recording adapter, a runtime-provided binding. Never through module-patching or method-spy APIs, in any language. [substitutes.md](substitutes.md) has the patterns, and when a fake is not enough proof (SQL semantics, runtime behavior).
-
-## 6. Determinism
-
-- Clock, randomness, IDs and I/O that affect an outcome sit behind seams the test controls. This is also what makes a later simulation rung possible; code without such seams records that as design debt.
-- A randomized test (property, fuzz, simulation) prints its seed on failure, and a failure counts as reproduced only when its seed replays it.
-- A test waits on a signal: the awaited operation, a promise its handler resolves, an event, a clock it advances. Never a fixed sleep, and never a poll on a recorder until it fills.
-- A flaky test is fixed (made deterministic) or removed, never retried into green or given a raised timeout. It holds no land while that waits, and the fleet plugin's coordinator skill says in Integrate (INTEGRATE.md) what proves a test flaky and who takes it.
-- In a fleet, you run your own scoped reds and greens, and a red under load gets one rerun alone to tell the CPUs from a bug. A red your change did not cause goes to the tests fleet as news (the Lane section of brief.md).
-
-## 7. Report the evidence
-
-End with the evidence, not the outcome:
-
-- The failing-before check and the failure it produced; the passing-after run; nearby checks run.
-- The **evidence tier** reached and the one the risk needed: `static < example < integration < property/model-based < simulated` (or `executable check` when section 1's no-test path applied). A gap between the two is named as an unproven claim, never presented as proven.
+- Name the failing-before test or executable check and the failure it produced.
+- Name the passing-after test run and any nearby validation performed.
+- If failing-before evidence could not be demonstrated, state why and describe the closest regression check used instead.

@@ -1,6 +1,6 @@
 # Testing and verification in TypeScript
 
-`tstack:tdd` owns the method: the ladder and how to pick a rung, seams, substitutes through seams, determinism and seeds, evidence tiers. Call the Skill tool with "tdd" for any of those. This file maps the method onto TypeScript tools and names the TypeScript traps. Versions are in [`sources.md`](sources.md).
+This file maps the testing ladder onto TypeScript tools and names the TypeScript traps. Clock, randomness and I/O behind seams, and seeded replay, are the principle Own the Nondeterminism (`tstack:principles`). Versions are in [`sources.md`](sources.md).
 
 ## Runner and layout
 
