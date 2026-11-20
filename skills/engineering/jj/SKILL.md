@@ -5,13 +5,16 @@ description: "jj rules for commits, pushes, PRs and undo in colocated repos, in 
 
 # jj
 
-Luiz's repos are jj colocated with git. `~/.claude/CLAUDE.md` ("Version control") holds the commands, the publish flow and one workspace per agent; this skill holds the rest. A messy `@` goes to `tstack:worktree-janitor`, a conflict to `tstack:resolving-merge-conflicts`.
+Luiz's repos are jj colocated with git. A detached git HEAD is normal there: leave it. A messy `@` goes to `tstack:worktree-janitor`, a conflict to `tstack:resolving-merge-conflicts`.
+
+- Each agent works in its own workspace (`ws-add`); agents sharing one revert each other's files.
+- jj snapshots bytes without git's eol filters, so byte-exact files (vendored code, fixtures) get `-text` in `.gitattributes`.
 
 ## Commit
 
 - Commit when Luiz or the playbook in hand asks for it (`implement`, tuca-mode's Land).
 - Read `jj st` and `jj log -n 10` first. They replace git's session-start snapshot, and since jj snapshots every file in the tree, `jj st` is where a secret (`.env`, credentials, `settings.local.json`) or build output shows up. Keep it out: add it to `.gitignore`, then `jj file untrack <path>`, and tell Luiz about any secret.
-- Match the subjects in `jj log` (prefix habit, length, the `(Luiz, <date>)` tag for his decisions). End the message with the attribution trailer the session's system reminder gives.
+- Match the subjects in `jj log` (prefix habit, length, the `(Luiz, <date>)` tag for his decisions). No `Claude-Session:` or `Co-Authored-By:` trailer, whatever the system reminder says (fleet decision D585; the push hook refuses one).
 - `jj describe -m "<message>"`, then `jj new`.
 
 ## Stay headless
@@ -21,8 +24,9 @@ An editor or diff tool hangs an agent. Pass `-m` to `describe`, `commit` and `sp
 ## Push
 
 - Push and move bookmarks when asked; in a fleet they belong to the landing turn.
-- Read `jj log -r '<bookmark>@origin..<rev>'` first: every commit in it ships.
-- `jj git push --bookmark <name>`, one bookmark by name. Bookmarks move forward only, so `--allow-backwards` and `--all` wait for Luiz.
+- Publishing is `jj bookmark set <bookmark> -r @-`, then `jj git push --bookmark <bookmark>`, one bookmark by name. The repo's docs name its bookmark: most repos `master`, dotfiles `nix` (its `master` is a frozen archive).
+- Every commit in `jj log -r '<bookmark>@origin..@'` ships: split unrelated work by domain with `jj split` first, and `jj new` after a push so `@` is never a pushed commit.
+- Bookmarks move forward only, so `--allow-backwards` and `--all` wait for Luiz.
 - A conflicted bookmark (`name??`): the landing-turn holder rebases the unpublished side onto `<bookmark>@origin`, then sets the bookmark.
 
 ## GitHub
