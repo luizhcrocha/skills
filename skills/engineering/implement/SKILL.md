@@ -16,4 +16,4 @@ Once done, call the Skill tool with "code-review" to review the work.
 
 Commit your work to the current branch.
 
-Local changes (tstack): [local/implement.md](../../../local/implement.md) · Names here: code-review → tstack:review
+Local changes (tstack): [local/implement.md](../../../local/implement.md) · Names here: code-review → none: tstack dropped its review skill (Luiz, 2026-11-20)

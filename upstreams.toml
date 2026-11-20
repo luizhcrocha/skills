@@ -20,7 +20,7 @@
 #             "mirror"   never write `to`: it is ours (a merged or reworked skill)
 #             "overlay"  `to` becomes exactly upstream's (files not upstream
 #                        deleted), then its SKILL.md is post-processed (below)
-#             { from = "skills/engineering/code-review", to = "skills/engineering/review", mode = "overlay" }
+#             { from = "skills/teach", to = "skills/engineering/explain", mode = "overlay" }
 #   units   patterns naming the units unmapped content is reported by
 #           (default: the top-level entry)
 #   ignore  patterns never reported as unmapped (decided: not wanted)
@@ -63,8 +63,8 @@ map = [
   # local/<skill>.md (frontmatter overrides, a few lines of our changes) and the
   # local/NAMES.md renames on its last line. Mirror: ours, reworked later; the
   # upstream text sits in upstream/mattpocock/ for reference.
-  # code-review is ours as review (Claude Code's built-in /code-review takes the name).
-  { from = "skills/engineering/code-review", to = "skills/engineering/review", mode = "mirror" },
+  # code-review: dropped (Luiz, 2026-11-20); our old review sits in skills/deprecated/review.
+  { from = "skills/engineering/code-review", to = "skills/deprecated/review", mode = "mirror" },
   { from = "skills/engineering/codebase-design", to = "skills/engineering/codebase-design", mode = "mirror" },
   { from = "skills/engineering/diagnosing-bugs", to = "skills/engineering/diagnosing-bugs", mode = "mirror" },
   # We keep CONTEXT.md / CONTEXT-MAP.md (decided, 2026-09-30): the GLOSSARY.md
@@ -104,7 +104,7 @@ ignore = [
   # upstream's rule that a finding survives only when a run proves it (ab1f702).
   # It ran in 1 of 2,607 transcripts here. The maintainability lens, merged from
   # code-quality-review.md and cursor-team-kit's thermo-nuclear review, moved to
-  # review/references/maintainability.md.
+  # review/references/maintainability.md. review itself was dropped (2026-11-20).
   "skills/interrogate",
   # decided: merged into lang-ts by hand, 2026-09-30. No file kept verbatim;
   # what was taken and rejected is in skills/engineering/lang-ts/references/sources.md.

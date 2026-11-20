@@ -62,7 +62,7 @@ Rejected (Luiz's standard wins):
 - `function handle(input: unknown)` narrowed with `typeof`: `unknown` stays at the I/O call and goes into a schema (anti-slop bans `unknown` parameters and runtime `typeof`).
 - "Mock only what you can't run locally": no module mocks or spies at all; substitutes go through seams.
 - `ignoreUnknownFields` everywhere on wire formats: mutating commands reject unknown fields; only read-only vendor payloads tolerate them.
-- `disable-model-invocation: true`: lang-ts is model-invocable so review, tdd and the coordinator can load it.
+- `disable-model-invocation: true`: lang-ts is model-invocable so tdd and the coordinator can load it.
 
 ## Open questions
 
