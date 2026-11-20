@@ -251,7 +251,7 @@ map = [
 # reference file, so upstream edits still 3-way merge.
 [upstream.emilkowalski]
 url = "https://github.com/emilkowalski/skills.git"
-base = "715c1807e08c497cfd1dc4feb450a2a3300ef2a9"
+base = "64eb3deb9a5fbfa041faf783e0bc3fd635872e9c"
 units = ["skills/*"]
 ignore = [
   # Repo plumbing (.gitattributes, .gitignore, .pl), the license and the

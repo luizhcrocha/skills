@@ -6,7 +6,7 @@ Every plan written by `improve-animations` follows this structure. The executor 
 # NNN — <Short imperative title>
 
 - **Status**: TODO
-- **Commit**: <the commit this plan was written against: `jj log -r @- --no-graph -T 'commit_id.short()'` in a jj repo, else `git rev-parse --short HEAD`>
+- **Commit**: <output of `git rev-parse --short HEAD` when this plan was written>
 - **Severity**: HIGH | MEDIUM | LOW
 - **Category**: <audit category>
 - **Estimated scope**: <n files, rough size>
@@ -70,4 +70,3 @@ imitate (token names, file placement, prop patterns):
 - One plan per finding. If two findings share every file and the same fix pattern (e.g. the same easing token swap across components), they may merge into one plan.
 - Pull every value from [AUDIT.md](AUDIT.md) — never approximate from memory.
 - The feel check is not optional. Motion can be mechanically correct and still feel wrong; give the executor (or the human reviewing the executor's diff) concrete things to watch for in slow motion.
-- After writing plans, create or update `plans/README.md` with: a table of plans (number, title, severity, status), the recommended execution order, and any dependencies between plans.
