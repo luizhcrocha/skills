@@ -54,7 +54,7 @@ Something unfinished: a thread, a question, or a task that waits on someone. A w
 _Avoid_: open thread, open note, todo
 
 **Owner**:
-The record that holds a **Work item** until it is done: a designer's dossier, a fleet's ledger, or an **Issue**.
+The record that holds a **Work item** until it is done: a handoff, a `fleet msg` thread, or an **Issue**.
 
 **History**:
 What happened in a session, turn by turn. tape records history; memo does not.

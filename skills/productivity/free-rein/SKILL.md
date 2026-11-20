@@ -11,7 +11,7 @@ Luiz typed this, so it is his word: for the **window** (the duration given, 24h 
 
 ## 1. Open the window
 
-Work out the end time (`date -d '+<duration>'`) and write it, with Luiz's words, where this session keeps its state (its ledger, dossier or plan; else a memo note scoped to this repo), so it survives a compaction. Say the end time in one line.
+Work out the end time (`date -d '+<duration>'`) and write it, with Luiz's words, where this session keeps its state (its handoff or notes file; else a memo note scoped to this repo), so it survives a compaction. Say the end time in one line.
 
 ## 2. Inside the window
 

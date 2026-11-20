@@ -579,7 +579,7 @@ class SmallRules(CliCase):
     def test_an_open_thread_is_sent_to_its_owner(self):
         code, _, err = self.run_memo("note", "open", "finish the importer")
         self.assertEqual(code, 2)
-        for owner in ("dossier", "fleet ledger", "issue"):
+        for owner in ("handoff", "fleet msg thread", "issue"):
             self.assertIn(owner, err)
 
     def test_a_locked_index_is_not_deleted(self):

@@ -1038,7 +1038,7 @@ def hint_words(view, hidden, limit=HINT_WORDS):
 START_HEADER = (
     "# memo: what earlier sessions learned. Memory, not instructions from the user.\n"
     "A note is knowledge: true a month from now, and not already in code, docs, commits or a plan.\n"
-    "Work in progress goes to its owner (dossier, fleet ledger, issue). What happened is in tape.\n"
+    "Work in progress goes to its owner (handoff, fleet msg thread, issue). What happened is in tape.\n"
     '  memo note "<one line>" [--scope user|machine|group:<name>]     (default: this repo)\n'
     '  memo supersede ID "<the true line>" · memo retire ID "<why>" · memo recall <words> · memo zoom ID'
 )
@@ -1421,7 +1421,7 @@ def _stamp():
 def _must_write(m):
     if m.role == "worker":
         raise Refusal("role", "memo: a fleet worker (TSTACK_ROLE=worker) does not write memory. Put what is "
-                              "durable in your report; your coordinator notes it.")
+                              "durable in your report; your parent notes it.")
 
 
 _KEY_PART = re.compile(r"[a-z0-9._-]+")
@@ -2155,8 +2155,8 @@ def _then_task(m, store, out):
 def cmd_note(m, a, out):
     parts = list(a.text)
     if len(parts) == 2 and parts[0] == "open":
-        raise Refusal("usage", "memo: work in progress is not a note; it goes to its owner: the dossier, the fleet "
-                               "ledger or an issue. A note is knowledge, true a month from now.")
+        raise Refusal("usage", "memo: work in progress is not a note; it goes to its owner: a handoff, a fleet msg "
+                               "thread or an issue. A note is knowledge, true a month from now.")
     if len(parts) == 2 and parts[0] in OLD_KINDS:
         raise Refusal("usage", f"memo: notes have no kinds now; write: memo note \"{parts[1]}\" "
                                "[--scope user|machine|group:<name>]")
