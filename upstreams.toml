@@ -168,12 +168,12 @@ map = [
   # comment-sicko: upstream's text plus local/agents/comment-sicko.md (Sonnet,
   # jj diff scope, no history edits).
   { from = "agents/comment-sicko.md", to = "agents/comment-sicko.md", mode = "overlay" },
-  # Merge: tuca-mode's scripts from poteto-mode (watch-pr polls GitHub for the
-  # babysit and shipping playbooks, bun).
-  { from = "skills/poteto-mode/scripts/watch-pr", to = "skills/engineering/tuca-mode/scripts/watch-pr" },
-  { from = "skills/poteto-mode/scripts/bootstrap.ts", to = "skills/engineering/tuca-mode/scripts/bootstrap.ts" },
-  { from = "skills/poteto-mode/scripts/package.json", to = "skills/engineering/tuca-mode/scripts/package.json" },
-  { from = "skills/poteto-mode/scripts/bun.lock", to = "skills/engineering/tuca-mode/scripts/bun.lock" },
+  # Overlay, verbatim: tuca-mode's scripts from poteto-mode (watch-pr polls
+  # GitHub for the babysit and shipping playbooks, bun).
+  { from = "skills/poteto-mode/scripts/watch-pr", to = "skills/engineering/tuca-mode/scripts/watch-pr", mode = "overlay" },
+  { from = "skills/poteto-mode/scripts/bootstrap.ts", to = "skills/engineering/tuca-mode/scripts/bootstrap.ts", mode = "overlay" },
+  { from = "skills/poteto-mode/scripts/package.json", to = "skills/engineering/tuca-mode/scripts/package.json", mode = "overlay" },
+  { from = "skills/poteto-mode/scripts/bun.lock", to = "skills/engineering/tuca-mode/scripts/bun.lock", mode = "overlay" },
 ]
 
 # OptMem and its per-project fork: the ideas behind memo (docs/design/memo.md).
