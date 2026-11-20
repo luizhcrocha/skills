@@ -42,6 +42,9 @@
 #           upstream name occurs as a whole word in the skill's .md files is
 #           listed on that line. The line, only when there is something to show:
 #             Local changes (tstack): [local/<skill>.md](<relative path>) · Names here: poteto-mode → tstack:tuca-mode
+#   local/agents/<name>.md  the same, for a mapped agent file agents/<name>.md
+#           (a single file, overlay mode): frontmatter overrides, the line
+#           when it has a body; NAMES.md matches from that file alone.
 
 [upstream.mattpocock]
 url = "https://github.com/mattpocock/skills.git"
@@ -161,9 +164,11 @@ map = [
   { from = "skills/statechart/scripts/backends", to = "skills/engineering/statechart/scripts/backends", mode = "overlay" },
   { from = "skills/statechart/scripts/frontends", to = "skills/engineering/statechart/scripts/frontends", mode = "overlay" },
   { from = "skills/statechart/scripts/passes", to = "skills/engineering/statechart/scripts/passes", mode = "overlay" },
-  # Merge: comment-sicko (kebab-case name, Sonnet, jj diff scope) and tuca-mode's scripts from poteto-mode (watch-pr polls
-  # GitHub for the babysit and shipping playbooks, bun).
-  { from = "agents/comment-sicko.md", to = "agents/comment-sicko.md" },
+  # comment-sicko: upstream's text plus local/agents/comment-sicko.md (Sonnet,
+  # jj diff scope, no history edits).
+  { from = "agents/comment-sicko.md", to = "agents/comment-sicko.md", mode = "overlay" },
+  # Merge: tuca-mode's scripts from poteto-mode (watch-pr polls GitHub for the
+  # babysit and shipping playbooks, bun).
   { from = "skills/poteto-mode/scripts/watch-pr", to = "skills/engineering/tuca-mode/scripts/watch-pr" },
   { from = "skills/poteto-mode/scripts/bootstrap.ts", to = "skills/engineering/tuca-mode/scripts/bootstrap.ts" },
   { from = "skills/poteto-mode/scripts/package.json", to = "skills/engineering/tuca-mode/scripts/package.json" },

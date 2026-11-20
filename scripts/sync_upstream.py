@@ -25,7 +25,9 @@ For each upstream:
     the first part when the local file has a body, the second for each row of
     the `local/NAMES.md` table (upstream name | our name) whose upstream name
     occurs as a whole word in a .md file of the folder. A rerun regenerates
-    the same bytes.
+    the same bytes. A mapped agent file, `agents/<name>.md` (a single file,
+    not a folder), is post-processed the same way from `local/agents/<name>.md`,
+    its NAMES.md matches taken from that file alone.
     An upstream's `strip` list of regexes is cut from every overlaid .md
     before that (blank-line runs it leaves closed up); the mirror keeps them.
 - After a real (not --dry-run) run with no conflicts, `base` in the manifest
@@ -311,11 +313,11 @@ def names_table(text: str) -> list[tuple[str, str]]:
     return rows
 
 
-def local_line(skill_md: str, skill: str, has_body: bool, names: list[tuple[str, str]]) -> str:
+def local_line(target: str, local: str, has_body: bool, names: list[tuple[str, str]]) -> str:
     parts = []
     if has_body:
-        rel = posixpath.relpath(f"local/{skill}.md", posixpath.dirname(skill_md))
-        parts.append(f"Local changes (tstack): [local/{skill}.md]({rel})")
+        rel = posixpath.relpath(local, posixpath.dirname(target))
+        parts.append(f"Local changes (tstack): [{local}]({rel})")
     if names:
         parts.append("Names here: " + ", ".join(f"{a} → {b}" for a, b in names))
     return " · ".join(parts)
@@ -330,15 +332,29 @@ def strip(data: bytes, patterns: list[str]) -> bytes:
     return data if out == text else re.sub(r"\n{3,}", "\n\n", out).encode()
 
 
-def post_process(root: Path, folder: str, files: dict[str, tuple[bytes, bool]]) -> tuple[str, list[str]]:
-    """The overlay folder's SKILL.md with local/<skill>.md applied, and what was applied."""
-    skill_md, skill = f"{folder}/SKILL.md", posixpath.basename(folder)
-    text = files[skill_md][0].decode()
-    local = root / "local" / f"{skill}.md"
+def overlay_target(root: str, overlay: dict[str, tuple[bytes, bool]]) -> tuple[str, str] | None:
+    """(the file an overlay root's local file applies to, that local file), if any:
+    a skill folder's SKILL.md takes local/<skill>.md; a mapped agents/<name>.md
+    file takes local/agents/<name>.md."""
+    if f"{root}/SKILL.md" in overlay:
+        return f"{root}/SKILL.md", f"local/{posixpath.basename(root)}.md"
+    if root in overlay and root.endswith(".md") and posixpath.basename(posixpath.dirname(root)) == "agents":
+        return root, f"local/agents/{posixpath.basename(root)}"
+    return None
+
+
+def post_process(root: Path, target: str, local_rel: str, files: dict[str, tuple[bytes, bool]]) -> tuple[str, list[str]]:
+    """`target` (a SKILL.md or an agent file) with `local_rel` applied, and what was applied.
+    NAMES.md matches come from target's folder's .md files (a skill), or target alone (an agent)."""
+    text = files[target][0].decode()
+    local = root / local_rel
     local_fm, body = frontmatter(local.read_text(encoding="utf-8")) if local.is_file() else (None, "")
     names_md = root / "local" / "NAMES.md"
+    skill = target.endswith("/SKILL.md")
+    folder = posixpath.dirname(target) + "/"
     corpus = "\n".join(
-        data.decode(errors="replace") for p, (data, _) in files.items() if p.startswith(folder + "/") and p.endswith(".md")
+        data.decode(errors="replace") for p, (data, _) in files.items()
+        if (p.startswith(folder) and p.endswith(".md") if skill else p == target)
     )
     names = [
         (a, b) for a, b in (names_table(names_md.read_text(encoding="utf-8")) if names_md.is_file() else [])
@@ -348,7 +364,7 @@ def post_process(root: Path, folder: str, files: dict[str, tuple[bytes, bool]]) 
     if local_fm:
         text = override(text, local_fm)
         applied.append("frontmatter")
-    line = local_line(skill_md, skill, bool(body.strip()), names)
+    line = local_line(target, local_rel, bool(body.strip()), names)
     if line:
         text = text.rstrip("\n") + "\n\n" + line + "\n"
         applied.append("local line")
@@ -426,11 +442,13 @@ def sync(u: Upstream, root: Path, tmp: Path, dry_run: bool, list_only: bool) -> 
     if u.strip:
         overlay = {dst: (strip(data, u.strip), x) if dst.endswith(".md") else (data, x) for dst, (data, x) in overlay.items()}
     for folder in sorted(folders):
-        if f"{folder}/SKILL.md" in overlay:
-            text, applied = post_process(root, folder, overlay)
+        hit = overlay_target(folder, overlay)
+        if hit:
+            target, local_rel = hit
+            text, applied = post_process(root, target, local_rel, overlay)
             if applied:
-                overlay[f"{folder}/SKILL.md"] = (text.encode(), overlay[f"{folder}/SKILL.md"][1])
-                r.postprocessed.append(f"{folder}/SKILL.md ({', '.join(applied)})")
+                overlay[target] = (text.encode(), overlay[target][1])
+                r.postprocessed.append(f"{target} ({', '.join(applied)})")
     r.overlaid = place(root, overlay, folders, set(targets), dry_run)
     changed = {c.split(" ", 1)[1] for c in r.overlaid}
     r.postprocessed = [p for p in r.postprocessed if p.split(" ", 1)[0] in changed]

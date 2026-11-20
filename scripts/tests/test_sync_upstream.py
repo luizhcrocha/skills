@@ -420,6 +420,41 @@ Use poteto-mode here, not grill-meister.
         self.assertIn("Post-processed", out)
         self.assertIn("    skills/eng/test-strategy/SKILL.md (local line)", out)
 
+    AGENT_UP = "---\nname: critic_bot\nmodel: inherit\ntools: Read\n---\nA critic. Ask poteto-mode first.\n"
+    AGENT_MD = "agents/critic.md"
+
+    def overlay_agent(self, local_md=None):
+        agent_map = '{ from = "agents/critic.md", to = "agents/critic.md", mode = "overlay" }'
+        self.manifest.write_text(self.manifest.read_text().replace(self.TDD_MAP, agent_map + ",\n  " + self.TDD_MAP))
+        self.write_up("pkg/agents/critic.md", self.AGENT_UP)
+        self.commit_up("agent")
+        self.write_local("local/NAMES.md", self.NAMES)
+        if local_md is not None:
+            self.write_local("local/agents/critic.md", local_md)
+
+    def test_agent_overlay_takes_frontmatter_and_line_from_local_agents(self):
+        self.overlay_agent("---\nname: critic\nmodel: sonnet\n---\nScope with jj diff.\n")
+        self.run_sync()
+        self.assertEqual(self.read_local(self.AGENT_MD), (
+            "---\nname: critic\nmodel: sonnet\ntools: Read\n---\nA critic. Ask poteto-mode first.\n\n"
+            "Local changes (tstack): [local/agents/critic.md](../local/agents/critic.md)"
+            " · Names here: poteto-mode → tstack:tuca-mode\n"
+        ))
+        self.assertEqual(self.read_local("upstream/demo/agents/critic.md"), self.AGENT_UP)
+        before = self.tree()
+        out = self.run_sync()
+        self.assertEqual(self.tree(), before)
+        self.assertNotIn("Post-processed", out)
+
+    def test_agent_overlay_frontmatter_only_adds_names_but_no_link(self):
+        self.overlay_agent("---\nname: critic\n---\n")
+        out = self.run_sync()
+        self.assertEqual(self.read_local(self.AGENT_MD), (
+            "---\nname: critic\nmodel: inherit\ntools: Read\n---\nA critic. Ask poteto-mode first.\n\n"
+            "Names here: poteto-mode → tstack:tuca-mode\n"
+        ))
+        self.assertIn("    agents/critic.md (frontmatter, local line)", out)
+
     def test_unknown_mode_is_refused(self):
         self.set_mode("bogus")
         p = subprocess.run(
