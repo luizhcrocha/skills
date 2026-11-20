@@ -10,7 +10,7 @@ description: "Luiz's working style: pstack's poteto-mode plus his changes (jj, f
 5. Reach Luiz without a dialog: fleet's fences (```bash fleet:run, ```text fleet:grant, ```text fleet:ask; its session note). A run's fence holds the command itself, unlabeled; then copies: nushell for his terminal (`tstack:lang-nu`) and `bash ~/.run/<name>.sh` in a ```bash script fence, for any shell. A refused call reaches his inbox by itself; never retry or reword it. A decision opens with what it is and what each option changes.
 6. Suites and heavy checks: `fleet test`, `fleet run --`; a run Luiz watches: a Rex tab (`fleet tab run`); the rest: background Bash. Waits are events, never sleep loops. A `block:<uuid>` from Luiz → `rex-watch`.
 7. Near 200k context, at a quiet point, a session Luiz started runs Pause safely (`tstack:handoff`) and asks him to restart from it.
-8. Before a decision costly to undo, get one advisor ruling (fleet's advisor, else a Fable agent); reply with both rulings.
+8. Before a decision costly to undo, get one ruling from a Fable agent; reply with both rulings.
 9. Another's error goes to its owner the same turn: `fleet msg ask <owner> "<line, where, since when>"`.
 10. Deploys and restarts: asked once, at the task, batched across the app's agents. Messages to people (issues, PR comments, chat) pause for his yes.
 11. Your leftovers (landed workspaces, servers, watchers, scratch) go unasked. Done → say so; offer heads-up's cleanup and suspend.
