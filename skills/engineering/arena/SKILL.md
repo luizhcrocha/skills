@@ -5,54 +5,45 @@ description: "Run N parallel attempts at one task under distinct constraints, th
 
 # Arena
 
-Fan out N parallel attempts at the same task, each under a different constraint. Read every candidate end to end. Pick the strongest as the base, graft the best ideas from the others into it, verify the result. Adapted from poteto's pstack (MIT).
+Open a todolist with one entry per phase (Frame, Fan out, Cross-judge, Pick, Graft, Verify) before launching anything.
 
-Open a todo list with the six phases before launching anything: Frame, Fan out, Cross-judge, Pick, Graft, Verify.
+## Phase A: Frame
 
-## 1. Frame
+Every candidate gets the same prompt, so the prompt is the contract.
 
-Every runner gets the same task, so the brief is the contract.
+1. State the artifact each candidate is producing.
+2. Derive the rubric, 3-6 concrete gradeable criteria for what success looks like on *this* task. It is the picker's tool in Phase D. Candidates only see the task.
+3. Pick the runners from the `arena runners` line in `~/.cursor/rules/pstack-models.mdc`, by default `claude-fable-5-2-high`, `claude-opus-5-5-high-fast`, and `gemini-4-neon-xhigh`. An `auto` or `inherit-parent` entry is the parent model, so omit `model` and spawn `generalPurpose`. If the Task tool rejects a slug, use the nearest valid slug of the same family or drop the seat, keep at least two runners, and say so. Families go by prefix, and the longest match wins: `claude-fable-*`, `claude-*`, and `gemini-*`, after dropping a leading `cursor-`. Any other slug's family is its text before the first hyphen. Spawn more for multiple design directions, and repeat one model when the work is generation-bound, not judgment-sensitive. Pick each subagent's reasoning level per the Subagents section of the **poteto-mode** skill.
+4. Give each candidate its own output location (a git worktree where possible, otherwise `/tmp/arena-<slug>/candidate-<n>/`), per the **separate-before-serializing-shared-state** principle skill.
 
-1. **The artifact.** State what each candidate produces: a design sketch, a module, a document, a script.
-2. **The rubric.** State what success looks like for *this* task, then turn it into 3 to 6 concrete, gradeable criteria. The rubric is for the judge and the picker; runners see only the task.
-3. **The constraints.** N runners, default 3. Diversity comes from a distinct constraint per runner, all on the same model:
-   - A design task (an interface, a module, a seam) takes the constraints from `tstack:codebase-design`'s [DESIGN-IT-TWICE.md](../codebase-design/DESIGN-IT-TWICE.md): minimize the interface, maximize flexibility, optimize for the common caller, and ports & adapters when a dependency crosses the seam.
-   - Any other task: write N distinct approaches, each a different whole shape (a different data structure, a different decomposition, a different owner of the hard part), not flavors of one.
-4. **The output paths.** Each runner writes to its own place, per Separate Before Serializing Shared State (`tstack:principles`). In a jj repo: `ws-add arena-<n> -r <base>`, one per runner, from the same base. Outside a repo: `<scratchpad>/arena-<slug>/candidate-<n>/`.
+## Phase B: Fan out
 
-Done when the artifact, the rubric, N constraints and N output paths are written down.
+Spawn all N subagents in one message with `run_in_background: true`, each with the task, the path to the shared grounding, its own output path, and instructions to produce the artifact and a short rationale naming the alternatives it considered and what it rejected.
 
-## 2. Fan out
+If a candidate produces no output, proceed with N-1 and note the dropout.
 
-Spawn all N runners in one message: fresh agents playing the Implementer role ([models.md](../../../docs/models.md)), `run_in_background: true`. Each brief carries the task, pointers to the shared grounding (files, not pasted content), its one constraint, its output path, and an order to produce the artifact and a short rationale naming the alternatives it considered and what it rejected. Tell each runner it is one of several: build the best candidate its constraint allows, and skip hedging toward a safe middle, since the differences between candidates are the signal.
+## Phase C: Cross-judge
 
-A runner that produces nothing drops out: continue with N-1 and note the dropout. Done when every runner has returned or dropped out.
+After all Phase B candidates complete, spawn one readonly judge from the `arena cross-judge pool` line in `~/.cursor/rules/pstack-models.mdc`, by default `claude-opus-5-5-high-fast`, `gemini-4-neon-xhigh`. The judge is never from the parent's vendor, and Fable counts as Claude for that check, so use the first entry from another vendor. An `auto` or `inherit-parent` entry is the parent model. If you do not know the parent's model, use the first real slug and say that the vendor check did not run. If the Task tool rejects a slug, use the nearest valid slug of the same family, then the next such entry, or skip the judge, and say so. While you read in Phase D, the judge scores each candidate, by path label, on each rubric criterion and recommends a base.
 
-## 3. Cross-judge
+## Phase D: Pick a base
 
-Once every candidate is written, spawn one judge: a fresh agent that ran nothing in this arena, playing the Decider role, read-only, in the background (if the Decider's model is unavailable, take its fallback from models.md and say so in the reply). It gets the rubric and the candidates by neutral labels (A, B, C), without the constraint each ran under, scores each criterion per candidate, and recommends a base with its reason. It runs while you read in step 4.
+Read every candidate end to end before picking. Score each against the rubric criterion by criterion, not on holistic feel, and compare with the cross-judge when Phase C ran one. Agreement on the base confirms the pick. Disagreement means one of you is biased or the rubric was ambiguous. Read both rationales before deciding.
 
-## 4. Pick a base
+Pick the base a future maintainer can extend most easily without breaking invariants. When two feel tied, prefer the cleaner boundary or smaller API, per the Laziness Protocol.
 
-Read every candidate end to end before picking. Score each against the rubric criterion by criterion, not on holistic feel, then compare with the judge. Agreement on the base confirms the pick. Disagreement means one of you is biased or the rubric was ambiguous: read both rationales before deciding.
+## Phase E: Graft
 
-Pick the candidate a future maintainer can extend most easily without breaking its invariants. When two feel tied, take the cleaner seam or the smaller interface, per the Laziness Protocol.
+Walk each losing candidate once more for what is worth porting into the base, usually one or two things per candidate, not most of it. Fold each graft in by hand, per the **redesign-from-first-principles** principle skill, so the result stays coherent under one mental model. Don't paste mechanically.
 
-Done when the pick and its reason, with the judge's verdict, are in the synthesis note.
+If the candidates converge on one shape, that is strong agreement. Note it and ship the consensus shape. No graft is needed. If they wildly diverge, Phase A was under-specified. Reframe and re-run rather than averaging the divergence.
 
-## 5. Graft
+## Phase F: Verify
 
-Walk each losing candidate once more for what is worth porting into the base: usually one or two things per candidate, not most of it. Fold each graft in by hand, per Redesign from First Principles, so the result stays coherent under one mental model; pasting whole blocks from a loser breaks that. Record each graft with its source candidate, and each rejection with its reason.
+Verify the synthesized artifact like any other output, per the **prove-it-works** principle skill. If verification finds a problem the arena missed, either Phase A was wrong (re-frame and re-run) or a candidate caught it and you missed the graft (go back to Phase E). Don't paper over it.
 
-- **Convergence**: the candidates landed on the same shape. That is a strong agreement signal: note it and ship the consensus shape; no graft is needed.
-- **Divergence**: the candidates share almost nothing. Step 1 was under-specified: reframe and re-run rather than averaging the divergence.
+## Outputs
 
-In a jj repo the grafted result lands in the caller's workspace (the base candidate's change squashed or rebased in, grafts on top), and every `arena-<n>` workspace goes: `jj workspace forget arena-<n>`, then remove its directory, and abandon the candidate changes not kept. Done when the grafts are in and no arena workspace is left.
+One synthesized artifact, with a short synthesis note alongside naming the base and why, the cross-judge's verdict or that Phase C skipped the judge, each graft with its source candidate, what was rejected and why, any convergence or dropouts, and the verification result.
 
-## 6. Verify
-
-The synthesized artifact holds up under the same scrutiny as any other output, per Prove It Works: run it, test it, read the real output. A problem the arena missed means step 1 was wrong (reframe and re-run) or one candidate caught it and the graft was missed (back to step 5); fix the cause rather than patching over it.
-
-## Output
-
-One synthesized artifact, and beside it a short **synthesis note**: the base and why, the judge's verdict, each graft with its source candidate, the rejections with reasons, convergence or divergence, dropouts, and the verification result.
+Local changes (tstack): [local/arena.md](../../../local/arena.md) · Names here: poteto-mode → tstack:tuca-mode, pstack-models.mdc → docs/models.md (roles), generalPurpose → general-purpose, redesign-from-first-principles → tstack:principles, prove-it-works → tstack:principles, separate-before-serializing-shared-state → tstack:principles

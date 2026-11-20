@@ -7,68 +7,100 @@ argument-hint: "[projects to mine] [since YYYY-MM-DD]"
 
 # Automate me
 
-Mine Luiz's recent Claude Code sessions for how he actually works (the corrections he keeps making, the defaults he keeps rejecting, the instructions he keeps repeating) and turn what recurs into proposed edits to `/tuca-mode`, its playbooks, and the global `CLAUDE.md`. The output is one jj change per repo, for Luiz to review; nothing lands. Adapted from poteto's pstack (MIT).
+A guided flow for turning the user's working conventions into a skill agents will follow. The output is one `-mode` skill tailored to them (e.g. `jay-mode`, `priya-mode`).
 
-There is one mode, `tuca-mode`: this skill refines it and never creates another. A narrow workflow that surfaces here ("how I write commit messages") is a proposal for its own skill, named in the report, not a section of the mode.
+This skill orchestrates three others: an inline mining pass (see step 1), Cursor's built-in `create-skill` (authoring), and the **unslop** skill (prose discipline). It sequences them. It doesn't replace them.
 
-## 1. Scope
+## Flow
 
-- **Projects**: the ones Luiz names, else the current one. Each is a path; its jj workspaces (`<repos>/.ws/<repo>/<lane>`, and older ones beside it as `<repo>-<lane>`) come along through `--workspaces`. Never read another project's transcripts: they may hold client data this task has no reason to see.
-- **Window**: Luiz's date, else everything since tuca-mode last changed in the tstack checkout: `jj log -R ~/repos/luizhcrocha/skills -r 'latest(::trunk() & files(root:"skills/engineering/tuca-mode"))' --no-graph -T 'committer.timestamp().format("%Y-%m-%d")'`.
-- **The extractor**: `${CLAUDE_PLUGIN_ROOT}/scripts/human-turns`. Transcripts live in `~/.claude/projects/<slug>/<session>.jsonl` (the slug is the path with `/` and `.` as `-`), subagent transcripts in `<session>/subagents/`. It prints Luiz's own turns as JSONL (`session`, `date`, `cwd`, `text`, and `prev`, the tail of the reply the turn answers) and drops harness noise, peer messages and headless `claude -p` runs. Subagent transcripts carry the lead's briefs, not Luiz's words, so they stay out unless a finding needs to see what a worker was told (`--subagents`).
+### 0. Check for an existing skill
 
-Run `human-turns --project <path> --workspaces --since <date> --list` and show Luiz the count: sessions and turns per project. Done when the projects and the window are fixed.
+Look recursively for `.cursor/skills/**/*-mode/SKILL.md` and `~/.cursor/skills/*-mode/SKILL.md` matching the user's handle. Mode skills can live in a personal category directory (`.cursor/skills/<handle>/`), not only at the top level. If one exists, confirm intent with `AskQuestion` (unless they already said "update my skill" or similar):
 
-## 2. Extract and batch
+- Update the existing skill (default for repeat runs)
+- Start fresh (rare, ask why before doing it)
 
-Write the turns to the scratchpad (`human-turns ... > <scratchpad>/automate-me/turns.jsonl`) and split them into batches of whole sessions, about 150 turns each, one file per batch. Done when every session is in exactly one batch file.
+Update mode changes the rest of the flow:
+- Step 1 mines only history since the skill was last edited (`git log -1 --format=%cI <path>`).
+- Step 2 asks what's changed or missing, not what to capture from zero.
+- Step 4 edits the existing file in place. Preserve sections the user hasn't contradicted. Revise ones with new evidence. Add new sections only for genuinely new rules.
 
-## 3. Fan out the readers
+### 1. Mine their history
 
-One reader per batch, all spawned in one message: `tstack:reader` agents in the Reader role ([models.md](../../../docs/models.md)), `run_in_background: true`. Each brief carries its batch file's path and this, verbatim:
+Locate the active workspace's transcripts before fanning out. The system prompt names the workspace's `agent-transcripts/` directory. Use only that path. Don't glob across `~/.cursor/projects/*/`. That crosses workspace boundaries and reads private chats from unrelated projects.
 
-> Read every turn in the batch file. Each turn is Luiz's own words; `prev` is the reply he answered. Find what recurs in how he works: corrections (he undoes or redirects something the agent did), rejected defaults (a tool, command, format or habit he turns down), preferences (length, tone, format, language, shell), repeated instructions (he says the same thing again in a new session), verification posture (what "done" means to him), delegation (models, subagents, parallelism), and process (jj, landing, pushes, reviews). For a single turn you cannot read without more context, open that session's transcript (`~/.claude/projects/*/<session>.jsonl`) and read around it; nothing else.
->
-> Return a list of patterns. Each: a one-line statement of the rule as Luiz would state it; the evidence, one row per instance (session id, date, a paraphrase of what he said and what it answered); and `mechanical: yes` when the rule could be checked by code (a lint, a hook, a script, a CLI flag) rather than judged. Paraphrase every instance: no client, person or case names, no document contents, no secrets. A pattern seen once is still reported, marked `once`. Write nothing.
+Survey recent agent conversations within that scope for recurring patterns. Run multiple parallel subagents across slices of history (e.g. last 2-4 weeks, split into 3 slices so each has enough material). Pick each subagent's reasoning level for the job, per the Subagents section of the **poteto-mode** skill. Each slice mining subagent reads transcripts from the workspace-scoped path the parent provides, looks for the signals below, and returns a short structured list of patterns it saw with evidence pointers. Default signals worth hunting:
 
-A reader that returns nothing drops out: note it and continue. Done when every reader has returned or dropped out.
+- Response preferences (length, tone, format, "dumb it down" corrections)
+- Delegation habits (subagents, models, specialized workflows, parallelism)
+- Verification posture (what "done" means, unit tests vs live repro, reviewers)
+- Code and prose discipline (style, principles cited, lint/format tools)
+- Process conventions (worktrees, commits, PRs, review/merge tooling)
+- Meta preferences (fixing skills mid-task, proposing new ones)
 
-## 4. Sort the signal
+Cross-check across slices before elevating a signal. Patterns seen in 2+ slices are high-confidence. Lone signals are weak and usually get dropped.
 
-You own this step (judgement). Merge the readers' patterns, then keep a pattern only when:
+### 2. Ask the user directly
 
-- it recurs across **two or more sessions** (the same session twice is one instance), and nothing later in the window contradicts it. A contradicted pattern goes to Luiz as a question, not a rule;
-- it is **not already said**: read the current `skills/engineering/tuca-mode/SKILL.md`, the playbooks it names, `~/repos/luizhcrocha/dotfiles/default/claude/CLAUDE.md`, and memo's `preference` notes (`tstack:recall`). A rule already written but still being corrected is a finding too: its wording failed, so sharpen it per `tstack:writing-for-agents` (a stronger leading word, a positive target) rather than restating it.
+Mining misses intent that hasn't come up yet. Use the `AskQuestion` tool (structured multi-choice) rather than asking the user to type from scratch.
 
-Route each survivor to one home:
+Shape: one or two questions with 4-6 options each, `allow_multiple: true` for category questions. Start broad ("Which areas matter most?"), then follow up on selected areas with specific options. After the structured rounds, one free-form chat question catches anything the options missed.
 
-| The rule applies | Home |
-|---|---|
-| to every session, in any repo, mode on or off | global `CLAUDE.md` in the dotfiles repo |
-| to how the mode works: autonomy, subagents, replies, non-negotiables | `tuca-mode/SKILL.md` |
-| to one kind of task | that playbook |
-| and code could check it (`mechanical: yes`) | a structure proposal, per `tstack:principles`' Encode Lessons in Structure: the strongest mechanism that fits (a hook, a lint, a `land-check` rule, a script flag), with where it would live; a lint rule goes through `tstack:lint-evolve`. The prose rule is dropped once the mechanism exists. |
-| to one repo only | that repo's `AGENTS.md` (its `CLAUDE.md` if it has no `AGENTS.md`; recommend `/migrate-to-agents-md` then), named as a proposal in the report |
+Don't dump 20 questions.
 
-Done when every pattern is kept with a home, or dropped with its reason.
+### 3. Cluster findings
 
-## 5. Confirm with Luiz
+Group the combined signals into sections. Common ones (use only what applies):
 
-Mining misses intent. One round in the reply: the kept rules as a numbered list grouped by home, so Luiz answers with the numbers that are really him. Then one free-form question for anything the list missed. Contradicted patterns go in the same round, as either-or questions. Done when every kept rule is confirmed or cut.
+- **Response style**: length, tone, format.
+- **Autonomy**: how much to do without asking, MCP tool use.
+- **Understand first**: which skills to reach for when scoping or investigating a change.
+- **Subagents**: default, parallelism, model-to-task, specialized workflows.
+- **Prose / code discipline**: principles, lint tools, style guides.
+- **Review and verify**: repro posture, verification skills, live-testing tools.
+- **Process**: git worktrees, commits, PRs, review/merge tooling.
+- **Skills**: skill-authoring habits, fix-the-skill-first, proposing new skills.
 
-## 6. Draft the edits
+The **poteto-mode** skill shows the shape. Read it for granularity. Don't copy its content. The user's rules are not the same as poteto-mode's.
 
-One jj workspace per repo touched, off its landing bookmark:
+### 4. Draft the skill
 
-- tstack: `ws-add automate-me -r master` from `~/repos/luizhcrocha/skills`.
-- dotfiles: `ws-add automate-me -r nix` from `~/repos/luizhcrocha/dotfiles`.
+Use Cursor's built-in `create-skill` skill to author the skill. Placement:
 
-Edit in place per `tstack:writing-for-agents` and `tstack:unslop`: preserve what Luiz has not contradicted, revise what has new evidence, add a rule only for a genuinely new habit. The mode stays terse; each rule is a line, operational, and says "Luiz" where the mode already does. Other skills appear as pointers, never as pasted excerpts.
+- Path: preserve an existing mode skill's category. For a new mode, use `.cursor/skills/<handle>/<handle>-mode/SKILL.md` when the repo has an established personal category for that handle. Otherwise default to `.cursor/skills/<handle>-mode/SKILL.md` in the project (or `~/.cursor/skills/<handle>-mode/` if the user prefers a personal skill).
+- Handle: the user's first name or chosen identifier.
+- Frontmatter `description`: trigger on their name + `/<handle>-mode` + "work in their style", not on generic keywords like "write code" or "review PR".
+- Frontmatter formatting: follow `create-skill`'s YAML rules. Keep `description` as one YAML scalar. Quote it or use `description: >-` with indented continuation lines when punctuation or wrapping requires it.
+- Frontmatter `disable-model-invocation: true` by default. Opt out only if the user explicitly wants their mode to apply on every turn.
 
-Describe each change in the repo's style (`jj log`), with an evidence section in the body: per rule, the file it went to and its instances as `<session id> <date>: <paraphrase>`. Then `jj new`. Done when each repo has one described change and an empty `@` on top.
+### 5. Iterate on prose
 
-## 7. Hand over
+Apply the **unslop** skill and `create-skill`'s writing guidelines to every line.
 
-Leave the workspaces in place for Luiz. No landing, no push, no bookmark move.
+Show the draft to the user and take feedback. Expect multiple iterations. Cut ruthlessly. A mode skill is not a manual.
 
-**Reply:** per repo, the change id and workspace path; the rules added, sharpened and removed, each with its home and instance count; the structure proposals (mechanism, where it lives, the rule it replaces); rules proposed for a repo's own `AGENTS.md` or a skill of their own; what was dropped as a one-off or contradicted; the sessions and turns read, and dropouts. A dotfiles change takes effect after Luiz's next home-manager switch.
+### 6. Land it
+
+Work in a worktree off main. Commit and open a PR. Don't push to main directly.
+
+## Guardrails
+
+- **Don't overfit to one conversation.** A preference stated once and contradicted another time is noise. Require multiple instances before codifying it.
+- **Don't be clever.** Restating other skills' contents, inventing metaphors, or writing "poetic" prose for an agent reader is cost without benefit. Keep it operational.
+- **Reference, don't inline.** Other skills the user relies on should appear as path references, not pasted excerpts. Same for any principle docs they maintain elsewhere.
+- **Keep sections minimal.** Only add a section if the user has a specific, non-default rule there. "Communicate clearly" is not a section. "Short paragraphs. Tables when comparing options. Bullets only when items are genuinely parallel." is.
+- **Name conventions generic.** Use "the user" or "the human" in imperatives, not the author's first name.
+- **Don't force symmetry.** If a user has no process rules worth writing down, skip the Process section entirely.
+
+## Evaluation
+
+A `-mode` skill is subjective output. A `create-skill`-style test/iterate benchmark loop isn't useful here. Vibe-check with the user: does it read like them? Did it miss anything? Then ship.
+
+Run a description-optimization loop only if the skill's trigger accuracy turns out to be a problem in practice.
+
+## When not to use
+
+- User wants a task-specific skill (not working conventions): `create-skill` alone, no mining required.
+- User wants to capture one narrow workflow (e.g. "how I write commit messages"). That's a regular skill, not a mode skill.
+
+Local changes (tstack): [local/automate-me.md](../../../local/automate-me.md) · Names here: poteto-mode → tstack:tuca-mode, AskQuestion → AskUserQuestion, create-skill → tstack:writing-for-agents

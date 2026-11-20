@@ -5,46 +5,38 @@ description: "Fan out N parallel workers over slices or race arms into one repor
 
 # Swarm
 
-Fan out N parallel workers. They cover separate slices, race the same brief, or both. You wait, aggregate, and return one report. Adapted from poteto's pstack (MIT).
+## Start
 
-Which fan-out:
+Open a todolist with one entry per phase before launching anything.
 
-- **swarm**: N workers, one verdict table. Coverage, races, gauntlets, exploration; the workers mostly check, measure or explore.
-- **`tstack:orchestrate`**: a batch of different tasks that change code, partitioned by file ownership and integrated into one codebase.
-- **`tstack:arena`**: N attempts at one design or artifact under distinct constraints; a base is picked and the others grafted in by hand.
-- **the coordinator** (`/fleet:coordinator` from the fleet plugin, user-invoked): a standing program whose lanes outlive the session's attention, with a ledger and a dashboard.
+1. Frame
+2. Fan out
+3. Aggregate
+4. Report
 
-Open a todo list with the four phases before launching anything: Frame, Fan out, Aggregate, Report.
+## Phase A: Frame
 
-## 1. Frame
+1. State the done predicate and the artifact or report the swarm must return.
+2. Choose the shape. Partition into slices, race N workers on identical briefs, or mix both. For a race or mixed shape, declare `first pass`, `rank all`, or `best-of` before spawning.
+3. Pick the worker model from the `swarm workers` line in `~/.cursor/rules/pstack-models.mdc`. If the rule or that line is missing, use `claude-opus-5-5-high-fast`. For `auto` or `inherit-parent`, omit `model` so the workers run on the parent model. If the Task tool rejects a slug, use the default and say so. If it rejects the default, use the closest valid slug of the same family from its error message. For a model race, name each arm's model up front. Pick each subagent's reasoning level for the job, per the Subagents section of the **poteto-mode** skill.
+4. Give each worker its own writable output when it writes. When workers verify or measure commits, each brief names the exact SHAs. A measurement brief also names the method (sample count, what one sample is, order). The worker records both in its result.
 
-1. State the done predicate and the report or artifact the swarm returns.
-2. Choose the shape. Partition into slices (a coverage matrix, a gauntlet of checks, an exploration partition), race N workers on identical briefs, or mix both. For a race or a mix, declare the selection rule before spawning:
-   - `first pass`: the first arm to report `PASS` wins; stop the rest (TaskStop).
-   - `rank all`: every arm reports; rank them by a metric named now.
-   - `best-of`: N runs of one brief, the best by a metric named now (also a flakiness probe: the spread is a finding).
-3. Set N from the user, or derive it from the shape. N is the total number of workers.
-4. Pick each worker's role by its job ([models.md](../../../docs/models.md) gives each role's model and effort). Coverage, checks and measurement: Readers. Exploration: Researchers. A race whose arms write code, or a worker whose job is judgement (debugging, design): Implementers. Fan-out never runs on Fable. A race of models names each arm's model and effort up front; a model outside models.md is a proposal Luiz approves first.
-5. Give each worker its own place to write. A worker that writes code gets its own jj workspace from the same base: `ws-add swarm-<n> -r <base>`. Other outputs go to `<scratchpad>/swarm-<slug>/<n>/`. When workers verify or measure commits, each brief names the exact change ids and commit ids; a measurement brief also names the method (sample count, what one sample is, order). The worker records both in its result.
+## Phase B: Fan out
 
-Done when the predicate, the shape, the rule (for a race), N, each worker's model and each output place are written down.
+Spawn all N workers in one message with `subagent_type: generalPurpose`, `environment: "cloud"`, `run_in_background: true`, and the step 3 model, left unset for `auto` or `inherit-parent`. Use `environment: "local"` only when the worker needs access to something on the user's computer.
 
-## 2. Fan out
+When a worker must start from a non-default pushed branch, pass `cloud_base_branch`.
 
-Spawn all N workers in one message: the Agent tool, `subagent_type: "general-purpose"`, `run_in_background: true`, the model from step 4. Every worker runs on this machine; there are no cloud workers. A swarm in the dozens or more runs as a Workflow only when Luiz opted into a workflow for this run (the `workflow-authoring` skill has the script API).
+Every brief stands alone. Include the goal, scope, exact slice or race arm, how to verify, and what to report. Reports use `PASS`, `ISSUES`, or `BLOCKED` with evidence. A worker that can prove a defect reports `ISSUES` and lists every issue it can prove, not only the first.
 
-Every brief stands alone: the goal, the scope, the exact slice or race arm, its output place, how to verify, and what to report. Reports use `PASS`, `ISSUES` or `BLOCKED`, with evidence. A worker that can prove a defect reports `ISSUES` and lists every issue it can prove, not only the first.
+If a worker drops out, proceed with N-1 and note it.
 
-A worker that drops out: proceed with N-1 and note it. Done when every worker has returned or dropped out.
+## Phase C: Aggregate
 
-## 3. Aggregate
+Read the terminal results. Drop a result that does not record the SHAs and method its brief names, and respawn that worker once. After a second miss, record a gap. A gap does not count as a pass. For coverage, every required slice needs a result. For a race, apply the selection rule declared up front. Use first pass, rank all, or best-of. Do not paste raw worker dumps.
 
-Read each result as its notification arrives. Drop a result that does not record the ids and method its brief names, and rerun that worker once; after a second miss, record a gap. A gap does not count as a pass. For coverage, every required slice needs a result. For a race, apply the rule declared in step 1.
+## Phase D: Report
 
-Code from a race arm is a claim until you read it: read the winner's diff, then bring it into the caller's stack (`jj rebase` or `jj squash` from its workspace). Then every `swarm-<n>` workspace goes: `jj workspace forget swarm-<n>`, remove its directory, and abandon the changes not kept.
+Return one consolidated in-chat report with a result table, issue one-liners, gaps or dropouts, and the race rule when used.
 
-Keep a compact result table, one-line evidenced issues, and explicit gaps or dropouts; raw worker dumps stay out. Done when every slice or arm has a verdict or a named gap, and no swarm workspace is left.
-
-## 4. Report
-
-One consolidated reply: the table (slice or arm, model, verdict, evidence), the issue one-liners, gaps and dropouts, and for a race the rule and the winner.
+Local changes (tstack): [local/swarm.md](../../../local/swarm.md) · Names here: poteto-mode → tstack:tuca-mode, pstack-models.mdc → docs/models.md (roles), generalPurpose → general-purpose

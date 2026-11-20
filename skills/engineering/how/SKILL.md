@@ -5,35 +5,18 @@ description: "Explain how code works, as onboarding a senior engineer. Use for \
 
 # How
 
-Answer "how does X work?" with an explanation a senior engineer new to the area can build a working mental model from: enough to start working in it confidently, not annotated source code. Adapted from poteto's pstack (MIT).
+Explore the codebase to answer "how does X work?" questions.
 
-Use the project's own vocabulary: read `CONTEXT.md` (if it exists) and the ADRs in the area, and name things the way they do. Motivation ("why was it built this way?") is the `why` skill's question.
+If the scope is ambiguous, state your interpretation and explore. The user can redirect.
 
-## 1. Size the question
+## 1. Explain
 
-If the scope is ambiguous, state your reading of it and explore; the user can redirect.
+Spawn one Task subagent with `subagent_type: generalPurpose` and `readonly: true` that explores and explains in one pass. Give it the user's question and this brief:
 
-- **Simple**: one module, a small utility, a narrow question, or "zoom out: map the modules and callers around this". One pass, step 2.
-- **Complex**: a subsystem spanning files or services, a cross-cutting feature, a full architectural overview. Explore in parallel first, step 3.
+> You are writing an architectural explanation for a senior engineer. Explore the codebase and write an explanation that a senior engineer unfamiliar with this area could read and walk away with a solid mental model. They should understand the architecture well enough to start working in it confidently. You have read-only access to the codebase.
 
-When in doubt, take the simple path.
+## 2. Present
 
-## 2. Simple: one pass
+Present the subagent's output. Light edits for clarity or context from the conversation are fine. Do not substantially rewrite it.
 
-Spawn one `Explore` agent playing the Researcher role ([models.md](../../../docs/models.md)), in the background, with the brief in [references/explainer-prompt.md](references/explainer-prompt.md) minus its explorer-findings section: it explores and explains in one pass. Go to step 5.
-
-## 3. Complex: explore
-
-Split the question into 2 to 4 exploration angles, each a distinct slice of the subsystem (the entry points, the data model, the boundary with X, the failure paths). Spawn all explorers in one message: `Explore` agents playing the Researcher role, in the background, each with [references/explorer-prompt.md](references/explorer-prompt.md) and its angle filled in.
-
-## 4. Complex: explain
-
-When every explorer has returned, spawn one explainer, a Composer, with [references/explainer-prompt.md](references/explainer-prompt.md) and all findings filled in. It moves up as models.md says when the findings contradict each other. The same move applies when the findings leave gaps it must close by reading code, or when the question asks for a judgement about the design ("is this the right layer").
-
-## 5. Present
-
-Present the explainer's output with light edits for clarity or context from the conversation; don't rewrite it. The sections, dropping any that don't apply: Overview, Key Concepts, How It Works, Where Things Live, Gotchas. Diagrams are mermaid, only where they clarify; a walkthrough that needs several diagrams built up one after another goes to the `show-me` skill as a page.
-
-## 6. Keep the gotchas
-
-Every non-obvious Gotcha the explanation surfaced (surprising behavior, a trap, a historical artifact that still bites) becomes a memo note when it passes memo's admission rule (the `memo` skill), one self-contained line each, unless memo already has it. The explanation itself stays in the chat.
+Local changes (tstack): [local/how.md](../../../local/how.md) · Names here: generalPurpose → general-purpose
