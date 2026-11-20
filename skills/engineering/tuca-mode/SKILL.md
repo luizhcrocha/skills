@@ -3,14 +3,12 @@ name: tuca-mode
 description: Luiz's working mode for the session. A playbook for every task, the principles, autonomy and reply rules. Off with "stop tuca-mode".
 disable-model-invocation: true
 argument-hint: "[the task]"
-allowed-tools: Bash(${CLAUDE_PLUGIN_ROOT}/bin/tuca-mode:*) Read(/${CLAUDE_PLUGIN_ROOT}/**) Glob(/${CLAUDE_PLUGIN_ROOT}/**)
+allowed-tools: Read(/${CLAUDE_PLUGIN_ROOT}/**) Glob(/${CLAUDE_PLUGIN_ROOT}/**)
 ---
 
 # tuca-mode
 
-Flag: !`${CLAUDE_PLUGIN_ROOT}/bin/tuca-mode on ${CLAUDE_SESSION_ID} --data ${CLAUDE_PLUGIN_DATA}`
-
-tuca-mode is on for the rest of this session, across every request, until Luiz says "stop tuca-mode" or the session ends. On "stop tuca-mode", run `${CLAUDE_PLUGIN_ROOT}/bin/tuca-mode off ${CLAUDE_SESSION_ID} --data ${CLAUDE_PLUGIN_DATA}` and drop these rules. After a compaction or a resume, a SessionStart hook tells you the mode is still on; read this file again then.
+tuca-mode is on for the rest of this session, across every request, until Luiz says "stop tuca-mode" or the session ends. On "stop tuca-mode", drop these rules. Claude Code re-attaches an invoked skill after a compaction.
 
 Adapted from poteto's pstack (poteto-mode), MIT.
 

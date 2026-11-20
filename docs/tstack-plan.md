@@ -63,21 +63,15 @@ Skills take `paths:`, `context: fork`, `model`, `effort`; plugin agents take
 **Hooks.** One `hooks/hooks.json` calling one dispatcher,
 `${CLAUDE_PLUGIN_ROOT}/hooks/tstack-hook <event>` (Python, stdlib), which fans
 out to small handlers and must stay under ~100 ms. Handlers: memo wake
-(SessionStart), jj hints (SessionStart, when `.jj` exists), mode re-injection
-(SessionStart on compact/resume, when the mode flag is set), fleet heartbeat
+(SessionStart), jj hints (SessionStart, when `.jj` exists), fleet heartbeat
 (PostToolUse, when `agent_id` is present and a ledger exists), memo nudge (Stop).
 
 **`/tuca-mode`.** pstack's poteto-mode, adapted: non-negotiables, the autonomy
 rules, the principle index, and a playbook router; the matched playbook's steps
 are copied into the todo list verbatim, skipped steps stay with a reason.
-Invoking it writes a flag in `CLAUDE_PLUGIN_DATA/sessions/<session_id>/tuca-mode`
-through a `!` line in the skill (`bin/tuca-mode on`, granted by the skill's
-`allowed-tools`; it runs once, at invocation). A skill-frontmatter hook was
-tried and rejected: it fires on the first matching event after the skill loads,
-not at invocation, and its environment lacked `CLAUDE_PLUGIN_DATA`. The skill
-text stays in the conversation, and after a compaction or resume the
-SessionStart hook re-injects a short summary, so the mode is sticky without a
-per-turn reminder. The coordinator behaviour (D2) lives in the mode: it starts
+Claude Code re-attaches an invoked skill after a compaction, so the mode keeps
+no flag and no hook re-injects it (the `bin/tuca-mode` flag and its SessionStart
+handler were dropped, 2026-11-20). The coordinator behaviour (D2) lives in the mode: it starts
 the ledger lazily, through the coordinator skill and the `fleet` CLI.
 
 **principles.** One skill, an index plus one file per principle (23 from

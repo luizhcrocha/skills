@@ -375,30 +375,6 @@ def jj_hints(hook):
     return JJ_HINTS.format(where=where)
 
 
-TUCA_MODE = """\
-# tuca-mode is on
-This session runs in /tstack:tuca-mode; the compaction or resume dropped its text, so read {skill} before the next real task.
-- Each new request: a real task → match a playbook from that file's list, open a fresh todo list whose first items are the playbook's steps copied verbatim (a skipped step stays as `skip: <reason>`), then work it. A casual turn → just answer.
-- Coordinator mindset: delegate what a fresh window does as well, in the background; each subagent's role in docs/models.md sets its model and effort (Fable only for one decisive agent, never fan-out); you own their output.
-- Reversible work proceeds. A push goes without asking only when `land-check` says it will not deploy; force-push, deploys, deletion and messages to people wait for Luiz's yes.
-- Read the leaf in {principles}/ for any principle you apply, and name the principles that shaped a decision.
-- Replies: short declarative sentences; every claim carries its evidence or a label (measured, inferred, guess); link only what you produced or read.
-- "stop tuca-mode" → run `{bin} off {session} --data {data}` and drop these rules."""
-
-
-def tuca_mode(hook):
-    """SessionStart after a compaction or resume: bring /tuca-mode back when its flag is set.
-    The flag is written by scripts/tuca-mode when the skill loads."""
-    if hook.is_worker or str(hook.input.get("source") or "") not in ("compact", "resume"):
-        return None
-    safe = re.sub(r"[^A-Za-z0-9_.-]", "_", hook.session_id) or "unknown"
-    if not (hook.data_dir / "sessions" / safe / "tuca-mode").is_file():
-        return None
-    return TUCA_MODE.format(skill=ROOT / "skills" / "engineering" / "tuca-mode" / "SKILL.md",
-                            principles=ROOT / "skills" / "engineering" / "principles",
-                            bin=ROOT / "bin" / "tuca-mode", session=hook.session_id, data=hook.data_dir)
-
-
 class Block(str):
     """What a Stop handler returns to keep the turn going: the text becomes the block's reason."""
 
@@ -1650,7 +1626,7 @@ def _rm_shown(path, home):
 
 
 HANDLERS = {
-    "SessionStart": [memo_start, jj_hints, tuca_mode, tape_build, side_panes_reset],
+    "SessionStart": [memo_start, jj_hints, tape_build, side_panes_reset],
     "Stop": [ask_flag],
     "UserPromptSubmit": [ask_clear, suspend_hint, side_panes],
     "PreToolUse": [push_attribution, rm_guard, spawn_effort],
