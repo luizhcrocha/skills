@@ -22,8 +22,8 @@ The upstream sync (`scripts/sync_upstream.py`, overlay mode) adds to a synced sk
 | pstack-models.mdc | docs/models.md (roles) |
 | generalPurpose | general-purpose |
 | AskQuestion | AskUserQuestion |
-| create-skill | tstack:writing-for-agents |
-| /visualize | tstack:show-me |
+| create-skill | none: tstack dropped writing-for-agents (Luiz, 2026-11-20) |
+| /visualize | none: tstack dropped show-me (Luiz, 2026-11-20) |
 | principle-fix-root-causes | tstack:principles |
 | principle-redesign-from-first-principles | tstack:principles |
 | redesign-from-first-principles | tstack:principles |

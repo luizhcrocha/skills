@@ -83,7 +83,6 @@
     "./skills/productivity/fork-tab",
     "./skills/productivity/orchestrate",
     "./skills/productivity/deliver",
-    "./skills/productivity/show-me",
     "./skills/productivity/rename-yourself",
     "./skills/productivity/teach",
     "./skills/productivity/unblock",
@@ -92,7 +91,6 @@
     "./skills/productivity/ketchup",
     "./skills/productivity/ketchup-video",
     "./skills/productivity/in-your-own-words",
-    "./skills/productivity/writing-for-agents",
     "./skills/productivity/unslop",
     "./skills/productivity/technical-writing",
     "./skills/productivity/automate-me"

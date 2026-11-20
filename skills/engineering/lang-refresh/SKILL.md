@@ -50,7 +50,7 @@ ws-add lang-refresh -r 'trunk()'
 
 If the workspace exists, run `jj workspace update-stale` in it and start from `trunk()` again. Then, per skill with a verdict of adopt or breaking, one change that is a child of `trunk()` (`jj new 'trunk()'`), so Luiz can take each skill on its own:
 
-1. Edit the rules the verdict named, in SKILL.md or its references, written through `tstack:unslop` and `tstack:writing-for-agents`.
+1. Edit the rules the verdict named, in SKILL.md or its references, written through `tstack:unslop`.
 2. In `references/sources.md`, update each checked row: version targeted, checked on (today), and the URL when the notes moved.
 3. Describe it in the repo's style, the evidence in the body: `jj describe -m "lang-<id>: <what changed, in words>"`, with one line per moved row (item, old → new version, release-notes URL).
 

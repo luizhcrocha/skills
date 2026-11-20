@@ -88,7 +88,8 @@ map = [
   { from = "skills/productivity/teach", to = "skills/productivity/teach", mode = "overlay" },
   # wait-what is ours as bro (2026-09-30): pstack's bro merged into its text.
   { from = "skills/productivity/wait-what", to = "skills/productivity/bro", mode = "mirror" },
-  { from = "skills/productivity/writing-for-agents", to = "skills/productivity/writing-for-agents", mode = "overlay" },
+  # writing-for-agents: dropped (Luiz, 2026-11-20); our old copy sits in skills/deprecated/writing-for-agents.
+  { from = "skills/productivity/writing-for-agents", to = "skills/deprecated/writing-for-agents", mode = "mirror" },
 ]
 
 # poteto's pstack (MIT). Each overlap is decided with Luiz (docs/tstack-plan.md,

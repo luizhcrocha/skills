@@ -42,4 +42,4 @@ Keep each visual small enough to read at a glance: at most six boxes, with at mo
 
 Embed screenshots and videos inline when the change is visible, not only as links. If a visible change has none, mark its summary line "No screenshot yet," and say there what changed on screen. Draw diagrams and charts from facts you have: a Mermaid diagram for how things connect and a `/visualize` chart for numbers. Never invent a number, and never draw or generate a picture of a screen you did not capture. Link only artifacts that exist.
 
-Names here: /visualize → tstack:show-me
+Names here: /visualize → none: tstack dropped show-me (Luiz, 2026-11-20)
