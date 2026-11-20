@@ -1,6 +1,6 @@
 # Workspace prune
 
-**You own the safety gate. Remove only finished jj workspaces, only on Luiz's yes.** Deletion pauses, and these checks are the review. With `fleet` on PATH, `fleet ws <dashboard-dir> prune` runs them for the workspaces fleet made (dry run by default; `--apply` after Luiz's yes); the rest go by hand.
+**You own the safety gate. Remove only finished jj workspaces, only on Luiz's yes.** Deletion pauses, and these checks are the review.
 
 1. `jj workspace list` from the main workspace, each with its directory (`jj workspace root --name <ws>`). Paths come from jj, never typed.
 2. A workspace is a candidate only when all hold:

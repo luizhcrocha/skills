@@ -40,24 +40,18 @@ Done when the card renders on every page at 1440 and 390 px and changing the JSO
 
 ## The watch
 
-Marks reach you only through a live picasso watch of your session that hears the preview's page-id. Under `fleet preview`, serve the preview in root mode (`fleet preview <dir> set --root`, then stop and start the preview): a preview under the preview server's shared address (`/f/<fleet>/preview/`) shares one page-id with every fleet's preview there, so no watch can take its marks alone. Arm the watch when you arm the chat watch, and confirm it before every round:
+Marks reach you only through a live picasso watch of your session that hears the preview's page-id. Arm the watch when you arm the chat watch, and confirm it before every round:
 
 1. Claim the page: `picasso claim <page-id> --as <role>`.
 2. Start push: invoke the `picasso` skill. Invoking it starts a monitor that delivers each batch of marks into the chat, with no timeout to rearm.
 3. Without push (no `picasso:picasso` in your skills list, `claude -p`, or the Monitor tool off), run `picasso watch --page-id <page-id> --timeout 600` with `run_in_background`, and rearm it on every exit. After a batch, rearm with `--after <cursor>` from its output. After a timeout (`"code": "timeout"`), rearm with the last cursor you had, or with no `--after`. A timeout that is not rearmed leaves no watch: in the 2026-10-19 case, that is how two marks went unseen for 25 minutes.
-4. Confirm it: `fleet preview <dir> status` warns when no live watch hears the preview's page-id. Without a fleet preview, `picasso claims` must show your session `present`, with `watches` above 0 and the page-id in its claims.
+4. Confirm it: `picasso claims` must show your session `present`, with `watches` above 0 and the page-id in its claims.
 
-Done when the preview runs in root mode and `fleet preview <dir> status` prints no watch warning, or, without a fleet preview, `picasso claims` shows the watch.
+Done when `picasso claims` shows the watch.
 
 ## Workers and the preview
 
-Under `fleet preview`, the updater merges every worker's workspace into the preview every 3 s (the `coordinator` skill's DASHBOARD.md, the preview rows). Half-built work would then show on the reviewer's page. So:
-
-- Add every round worker and fast-lane worker out of the preview: `fleet ws <dir> add <worker> --no-preview`.
-- Check a worker's change on its own preview: `fleet preview <dir> start --per-worker <worker>` serves its workspace alone, at the address `start` prints. Stop it after the check: `fleet preview <dir> stop --per-worker <worker>`.
-- Put the change live only once it passes: `fleet preview <dir> include <worker>`. The merge keeps it until it lands, so a later round does not remove it. Pruning the workspace (`fleet ws <dir> prune --apply`) drops it from the merge, so do not prune a fast-lane workspace before its fix lands.
-
-On a plain preview workspace (no `fleet preview`), the preview serves only the change its `@` is on. Check a worker's change on a dev server of its own, in its workspace, on a free port. Put it live with `jj new <change>` in the preview's workspace.
+The preview serves only the change its `@` is on. Check a worker's change on a dev server of its own, in its workspace, on a free port. Put it live with `jj new <change>` in the preview's workspace.
 
 ## The mark fast lane
 
@@ -66,7 +60,7 @@ A mark goes ahead of every backlog item and of the round being built:
 1. **Reply at once**, before reading code: `picasso mark-reply <id> "<what will change>"`. A mark that needs a decision, another agent or a round gets that reply instead (step 1 of a round). Done when the mark has a reply within 5 minutes of its delivery.
 2. **Fix it alone.** One change per mark, or per batch of marks that arrived together, given to a fresh worker added out of the preview (worker sizing, step 2 of a round; "Workers and the preview"). On a plain preview, the worker builds on the change the preview serves, so the fixes stack. The fix never folds into the round's backlog. Done when the change is described.
 3. **Check only what it touches**, before it goes live: a scoped run of the round check (step 4 of a round) on the worker's own preview, on the pages the mark touches at the default width and scheme, with a `--check` for the mark. Done when every line passes.
-4. **Ship it live**: `fleet preview <dir> include <worker>`, or `jj new <change>` in a plain preview's workspace. Done when the fix shows on the preview.
+4. **Ship it live**: `jj new <change>` in the preview's workspace. Done when the fix shows on the preview.
 5. **Close it**: reply naming the change, then `picasso mark-done <id>`.
 
 ## Running a round
@@ -80,7 +74,7 @@ A mark goes ahead of every backlog item and of the round being built:
 
    Done when every open mark has a reply.
 2. **Brief the round.** List the round's items in priority order, and a hold list of work paused until a decision. Give the round a fresh worker, and ask for its report at about 120k tokens of context, finished or not: a round's checks and screenshots fill a context fast. In the 2026-10-19 case, five workers reached 190k to 240k tokens, and each paid a handoff. Its brief carries `LAYOUT.md`, the contract and the round check's absolute path, so it starts without rereading the series. In the round JSON, raise `round` by one, set `state` to `"building"`, `next` to what is coming, and `updated` to now. Done when the card on the live page says building.
-3. **Build in a second workspace.** Build the round in a workspace of its own, out of the preview (`fleet ws <dir> add <worker> --no-preview`, or `jj workspace add` on a plain preview), never in the preview's. A mark that arrives meanwhile takes the fast lane, or folds into the hold list. After each item, run the round check on the pages it touches, at its defaults. Done when every item in the brief is built or reported as left out.
+3. **Build in a second workspace.** Build the round in a workspace of its own, out of the preview (`ws-add <worker>`), never in the preview's. A mark that arrives meanwhile takes the fast lane, or folds into the hold list. After each item, run the round check on the pages it touches, at its defaults. Done when every item in the brief is built or reported as left out.
 4. **Verify** with the round check, [`round-check.mjs`](../scripts/round-check.mjs) in tstack's `local/scripts/`, in headless Chromium, never the reviewer's browser. Every worker runs this script and writes none of its own. In the 2026-10-19 case, a hand-written one split each URL on `=`, cut `?l=` off and opened no page, so its checks proved nothing. Pass each page as its full URL, query included:
 
    ```sh
@@ -88,7 +82,7 @@ A mark goes ahead of every backlog item and of the round being built:
    ```
 
    Its defaults are the scoped check of a fast-lane fix or a built item: one width (1440) and one scheme (light), on the pages the change touches. Before the swap, run the full matrix once on the round's own preview: every page with `--scheme light,dark --width 1440,390`. `--criteria <selector>` reads the criteria tab's numbers into each line; `--check` takes one expression per mark the round answers (for example, counting cut labels or overlapping nodes). It writes `summary.txt` in `--out`, one line per load with its path, result and screenshot, and exits 1 when a load fails, the browser dies or a page hangs past `--timeout`. Screenshots that show client data stay in the scratchpad. Done when every line of the summary passes.
-5. **Swap.** Under `fleet preview`, run `fleet preview <dir> include <round worker>`; the fast-lane fixes stay in the merge beside it. On a plain preview, first rebase the round onto the last fast-lane fix the preview serves, so the swap keeps every fix: `jj rebase -b <round change> -o <last fix>`. Then, in the preview's workspace, run `jj workspace update-stale` and `jj new <round change>`. The full matrix ran on the round's own preview, without the fast-lane fixes, so check the combined one now: a scoped run of the round check on the preview's address, on the pages the round and the fast-lane fixes touch, with their `--check`s. Done when that run passes, the reviewer's page serves the new round, and the round card still loads.
+5. **Swap.** First rebase the round onto the last fast-lane fix the preview serves, so the swap keeps every fix: `jj rebase -b <round change> -o <last fix>`. Then, in the preview's workspace, run `jj workspace update-stale` and `jj new <round change>`. The full matrix ran on the round's own preview, without the fast-lane fixes, so check the combined one now: a scoped run of the round check on the preview's address, on the pages the round and the fast-lane fixes touch, with their `--check`s. Done when that run passes, the reviewer's page serves the new round, and the round card still loads.
 6. **Close the marks.** Reply on each mark the round answered, naming the round, then `picasso mark-done <id>`. A mark is closed only after it has its reply. Set the round JSON's `state` to `"idle"`, `next` to the proposed next round or empty, and `updated` to now. Done when no mark answered by this round is open.
 7. **Report.** Keep it short: what changed, mark by mark; what is real and what is simulated; what is still rough; what was left out and why; what waits on the reviewer.
 

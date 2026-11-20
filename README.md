@@ -218,11 +218,3 @@ General workflow tools, not code-specific.
 - **[ketchup-video](./skills/productivity/ketchup-video/SKILL.md)** — `/ketchup-video`: the `/ketchup` catch-up as a short subtitled slide video, with the waiting calls as text under it. From poteto's pstack.
 - **[in-your-own-words](./skills/productivity/in-your-own-words/SKILL.md)** — `/in-your-own-words`: the agent restates what it thinks your goals are and the problem you are solving, so you can check it understood. From poteto's pstack.
 
-### Misc
-
-Tools I keep around but rarely use.
-
-- **[git-guardrails-claude-code](./skills/misc/git-guardrails-claude-code/SKILL.md)** — Set up Claude Code hooks to block dangerous git commands (push, reset --hard, clean, etc.) before they execute.
-- **[migrate-to-shoehorn](./skills/misc/migrate-to-shoehorn/SKILL.md)** — Migrate test files from `as` type assertions to @total-typescript/shoehorn.
-- **[scaffold-exercises](./skills/misc/scaffold-exercises/SKILL.md)** — Create exercise directory structures with sections, problems, solutions, and explainers.
-- **[setup-pre-commit](./skills/misc/setup-pre-commit/SKILL.md)** — Set up Husky pre-commit hooks with lint-staged, Prettier, type checking, and tests.

@@ -17,9 +17,6 @@ _Avoid_: ticket (use only when quoting external systems that call them tickets)
 **Triage role**:
 A canonical state-machine label applied to an **Issue** during triage (e.g. `needs-triage`, `ready-for-afk`). Each role maps to a real label string in the **Issue tracker** via `docs/agents/triage-labels.md`.
 
-**Link**:
-An address a fleet records for the user (`fleet state DIR link`): a page, a file or a service, with what the user does there.
-
 **Link kind**:
 What a **Link** is to the user: preview, prototype, doc, tool or service; an old `dev` or `page` row is read as one when shown.
 _Avoid_: link type
