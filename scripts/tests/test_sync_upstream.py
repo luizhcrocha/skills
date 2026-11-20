@@ -251,6 +251,167 @@ watch = true
         self.assertNotEqual(p.returncode, 0)
         self.assertIn("watch-only", p.stderr)
 
+    # --- mirror, and per-entry modes ---
+
+    TDD_MAP = '{ from = "skills/tdd", to = "skills/eng/test-strategy" }'
+
+    def set_mode(self, mode):
+        text = self.manifest.read_text().replace(self.TDD_MAP, self.TDD_MAP[:-2] + f', mode = "{mode}" }}')
+        self.manifest.write_text(text)
+
+    def tree(self):
+        return {p.relative_to(self.local).as_posix(): p.read_bytes() for p in self.local.rglob("*") if p.is_file()}
+
+    SKILL_MD = "skills/eng/test-strategy/SKILL.md"
+    LINK = "Local changes (tstack): [local/test-strategy.md](../../../local/test-strategy.md)"
+
+    def test_mirror_written_and_pruned(self):
+        self.run_sync()
+        self.assertEqual(self.read_local("upstream/demo/skills/tdd/SKILL.md"), BASE_SKILL)
+        self.assertEqual(self.read_local("upstream/demo/skills/principle-a/SKILL.md"), "principle a\n")
+        self.assertFalse((self.local / "upstream/demo/README.md").exists())  # unmapped: not mirrored
+        self.assertFalse((self.local / "upstream/demo/skills/old").exists())
+        (self.up / "pkg/skills/tdd/notes.md").unlink()
+        self.commit_up("remove")
+        self.run_sync()
+        self.assertFalse((self.local / "upstream/demo/skills/tdd/notes.md").exists())
+        self.assertTrue((self.local / "skills/eng/test-strategy/notes.md").exists())  # merge mode keeps it
+
+    def test_overlay_overwrites_and_deletes_files_gone_upstream(self):
+        self.set_mode("overlay")
+        self.write_local(self.SKILL_MD, BASE_SKILL.replace("line 1", "local 1"))
+        self.write_local("skills/eng/test-strategy/ours.md", "local only\n")
+        self.write_local("skills/eng/principles/b.md", "ours\n")  # merge entry: kept
+        (self.up / "pkg/skills/tdd/notes.md").unlink()
+        self.write_up("pkg/skills/tdd/extra.md", "extra\n")
+        self.write_up("pkg/skills/tdd/SKILL.md", BASE_SKILL.replace("line 5", "upstream 5"))
+        head = self.commit_up("update")
+        out = self.run_sync()
+        self.assertEqual(self.read_local(self.SKILL_MD), BASE_SKILL.replace("line 5", "upstream 5"))
+        self.assertEqual(self.read_local("skills/eng/test-strategy/extra.md"), "extra\n")
+        self.assertFalse((self.local / "skills/eng/test-strategy/notes.md").exists())
+        self.assertFalse((self.local / "skills/eng/test-strategy/ours.md").exists())
+        self.assertEqual(self.read_local("skills/eng/principles/b.md"), "ours\n")
+        self.assertIn("removed skills/eng/test-strategy/notes.md", out)
+        self.assertNotIn("CONFLICTED", out)
+        self.assertEqual(self.recorded_base(), head)
+
+    UP_FM = """\
+---
+name: tdd
+description: >
+  Upstream: test first,
+  always.
+disable-model-invocation: true
+argument-hint: "<x: y>"
+---
+# TDD
+
+Use poteto-mode here, not grill-meister.
+"""
+
+    def overlay_with_frontmatter(self, local_md=None, names=None):
+        self.set_mode("overlay")
+        self.write_up("pkg/skills/tdd/SKILL.md", self.UP_FM)
+        self.commit_up("frontmatter")
+        if local_md is not None:
+            self.write_local("local/test-strategy.md", local_md)
+        if names is not None:
+            self.write_local("local/NAMES.md", names)
+
+    def test_frontmatter_override_and_removal(self):
+        self.overlay_with_frontmatter(
+            '---\nname: test-strategy\ndescription: "Ours: tests, first"\ndisable-model-invocation: ~\n---\n'
+        )
+        self.run_sync()
+        self.assertEqual(self.read_local(self.SKILL_MD), """\
+---
+name: test-strategy
+description: "Ours: tests, first"
+argument-hint: "<x: y>"
+---
+# TDD
+
+Use poteto-mode here, not grill-meister.
+""")  # no body, no NAMES.md: no generated line
+
+    NAMES = """\
+# Names
+
+| upstream | ours |
+|---|---|
+| `poteto-mode` | `tstack:tuca-mode` |
+| grill-me | tstack:grilling |
+"""
+
+    def test_generated_line_with_local_body(self):
+        self.overlay_with_frontmatter("---\nname: test-strategy\n---\n\nWe test first.\n")
+        self.run_sync()
+        text = self.read_local(self.SKILL_MD)
+        self.assertTrue(text.startswith("---\nname: test-strategy\ndescription: >\n  Upstream"), text)
+        self.assertTrue(text.endswith("not grill-meister.\n\n" + self.LINK + "\n"), text)
+
+    def test_generated_line_with_names(self):
+        self.overlay_with_frontmatter("We test first.\n", self.NAMES)
+        self.run_sync()
+        text = self.read_local(self.SKILL_MD)
+        self.assertTrue(text.startswith(self.UP_FM), text)  # no frontmatter in local: upstream's kept
+        self.assertTrue(text.endswith(
+            "\n\n" + self.LINK + " · Names here: poteto-mode → tstack:tuca-mode\n"
+        ), text)  # grill-me only occurs inside grill-meister: no match
+
+    def test_generated_line_names_only_without_local_body(self):
+        self.overlay_with_frontmatter(names=self.NAMES)
+        self.run_sync()
+        self.assertTrue(self.read_local(self.SKILL_MD).endswith(
+            "grill-meister.\n\nNames here: poteto-mode → tstack:tuca-mode\n"
+        ))
+
+    def test_overlay_rerun_is_idempotent(self):
+        self.overlay_with_frontmatter("---\nname: test-strategy\nx: ~\n---\nWe test first.\n", self.NAMES)
+        self.run_sync()
+        before = self.tree()
+        out = self.run_sync()
+        self.assertEqual(self.tree(), before)
+        self.assertNotIn("Overlaid", out)
+        self.assertNotIn("Post-processed", out)
+
+    def test_mirror_mode_leaves_target_untouched(self):
+        self.set_mode("mirror")
+        self.write_local(self.SKILL_MD, "ours\n")
+        self.write_up("pkg/skills/tdd/SKILL.md", BASE_SKILL.replace("line 5", "upstream 5"))
+        self.write_up("pkg/skills/tdd/extra.md", "extra\n")
+        head = self.commit_up("update")
+        self.run_sync()
+        self.assertEqual(self.read_local(self.SKILL_MD), "ours\n")
+        self.assertFalse((self.local / "skills/eng/test-strategy/extra.md").exists())
+        self.assertEqual(self.read_local("upstream/demo/skills/tdd/extra.md"), "extra\n")
+        self.assertEqual(self.read_local("upstream/demo/skills/tdd/SKILL.md"), BASE_SKILL.replace("line 5", "upstream 5"))
+        self.assertEqual(self.recorded_base(), head)
+
+    def test_overlay_dry_run_writes_nothing_and_reports(self):
+        self.overlay_with_frontmatter("We test first.\n")
+        (self.up / "pkg/skills/tdd/notes.md").unlink()
+        self.commit_up("remove")
+        before = self.tree()
+        out = self.run_sync("--dry-run")
+        self.assertEqual(self.tree(), before)
+        self.assertIn("Mirrored to upstream/demo/", out)
+        self.assertIn("    added upstream/demo/skills/tdd/SKILL.md", out)
+        self.assertIn("    updated skills/eng/test-strategy/SKILL.md", out)
+        self.assertIn("    removed skills/eng/test-strategy/notes.md", out)
+        self.assertIn("Post-processed", out)
+        self.assertIn("    skills/eng/test-strategy/SKILL.md (local line)", out)
+
+    def test_unknown_mode_is_refused(self):
+        self.set_mode("bogus")
+        p = subprocess.run(
+            [sys.executable, str(SCRIPT), "--root", str(self.local), "--upstream", "demo"],
+            capture_output=True, text=True,
+        )
+        self.assertNotEqual(p.returncode, 0)
+        self.assertIn("mode", p.stderr)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -7,7 +7,7 @@
 #   branch  optional branch (default: the remote's default branch)
 #   base    upstream commit last synced; the 3-way merge base. The sync rewrites
 #           it after a run with no conflicts. Merge a new mapping from this commit.
-#   map     [{ from, to }]: only mapped paths sync. `from` is an upstream path
+#   map     [{ from, to, mode }]: only mapped paths sync. `from` is an upstream path
 #           pattern (`*` within a segment, `**` across segments) matching a file
 #           or a leading directory of it (the rest of the path is appended to
 #           `to`); `{1}`, `{2}`... in `to` take what the wildcards matched. First
@@ -15,11 +15,31 @@
 #             { from = "skills/tdd", to = "skills/engineering/test-strategy" }            # dir -> dir
 #             { from = "skills/tdd/SKILL.md", to = "skills/engineering/test-strategy/pstack-tdd.md" }  # file -> file
 #             { from = "skills/principle-*/SKILL.md", to = "skills/engineering/principles/{1}.md" }   # glob
+#           `mode` says what the sync does to `to`:
+#             "merge"    (default) 3-way merge upstream changes into our copy
+#             "mirror"   never write `to`: it is ours (a merged or reworked skill)
+#             "overlay"  `to` becomes exactly upstream's (files not upstream
+#                        deleted), then its SKILL.md is post-processed (below)
+#             { from = "skills/engineering/code-review", to = "skills/engineering/review", mode = "overlay" }
 #   units   patterns naming the units unmapped content is reported by
 #           (default: the top-level entry)
 #   ignore  patterns never reported as unmapped (decided: not wanted)
 #   watch   true: read for ideas, never copied (no map allowed). The report lists
 #           commits and changed files since `base`; `--diff` prints the diff.
+#
+# Every mapped file, whatever its mode, is also mirrored verbatim to
+# upstream/<name>/<from path>: overwritten each run, pruned when gone upstream,
+# never edited by hand, never loaded as a skill.
+#
+# Overlay post-processing reads two files of ours, which the sync never writes:
+#   local/<skill>.md  <skill> is the `to` folder's basename. An optional leading
+#           frontmatter block replaces SKILL.md's same keys (`key: ~` removes
+#           upstream's key). The body is our changes, for the agent to read
+#           through the line appended to SKILL.md; it is never copied in.
+#   local/NAMES.md    a markdown table, upstream name | our name. Each row whose
+#           upstream name occurs as a whole word in the skill's .md files is
+#           listed on that line. The line, only when there is something to show:
+#             Local changes (tstack): [local/<skill>.md](<relative path>) · Names here: poteto-mode → tstack:tuca-mode
 
 [upstream.mattpocock]
 url = "https://github.com/mattpocock/skills.git"
