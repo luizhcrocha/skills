@@ -1297,6 +1297,88 @@ def _cap_ask(hook, count, limit):
             "refuses that command from an agent.")
 
 
+# The context wall (Luiz, 2026-11-20): a subagent past WALL_TOKENS of context hands off instead of working on; a fresh
+# agent continues from its handoff. Its context is the last assistant message's usage in its own transcript, which
+# Claude Code keeps at <session>/subagents/agent-<agent_id>.jsonl (the hook's transcript_path is the session's).
+# docs/models.md's 150k is the early nudge; a session's main thread restarts by tuca-mode's line 7.
+WALL_TOKENS = 200_000
+WALL_TAIL = 1024 * 1024
+WALL_TEXT = ("tstack: past 200k context: write your handoff (tstack:handoff) to /tmp and report; a fresh agent "
+             "continues from it. Only a handoff-*.md under $TMPDIR or /tmp, the handoff skill, ToolSearch, "
+             "SubagentHandback, SendMessage to the agent that spawned you and TaskStop of yourself still run.")
+WALL_FREE = ("SubagentHandback", "ToolSearch")
+
+
+def context_wall(hook):
+    """PreToolUse (every tool): a subagent whose context is past WALL_TOKENS (the comment above) is refused every call
+    but its handoff and its report. A context it cannot read lets the call through, logged."""
+    agent = hook.input.get("agent_id")
+    if not isinstance(agent, str) or not agent:
+        return None
+    try:
+        tokens, meta = _wall_context(hook, agent)
+    except Exception:  # noqa: BLE001 - fail open
+        log(hook.data_dir, f"PreToolUse context_wall read no context for agent {agent}; let the call through\n"
+                           f"{traceback.format_exc()}")
+        return None
+    if tokens <= WALL_TOKENS or _wall_allows(hook, agent, meta):
+        return None
+    return Deny(WALL_TEXT)
+
+
+def _wall_context(hook, agent):
+    """The agent's context in tokens, from its transcript's last assistant usage, and its meta ({} when none)."""
+    transcript = hook.input.get("transcript_path")
+    if not isinstance(transcript, str) or not transcript.endswith(".jsonl"):
+        raise ValueError(f"no session transcript_path to find the agent's by: {transcript!r}")
+    folder = Path(transcript[:-len(".jsonl")]) / "subagents"
+    if Path(transcript).parent.name == "subagents":  # already the agent's own
+        folder = Path(transcript).parent
+    with open(folder / f"agent-{agent}.jsonl", "rb") as f:
+        f.seek(0, os.SEEK_END)
+        f.seek(max(0, f.tell() - WALL_TAIL))
+        lines = f.read().splitlines()
+    for line in reversed(lines):
+        if b'"assistant"' not in line or b'"usage"' not in line:
+            continue
+        try:
+            entry = json.loads(line)
+        except ValueError:
+            continue
+        usage = entry.get("message", {}).get("usage") if entry.get("type") == "assistant" else None
+        if isinstance(usage, dict):
+            tokens = sum(int(usage.get(k) or 0) for k in
+                         ("input_tokens", "cache_read_input_tokens", "cache_creation_input_tokens"))
+            try:
+                meta = json.loads((folder / f"agent-{agent}.meta.json").read_text())
+            except (OSError, ValueError):
+                meta = {}
+            return tokens, meta if isinstance(meta, dict) else {}
+    raise ValueError(f"no assistant usage in the last {WALL_TAIL} bytes of agent-{agent}.jsonl")
+
+
+def _wall_allows(hook, agent, meta):
+    """The calls a subagent past the wall still makes: its handoff, and its report to whoever spawned it."""
+    name = hook.input.get("tool_name")
+    args = hook.input.get("tool_input") if isinstance(hook.input.get("tool_input"), dict) else {}
+    if name in WALL_FREE:
+        return True
+    if name == "Skill":
+        return str(args.get("skill") or "").split(":")[-1] == "handoff"
+    if name == "SendMessage":
+        return args.get("to") in {"main", meta.get("parentAgentId") or "main"}
+    if name == "TaskStop":
+        return args.get("task_id") == agent
+    if name in ("Write", "Edit"):
+        path = args.get("file_path")
+        if not isinstance(path, str) or not os.path.isabs(path) or "handoff" not in os.path.basename(path).lower():
+            return False
+        real = os.path.realpath(path)
+        roots = {os.path.realpath(r) for r in (hook.env.get("TMPDIR"), "/tmp") if r}
+        return any(real.startswith(r.rstrip("/") + "/") for r in roots)
+    return False
+
+
 def rm_guard(hook):
     """PreToolUse (Bash, Monitor): a recursive delete whose operand can expand to what nobody read, or names `/`, a
     folder above HOME, HOME, a dot-folder of it or a folder two deep in ~/.config, is denied (the comment above). Any
@@ -1796,10 +1878,10 @@ HANDLERS = {
     "SessionStart": [memo_start, jj_hints, tape_build, side_panes_reset],
     "Stop": [ask_flag],
     "UserPromptSubmit": [ask_clear, suspend_hint, side_panes],
-    "PreToolUse": [push_attribution, rm_guard, spawn_effort, agent_cap],
+    "PreToolUse": [context_wall, push_attribution, rm_guard, spawn_effort, agent_cap],
 }
 
-GUARDS = frozenset({push_attribution, rm_guard, spawn_effort, agent_cap})
+GUARDS = frozenset({context_wall, push_attribution, rm_guard, spawn_effort, agent_cap})
 
 # Past the 30 s hooks.json gives a Bash PreToolUse hook, Claude Code discards its output and runs the call, so a deny
 # must be out before them. Each guard's calls have their own limits, which can add up to more (two pushes in a command).

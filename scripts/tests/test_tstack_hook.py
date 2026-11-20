@@ -1144,6 +1144,86 @@ class AgentCapTest(HookCase):
         self.assertIn("NotADirectoryError", self.log())
 
 
+class ContextWallTest(HookCase):
+    """context_wall (PreToolUse, every tool): a subagent past 200k tokens of context may only write its handoff to the
+    temp dir and report back (Luiz, 2026-11-20). Its context: the last assistant message's usage in its own transcript,
+    <session>/subagents/agent-<id>.jsonl. A session's main thread is tuca-mode's line 7's to restart."""
+
+    def setUp(self):
+        super().setUp()
+        self.subagents = self.tmp / "transcript" / "subagents"
+        self.subagents.mkdir(parents=True)
+        self.tmpdir = self.tmp / "tmpdir"
+        self.tmpdir.mkdir()
+        self.env["TMPDIR"] = str(self.tmpdir)
+
+    def context(self, tokens, agent="a1", **meta):
+        line = {"type": "assistant", "agentId": agent, "message": {"role": "assistant", "content": [], "usage": {
+            "input_tokens": 10, "cache_creation_input_tokens": 1000, "cache_read_input_tokens": tokens - 1010,
+            "output_tokens": 500}}}
+        (self.subagents / f"agent-{agent}.jsonl").write_text(
+            json.dumps(said("go")) + "\n" + json.dumps(line) + "\n" + json.dumps({"type": "api-request"}) + "\n")
+        (self.subagents / f"agent-{agent}.meta.json").write_text(json.dumps({"toolUseId": "toolu_x", **meta}))
+
+    def call(self, tool_name, tool_input, agent="a1"):
+        payload = {**self.base("PreToolUse"), "tool_name": tool_name, "tool_input": tool_input}
+        if agent:
+            payload.update(agent_id=agent, agent_type="general-purpose")
+        r = self.hook("PreToolUse", payload)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        return json.loads(r.stdout).get("hookSpecificOutput", {}) if r.stdout.strip() else {}
+
+    def test_under_the_wall_a_subagent_works(self):
+        self.context(150_000)
+        self.assertEqual(self.call("Bash", {"command": "ls"}), {})
+        self.assertEqual(self.call("Read", {"file_path": str(self.repo / "x")}), {})
+
+    def test_past_the_wall_a_subagent_is_refused_its_work(self):
+        self.context(210_000)
+        for tool, args in (("Bash", {"command": "ls"}), ("Read", {"file_path": str(self.repo / "x")}),
+                           ("Edit", {"file_path": str(self.repo / "x"), "old_string": "a", "new_string": "b"}),
+                           ("Write", {"file_path": str(ROOT / "handoff.md"), "content": "x"}),
+                           ("Write", {"file_path": f"{self.tmpdir}{'/..' * 12}/etc/handoff.md", "content": "x"}),
+                           ("Write", {"file_path": "/tmp/notes.md", "content": "x"}),
+                           ("Agent", {"description": "x", "prompt": "p", "model": "opus", "effort": "high"}),
+                           ("SendMessage", {"to": "someone-else", "message": "x"}),
+                           ("TaskStop", {"task_id": "a2"})):
+            with self.subTest(tool, **args):
+                d = self.call(tool, args)
+                self.assertEqual(d.get("permissionDecision"), "deny")
+                self.assertIn("past 200k context: write your handoff (tstack:handoff) to /tmp and report; a fresh "
+                              "agent continues from it", d["permissionDecisionReason"])
+
+    def test_past_the_wall_the_handoff_and_the_report_pass(self):
+        self.context(210_000)
+        for tool, args in (("Write", {"file_path": str(self.tmpdir / "handoff-cap.md"), "content": "x"}),
+                           ("Write", {"file_path": "/tmp/handoff-cap.md", "content": "x"}),
+                           ("Edit", {"file_path": "/tmp/handoff-cap.md", "old_string": "a", "new_string": "b"}),
+                           ("Skill", {"skill": "tstack:handoff"}),
+                           ("ToolSearch", {"query": "select:SendMessage"}),
+                           ("SubagentHandback", {"message": "report"}),
+                           ("SendMessage", {"to": "main", "message": "report"}),
+                           ("TaskStop", {"task_id": "a1"})):
+            with self.subTest(tool, **args):
+                self.assertEqual(self.call(tool, args), {})
+
+    def test_a_nested_subagent_reports_to_the_agent_that_spawned_it(self):
+        self.context(210_000, parentAgentId="p1")
+        self.assertEqual(self.call("SendMessage", {"to": "p1", "message": "report"}), {})
+
+    def test_the_main_session_is_untouched(self):
+        self.transcribe({"type": "assistant", "message": {"role": "assistant", "content": [], "usage": {
+            "input_tokens": 10, "cache_read_input_tokens": 300_000, "cache_creation_input_tokens": 0}}})
+        self.context(300_000)
+        self.assertEqual(self.call("Bash", {"command": "ls"}, agent=None), {})
+
+    def test_a_context_it_cannot_read_lets_the_call_through_and_says_why(self):
+        self.assertEqual(self.call("Bash", {"command": "ls"}, agent="gone"), {})
+        self.assertIn("context_wall", self.log())
+        (self.subagents / "agent-a1.jsonl").write_text('{"type": "assistant", "message": {"usage": "lots"}}\n{oops\n')
+        self.assertEqual(self.call("Bash", {"command": "ls"}), {})
+
+
 class HooksJsonTest(unittest.TestCase):
     def test_every_registered_event_is_dispatched(self):
         config = json.loads(HOOKS_JSON.read_text())
@@ -1156,10 +1236,10 @@ class HooksJsonTest(unittest.TestCase):
                 for h in group["hooks"]:
                     self.assertEqual(h["type"], "command")
                     self.assertEqual(h["command"], f'"${{CLAUDE_PLUGIN_ROOT}}/hooks/tstack-hook" {event}')
-                    self.assertLessEqual(h.get("timeout", 60), 30 if group.get("matcher") == "Bash|Monitor|Agent|Write|Edit|NotebookEdit" else 10)
+                    self.assertLessEqual(h.get("timeout", 60), 30 if group.get("matcher") == "*" else 10)
                     self.assertFalse(h.get("async", False), event)
         self.assertEqual(config["hooks"]["SessionStart"][0]["matcher"], "startup|resume|clear|compact")
-        self.assertEqual([g["matcher"] for g in config["hooks"]["PreToolUse"]], ["Bash|Monitor|Agent|Write|Edit|NotebookEdit"])
+        self.assertEqual([g["matcher"] for g in config["hooks"]["PreToolUse"]], ["*"])
         self.assertEqual([h.get("onFailure") for g in config["hooks"]["PreToolUse"] for h in g["hooks"]], ["block"])
         self.assertTrue(os.access(HOOK, os.X_OK))
         self.assertTrue(os.access(MEMO, os.X_OK))
