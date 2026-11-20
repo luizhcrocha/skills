@@ -54,7 +54,11 @@ validate:
 test-mods:
     for m in mods/*/; do claude plugin test "$m" || exit 1; done
 
-# Load master on GitHub into the installed plugin: refresh the marketplace, then update; fleet-host reloads the sessions (scripts/reload-plugins without fleet)
+# Load master on GitHub into the installed plugins, then /reload-plugins in every idle Claude Code pane: `fleet plugin update`, else the tstack steps and scripts/reload-plugins
 reinstall:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if command -v fleet >/dev/null; then exec fleet plugin update; fi
     claude plugin marketplace update tstack
     claude plugin update tstack@tstack
+    scripts/reload-plugins
