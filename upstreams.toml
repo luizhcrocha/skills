@@ -97,125 +97,70 @@ url = "https://github.com/cursor/plugins.git"
 subdir = "pstack"
 base = "4dd1d05818d19792e7cd6e818f1667f95f7e1dbe"
 units = ["skills/*", "agents/*", "automations/*"]
-# Decided, not copied: merged by hand into our own skill (tdd, 2026-09-30).
 ignore = [
-  "skills/tdd",
-  # decided: adapted by hand, 2026-09-30. why's SKILL.md, investigator prompt
-  # and source playbooks were rewritten for jj, Claude Code subagents and our
-  # sources (linear.md -> issue-tracker.md, notion.md -> docs.md, slack.md ->
-  # chat.md, datadog.md -> observability.md, sentry.md -> errors.md,
-  # databricks.md -> analytics.md, plus agent-memory.md); source-playbook.md
-  # became the table in SKILL.md. Only the files mapped below sync.
-  "skills/why",
-  # decided: adapted by hand, 2026-09-30. pstack's teach became our explain
-  # (skills/engineering/explain); our teach is mattpocock's.
-  "skills/teach",
-  # decided: adapted by hand, 2026-09-30. pstack's recall became the catch-up
-  # mode of our recall (skills/productivity/recall), on Claude Code
-  # transcripts through scripts/sessions.py, jj status tags and memo.
-  "skills/recall",
-  # decided: adapted by hand, 2026-09-30. reflect's and show-me-your-work's
-  # SKILL.md were rewritten for Claude Code (Opus reviewers, transcript lookup
-  # by session id, jj change in the tstack repo, memo); only the files mapped
-  # below sync.
-  "skills/reflect",
-  "skills/show-me-your-work",
-  # decided: adapted by hand, 2026-09-30 (jj changes, our skills in place of
-  # architect and arena). skills/engineering/figure-it-out.
-  "skills/figure-it-out",
-  # decided: merged into bro, 2026-09-30 (mattpocock's wait-what, renamed).
-  "skills/bro",
-  # decided: adapted by hand, 2026-09-30. arena and architect were rewritten
-  # for Claude Code: Opus runners under distinct constraints instead of three
-  # model families, one jj workspace per runner, tstack:how / why / arena
-  # pointers, architect's checkpoint off unless asked. Only the files mapped
-  # below sync.
-  "skills/arena",
-  "skills/architect",
   # decided: folded into review's Deep review (Luiz, 2026-11-04), taking
   # upstream's rule that a finding survives only when a run proves it (ab1f702).
   # It ran in 1 of 2,607 transcripts here. The maintainability lens, merged from
   # code-quality-review.md and cursor-team-kit's thermo-nuclear review, moved to
   # review/references/maintainability.md.
   "skills/interrogate",
-  # decided: adapted by hand, 2026-09-30. Both SKILL.md files were rewritten
-  # for Claude Code: .claude/skills/verify-<app>, claude-in-chrome for web
-  # (Playwright's _electron for packaged Electron), tmux or direct commands for
-  # CLIs and TUIs, Claude Code's run skill, Sonnet source readers, a jj change
-  # instead of a PR, model-invocable. Only the feature-map example maps.
-  "skills/create-verification-skill",
-  "skills/maintain-verification-skill",
-  # decided: adapted by hand, 2026-09-30. automate-me refreshes the one mode,
-  # tuca-mode, from Claude Code transcripts (scripts/human-turns, Sonnet
-  # readers, jj changes for review) instead of drafting a new -mode skill.
-  "skills/automate-me",
-  # decided: adapted by hand, 2026-09-30. swarm runs background Agent calls on
-  # this machine (no cloud workers), Sonnet or Opus by the worker's job, one jj
-  # workspace per code-writing worker, model-invocable.
-  "skills/swarm",
   # decided: merged into lang-ts by hand, 2026-09-30. No file kept verbatim;
   # what was taken and rejected is in skills/engineering/lang-ts/references/sources.md.
   "skills/typescript-best-practices",
 ]
+# Overlay (Luiz, 2026-11-20): each skill is upstream's text verbatim, plus the
+# frontmatter and the few lines of our changes in local/<skill>.md. Mirror: the
+# skill is ours as it stands (merged or reworked by hand, reworked again later);
+# upstream's copy is only mirrored to upstream/pstack/.
 map = [
-  { from = "skills/principle-*/SKILL.md", to = "skills/engineering/principles/{1}.md" },
-  # how: SKILL.md rewritten for tstack (Sonnet explorers, memo gotchas); the
-  # prompt templates are pstack's, verbatim (2026-09-30).
-  { from = "skills/how", to = "skills/engineering/how" },
-  # unslop and technical-writing: verbatim but for the frontmatter, which lets
-  # the model load them (2026-09-30).
-  { from = "skills/unslop/SKILL.md", to = "skills/productivity/unslop/SKILL.md" },
-  { from = "skills/technical-writing/SKILL.md", to = "skills/productivity/technical-writing/SKILL.md" },
-  # comment-sicko and no-comments, adapted (kebab-case name, Sonnet, jj diff scope, codebase-design for architect).
+  # Mirror: principles, blast-radius, the two verification skills, tdd and bro.
+  { from = "skills/principle-*/SKILL.md", to = "skills/engineering/principles/{1}.md", mode = "mirror" },
+  { from = "skills/blast-radius", to = "skills/engineering/blast-radius", mode = "mirror" },
+  { from = "skills/create-verification-skill", to = "skills/engineering/create-verification-skill", mode = "mirror" },
+  { from = "skills/maintain-verification-skill", to = "skills/engineering/maintain-verification-skill", mode = "mirror" },
+  { from = "skills/tdd", to = "skills/engineering/tdd", mode = "mirror" },
+  { from = "skills/bro", to = "skills/productivity/bro", mode = "mirror" },
+  # codebase-design/RED-FLAGS.md came from architect's references/design-red-flags.md,
+  # gone upstream at aaeb0ea: ours now, no mapping.
+  # Overlay, whole skill folders.
+  { from = "skills/how", to = "skills/engineering/how", mode = "overlay" },
+  { from = "skills/why", to = "skills/engineering/why", mode = "overlay" },
+  { from = "skills/teach", to = "skills/engineering/explain", mode = "overlay" },
+  { from = "skills/architect", to = "skills/engineering/architect", mode = "overlay" },
+  { from = "skills/arena", to = "skills/engineering/arena", mode = "overlay" },
+  { from = "skills/swarm", to = "skills/engineering/swarm", mode = "overlay" },
+  { from = "skills/figure-it-out", to = "skills/engineering/figure-it-out", mode = "overlay" },
+  { from = "skills/no-comments", to = "skills/engineering/no-comments", mode = "overlay" },
+  { from = "skills/correct", to = "skills/engineering/correct", mode = "overlay" },
+  { from = "skills/benchmark-checklist", to = "skills/engineering/benchmark-checklist", mode = "overlay" },
+  { from = "skills/create-formal-verification-skill", to = "skills/engineering/create-formal-verification-skill", mode = "overlay" },
+  { from = "skills/maintain-formal-verification-skill", to = "skills/engineering/maintain-formal-verification-skill", mode = "overlay" },
+  { from = "skills/recall", to = "skills/productivity/recall", mode = "overlay" },
+  { from = "skills/reflect", to = "skills/productivity/reflect", mode = "overlay" },
+  { from = "skills/automate-me", to = "skills/productivity/automate-me", mode = "overlay" },
+  { from = "skills/show-me-your-work", to = "skills/productivity/show-me-your-work", mode = "overlay" },
+  { from = "skills/unslop", to = "skills/productivity/unslop", mode = "overlay" },
+  { from = "skills/technical-writing", to = "skills/productivity/technical-writing", mode = "overlay" },
+  { from = "skills/sharpen", to = "skills/productivity/sharpen", mode = "overlay" },
+  { from = "skills/ketchup", to = "skills/productivity/ketchup", mode = "overlay" },
+  { from = "skills/ketchup-video", to = "skills/productivity/ketchup-video", mode = "overlay" },
+  { from = "skills/in-your-own-words", to = "skills/productivity/in-your-own-words", mode = "overlay" },
+  # statechart: overlay path by path, so its scripts/test (3.7 MB of corpus and
+  # fuzz tests) and package.json (a fast-check devDependency) stay upstream
+  # (2026-10-30). Its frontmatter is upstream's and it names no renamed skill,
+  # so it needs no local file.
+  { from = "skills/statechart/SKILL.md", to = "skills/engineering/statechart/SKILL.md", mode = "overlay" },
+  { from = "skills/statechart/references", to = "skills/engineering/statechart/references", mode = "overlay" },
+  { from = "skills/statechart/scripts/*.ts", to = "skills/engineering/statechart/scripts/{1}.ts", mode = "overlay" },
+  { from = "skills/statechart/scripts/statechart", to = "skills/engineering/statechart/scripts/statechart", mode = "overlay" },
+  { from = "skills/statechart/scripts/tsconfig.json", to = "skills/engineering/statechart/scripts/tsconfig.json", mode = "overlay" },
+  { from = "skills/statechart/scripts/backends", to = "skills/engineering/statechart/scripts/backends", mode = "overlay" },
+  { from = "skills/statechart/scripts/frontends", to = "skills/engineering/statechart/scripts/frontends", mode = "overlay" },
+  { from = "skills/statechart/scripts/passes", to = "skills/engineering/statechart/scripts/passes", mode = "overlay" },
+  # Merge: comment-sicko (kebab-case name, Sonnet, jj diff scope, codebase-design
+  # for architect) and tuca-mode's scripts from poteto-mode (watch-pr polls
+  # GitHub for the babysit and shipping playbooks, bun).
   { from = "agents/comment-sicko.md", to = "agents/comment-sicko.md" },
-  { from = "skills/no-comments/SKILL.md", to = "skills/engineering/no-comments/SKILL.md" },
-  # why: epistemics verbatim; the synthesizer prompt and incident-postmortem
-  # adapted in place (agent memory, the company data rule, our sources), so
-  # upstream edits 3-way merge (2026-09-30).
-  { from = "skills/why/references/epistemics.md", to = "skills/engineering/why/references/epistemics.md" },
-  { from = "skills/why/references/synthesizer-prompt.md", to = "skills/engineering/why/references/synthesizer-prompt.md" },
-  { from = "skills/why/references/sources/incident-postmortem.md", to = "skills/engineering/why/references/sources/incident-postmortem.md" },
-  # reflect: the reviewer and synthesizer prompts, adapted in place (Claude
-  # Code tool names and skill paths, a memo routing, backlog as memo open
-  # notes), so upstream edits 3-way merge (2026-09-30).
-  { from = "skills/reflect/references", to = "skills/productivity/reflect/references" },
-  # show-me-your-work: log.sh and the template, verbatim (2026-09-30).
-  { from = "skills/show-me-your-work/scripts/log.sh", to = "skills/productivity/show-me-your-work/scripts/log.sh" },
-  { from = "skills/show-me-your-work/references/decision-log-template.tsv", to = "skills/productivity/show-me-your-work/references/decision-log-template.tsv" },
-  # watch-pr, unchanged: the babysit and shipping playbooks poll GitHub with it (bun).
-  # blast-radius, adapted in place (model-invocable, why's jj anchor,
-  # Deep review for arena, tstack: pointers), 2026-09-30.
-  { from = "skills/blast-radius/SKILL.md", to = "skills/engineering/blast-radius/SKILL.md" },
-  # architect's references: the red flags verbatim, moved into codebase-design
-  # (both are Ousterhout); the runner prompt and rationale template adapted in
-  # place (step names, jj workspaces, constraints instead of models), so
-  # upstream edits 3-way merge (2026-09-30).
-  { from = "skills/architect/references/design-red-flags.md", to = "skills/engineering/codebase-design/RED-FLAGS.md" },
-  { from = "skills/architect/references/runner-prompt.md", to = "skills/engineering/architect/references/runner-prompt.md" },
-  { from = "skills/architect/references/rationale-template.md", to = "skills/engineering/architect/references/rationale-template.md" },
-  # create-verification-skill's feature-map example, verbatim (2026-09-30).
-  { from = "skills/create-verification-skill/references", to = "skills/engineering/create-verification-skill/references" },
-  # statechart and the two formal-verification skills, frontmatter included (user-invoked
-  # only); verbatim except statechart's SKILL.md, compressed by branch with views and
-  # TLC edge cases moved to references/ (2026-11-16), which a sync 3-way merges. statechart's scripts/test (3.7 MB of corpus
-  # and fuzz tests) and package.json (a fast-check devDependency) stay upstream (2026-10-30).
-  { from = "skills/statechart/SKILL.md", to = "skills/engineering/statechart/SKILL.md" },
-  { from = "skills/statechart/references", to = "skills/engineering/statechart/references" },
-  { from = "skills/statechart/scripts/*.ts", to = "skills/engineering/statechart/scripts/{1}.ts" },
-  { from = "skills/statechart/scripts/statechart", to = "skills/engineering/statechart/scripts/statechart" },
-  { from = "skills/statechart/scripts/tsconfig.json", to = "skills/engineering/statechart/scripts/tsconfig.json" },
-  { from = "skills/statechart/scripts/backends", to = "skills/engineering/statechart/scripts/backends" },
-  { from = "skills/statechart/scripts/frontends", to = "skills/engineering/statechart/scripts/frontends" },
-  { from = "skills/statechart/scripts/passes", to = "skills/engineering/statechart/scripts/passes" },
-  # correct, sharpen, ketchup, ketchup-video, in-your-own-words: verbatim, user-invoked only (2026-10-30).
-  { from = "skills/correct/SKILL.md", to = "skills/engineering/correct/SKILL.md" },
-  { from = "skills/sharpen/SKILL.md", to = "skills/productivity/sharpen/SKILL.md" },
-  { from = "skills/ketchup/SKILL.md", to = "skills/productivity/ketchup/SKILL.md" },
-  { from = "skills/ketchup-video/SKILL.md", to = "skills/productivity/ketchup-video/SKILL.md" },
-  { from = "skills/in-your-own-words/SKILL.md", to = "skills/productivity/in-your-own-words/SKILL.md" },
-  { from = "skills/benchmark-checklist/SKILL.md", to = "skills/engineering/benchmark-checklist/SKILL.md" },
-  { from = "skills/create-formal-verification-skill/SKILL.md", to = "skills/engineering/create-formal-verification-skill/SKILL.md" },
-  { from = "skills/maintain-formal-verification-skill/SKILL.md", to = "skills/engineering/maintain-formal-verification-skill/SKILL.md" },
   { from = "skills/poteto-mode/scripts/watch-pr", to = "skills/engineering/tuca-mode/scripts/watch-pr" },
   { from = "skills/poteto-mode/scripts/bootstrap.ts", to = "skills/engineering/tuca-mode/scripts/bootstrap.ts" },
   { from = "skills/poteto-mode/scripts/package.json", to = "skills/engineering/tuca-mode/scripts/package.json" },
