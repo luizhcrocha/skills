@@ -55,6 +55,7 @@ class HookCase(unittest.TestCase):
             "HOME": str(self.tmp / "home"),
             "PATH": os.environ.get("PATH", ""),
             "XDG_DATA_HOME": str(self.tmp / "data"),
+            "XDG_STATE_HOME": str(self.tmp / "state"),
             "XDG_CACHE_HOME": str(self.tmp / "cache"),
             "CLAUDE_PLUGIN_ROOT": str(ROOT),
             "CLAUDE_PLUGIN_DATA": str(self.data),
@@ -771,7 +772,10 @@ class TapeRoleTest(HookCase):
     writes nothing (no start read in the compaction prompt, no state)."""
 
     def files(self):
-        return sorted(str(p.relative_to(self.tmp)) for p in self.tmp.rglob("*") if p.is_file())
+        """Every file under the test's tmp with its size and mtime, so a write to an existing file (the memo
+        index, memo-v2.db) counts as well as a new one."""
+        return sorted((str(p.relative_to(self.tmp)), p.stat().st_size, p.stat().st_mtime_ns)
+                      for p in self.tmp.rglob("*") if p.is_file())
 
     def every_event(self, env):
         self.memo("note", "a start read would carry this")
