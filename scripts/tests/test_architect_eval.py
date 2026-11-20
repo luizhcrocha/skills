@@ -76,7 +76,7 @@ class EvalRound(unittest.TestCase):
         briefs = er.stage(staged, "@", cand, ["config"], 2, ROOT)
         self.assertEqual(len(briefs), 2)
         for arm in er.ARMS:
-            self.assertTrue((staged / "arms" / arm / "architect" / "references" / "runner-prompt.md").is_file())
+            self.assertTrue((staged / "arms" / arm / "architect" / "SKILL.md").is_file())
             self.assertFalse((staged / "arms" / arm / "architect" / "evals").exists())
         self.assertIn("runner 2", briefs[0].read_text())
         self.assertIn(str(staged / "tasks" / "config.md"), briefs[0].read_text())
