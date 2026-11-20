@@ -979,9 +979,9 @@ status = "warn"
 summary = "awaiting a fixed real-time sleep (setTimeout promise, timers/promises, scheduler.wait, Bun.sleep) in a test or hook body"
 where = "lint/ts/landmines/rules/no-fixed-sleep.ts"
 created = "2026-11-17"
-last_hit = "2026-11-17"
+last_hit = "2026-11-20"
 evidence = [
-  "upstream:landmines@92084b1 packages/landmines/src/rules/no-fixed-sleep.ts",
+  "upstream:landmines@79e9199 packages/landmines/src/rules/no-fixed-sleep.ts",
   "skill:tdd SKILL.md section 6 (a test waits on a signal, never a fixed sleep)",
 ]
 history = [
@@ -990,20 +990,20 @@ history = [
   { date = "2026-11-17", status = "warn", note = "trial clean: 14 TS repos, 385 hits (custom-mcp-servers 136, fleet 127, picasso 116, email-automations 4, chimr 1, public-site 1), 0 false positives" },
 ]
 runs = [
-  { repo = "~/repos/coelhorocha/cancel-maintenance", date = "2026-11-17", hits = 0, false_positives = 0, note = "no hits" },
-  { repo = "~/repos/coelhorocha/chimr", date = "2026-11-17", hits = 1, false_positives = 0, note = "awaited setTimeout promises and Bun.sleep in test bodies (setTimeout 0 yields included)" },
-  { repo = "~/repos/coelhorocha/custom-mcp-servers", date = "2026-11-17", hits = 136, false_positives = 0, note = "awaited setTimeout promises and Bun.sleep in test bodies (setTimeout 0 yields included)" },
-  { repo = "~/repos/coelhorocha/durable-automations", date = "2026-11-17", hits = 0, false_positives = 0, note = "no hits" },
-  { repo = "~/repos/coelhorocha/email-automations", date = "2026-11-17", hits = 4, false_positives = 0, note = "awaited setTimeout promises and Bun.sleep in test bodies (setTimeout 0 yields included)" },
-  { repo = "~/repos/coelhorocha/infra-monorepo", date = "2026-11-17", hits = 0, false_positives = 0, note = "no hits" },
-  { repo = "~/repos/coelhorocha/princexml-templates-documentos-rj", date = "2026-11-17", hits = 0, false_positives = 0, note = "no hits" },
-  { repo = "~/repos/coelhorocha/process-contract", date = "2026-11-17", hits = 0, false_positives = 0, note = "no hits" },
-  { repo = "~/repos/coelhorocha/public-site", date = "2026-11-17", hits = 1, false_positives = 0, note = "awaited setTimeout promises and Bun.sleep in test bodies (setTimeout 0 yields included)" },
-  { repo = "~/repos/coelhorocha/slack-bot", date = "2026-11-17", hits = 0, false_positives = 0, note = "no hits" },
-  { repo = "~/repos/coelhorocha/slopjus", date = "2026-11-17", hits = 0, false_positives = 0, note = "no hits" },
-  { repo = "~/repos/luizhcrocha/fleet", date = "2026-11-17", hits = 127, false_positives = 0, note = "awaited setTimeout promises and Bun.sleep in test bodies (setTimeout 0 yields included)" },
-  { repo = "~/repos/luizhcrocha/investimentos", date = "2026-11-17", hits = 0, false_positives = 0, note = "no hits" },
-  { repo = "~/repos/luizhcrocha/picasso", date = "2026-11-17", hits = 116, false_positives = 0, note = "awaited setTimeout promises and Bun.sleep in test bodies (setTimeout 0 yields included)" },
+  { repo = "~/repos/coelhorocha/cancel-maintenance", date = "2026-11-20", hits = 0, false_positives = 0, note = "no hits (rule at landmines@79e9199)" },
+  { repo = "~/repos/coelhorocha/chimr", date = "2026-11-20", hits = 1, false_positives = 0, note = "landmines@79e9199: a setTimeout 10 after a webSocketMessage, waiting on the room's reply instead of awaiting it" },
+  { repo = "~/repos/coelhorocha/custom-mcp-servers", date = "2026-11-20", hits = 136, false_positives = 0, note = "landmines@79e9199: awaited setTimeout promises in test bodies: settle waits, debounce waits (REST_MS, COPY_LOOKUP_MS) and sleeps before asserting a call is still held; none from the widening" },
+  { repo = "~/repos/coelhorocha/durable-automations", date = "2026-11-20", hits = 0, false_positives = 0, note = "no hits (rule at landmines@79e9199)" },
+  { repo = "~/repos/coelhorocha/email-automations", date = "2026-11-20", hits = 4, false_positives = 0, note = "landmines@79e9199: e2e waits of 3000 ms for an email to be delivered" },
+  { repo = "~/repos/coelhorocha/infra-monorepo", date = "2026-11-20", hits = 0, false_positives = 0, note = "no hits (rule at landmines@79e9199)" },
+  { repo = "~/repos/coelhorocha/princexml-templates-documentos-rj", date = "2026-11-20", hits = 0, false_positives = 0, note = "no hits (rule at landmines@79e9199)" },
+  { repo = "~/repos/coelhorocha/process-contract", date = "2026-11-20", hits = 0, false_positives = 0, note = "no hits (rule at landmines@79e9199)" },
+  { repo = "~/repos/coelhorocha/public-site", date = "2026-11-20", hits = 1, false_positives = 0, note = "landmines@79e9199: a 1 s wait after a Slack send before reading it back" },
+  { repo = "~/repos/coelhorocha/slack-bot", date = "2026-11-20", hits = 0, false_positives = 0, note = "no hits (rule at landmines@79e9199)" },
+  { repo = "~/repos/coelhorocha/slopjus", date = "2026-11-20", hits = 0, false_positives = 0, note = "no hits (rule at landmines@79e9199)" },
+  { repo = "~/repos/luizhcrocha/fleet", date = "2026-11-20", hits = 117, false_positives = 0, note = "landmines@79e9199: Bun.sleep and setTimeout promises in test bodies (setTimeout 0 yields included), bounded polls on state; closest call apps/cli/test/ws-hooks.test.ts:150, a liveness poll on killed non-child pids, judged true: a pipe the hook inherits gives an EOF signal; none from the widening" },
+  { repo = "~/repos/luizhcrocha/investimentos", date = "2026-11-20", hits = 0, false_positives = 0, note = "no hits (rule at landmines@79e9199)" },
+  { repo = "~/repos/luizhcrocha/picasso", date = "2026-11-20", hits = 116, false_positives = 0, note = "landmines@79e9199: Bun.sleep in test bodies (subscription settles, MIN_MS waits before asserting nothing more happened) and polls on fake socket and batch state; 115 more in .claude/worktrees/agent-a7f1e8a457b749508, a stray agent copy of the repo, left out; none from the widening" },
 ]
 
 [[rule]]
