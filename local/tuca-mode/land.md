@@ -13,5 +13,6 @@
    - `stop` → several heads (ask which, or join them), not a fast-forward (a force-push pauses for Luiz), or an undescribed or conflicted revision (step 3).
 6. `jj bookmark set <bookmark> -r <head>`, `jj git push --bookmark <bookmark>`. A push stalled on 1Password → ask Luiz to approve it, then push again. Free a `fleet land` token (`fleet gate free <token>`). Then `memo sync` (when on PATH) and `tstack:unblock` for the sessions waiting on this landing.
 7. Confirm `jj log -r '<bookmark>@origin'` is your head, and `@` is a fresh empty change (`jj new`).
+8. The work came from a fork-tab handoff with a `next` line → follow it: open that piece with `tstack:fork-tab` from the handoff file it names, once any other piece the line waits on has landed.
 
-**Reply:** the bookmark, the landed change ids with subjects, the checks and their result, the janitor's verdict, land-check's verdict and deploy finding, `[skip ci]` if added, and anything left out.
+**Reply:** the bookmark, the landed change ids with subjects, the checks and their result, the janitor's verdict, land-check's verdict and deploy finding, `[skip ci]` if added, the next piece opened if any, and anything left out.
