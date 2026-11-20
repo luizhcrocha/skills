@@ -1,19 +1,21 @@
 import type { Context, ESTree } from "@oxlint/plugins";
 
+export const allowlistProperties = {
+  allow: {
+    type: "object" as const,
+    additionalProperties: { type: "integer" as const, minimum: 1 },
+  },
+};
+
 export const allowlistSchema = [
   {
     type: "object" as const,
-    properties: {
-      allow: {
-        type: "object" as const,
-        additionalProperties: { type: "integer" as const, minimum: 1 },
-      },
-    },
+    properties: allowlistProperties,
     additionalProperties: false,
   },
 ];
 
-type AllowlistOptions = [] | [{ allow: Record<string, number> }];
+type AllowlistOptions = [] | [{ allow?: Record<string, number> }];
 
 function allowance(context: Context) {
   const filename = context.physicalFilename.replaceAll("\\", "/");

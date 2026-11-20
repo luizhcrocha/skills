@@ -226,7 +226,7 @@ map = [
 # merge on the next sync.
 [upstream.landmines]
 url = "https://github.com/interfere-inc/landmines.git"
-base = "92084b12872103b0f9245c0325ab571df00a574b"
+base = "79e91992952c14b0c217b403fa416024c1929afe"
 units = ["packages/landmines/src/*/*"]
 # Decided, not copied (Luiz, 2026-11-17): repo plumbing; the style, structure
 # and types plugins, their rules (no-comments, colocated-tests,
