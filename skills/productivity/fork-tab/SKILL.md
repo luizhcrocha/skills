@@ -51,6 +51,7 @@ Write `$TMPDIR/fork-tab-<slug>.md` (`/tmp` when `$TMPDIR` is unset). Keep it out
 - `mixed`: files left in A's change that B also needs, or `none`.
 - `not-yours`: A, in one sentence, so the new agent leaves it alone.
 - `skills`: the skills the new agent should load, such as `tstack:tdd` or `tstack:lang-ts`.
+- `end`: when B is done (landed, or answered): tell the session that forked you, `fleet msg note <this session's name> "<slug>: done, <one line>"`; forget your workspace and remove its folder; then `fleet suspend me --why "<slug> done"`. Luiz starting the fork is his yes to all three, so do them unasked.
 - `next`, optional, when B is one piece of several: "after you land, open the next piece with fork-tab from <its handoff file>". A piece that waits on two is named in both their handoffs with "only once <the other> has landed", so the second to land opens it.
 
 Point at files. Do not paste anything a path can carry. Remove secrets.
