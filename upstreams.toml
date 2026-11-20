@@ -100,9 +100,7 @@ map = [
 ]
 
 # poteto's pstack (MIT). Each overlap is decided with Luiz (docs/tstack-plan.md,
-# step 4) and gets its mapping then. The principles are adapted in place
-# (Cursor-only references, links between leaves); those local edits 3-way merge
-# on the next sync.
+# step 4) and gets its mapping then.
 [upstream.pstack]
 url = "https://github.com/cursor/plugins.git"
 subdir = "pstack"
@@ -124,8 +122,11 @@ ignore = [
 # skill is ours as it stands (merged or reworked by hand, reworked again later);
 # upstream's copy is only mirrored to upstream/pstack/.
 map = [
-  # Mirror: principles.
-  { from = "skills/principle-*/SKILL.md", to = "skills/engineering/principles/{1}.md", mode = "mirror" },
+  # Overlay, leaf by leaf (Luiz, 2026-11-20): the 23 principle leaves are
+  # upstream's verbatim. The folder's other files are ours: the index SKILL.md
+  # (pstack's index sits in poteto-mode, which we don't take), Bound and Assert,
+  # Own the Nondeterminism, and references/ (TigerBeetle's, synced below).
+  { from = "skills/principle-*/SKILL.md", to = "skills/engineering/principles/{1}.md", mode = "overlay" },
   # Overlay (Luiz, 2026-11-20): blast-radius and the two verification skills.
   { from = "skills/blast-radius", to = "skills/engineering/blast-radius", mode = "overlay" },
   { from = "skills/create-verification-skill", to = "skills/engineering/create-verification-skill", mode = "overlay" },

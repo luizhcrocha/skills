@@ -13,7 +13,6 @@ Safety first, then performance, then developer experience: TigerBeetle's TigerSt
 **Put a limit on everything.**
 - Every loop, queue, buffer, retry, batch and recursion depth has a fixed upper bound, named as a constant (`retries_max`, `queue_depth_max`). A loop that must never end (an event loop) asserts that.
 - Exceeding a limit is an operating error: return it or shed load; never grow past it.
-- Units and qualifiers go last in the name, most significant word first, in the language's own casing: `latency_ms_max` or `latencyMsMax`, not `max_latency_ms`.
 
 **Assert what the code believes.**
 - Two kinds of error. An **operating error** is expected (bad input, a full disk, a timeout): handle it, at the boundary (Boundary Discipline). A **programmer error** is a broken belief about your own code: assert it, and crash. The only correct way to handle corrupt code is to stop.
@@ -23,9 +22,7 @@ Safety first, then performance, then developer experience: TigerBeetle's TigerSt
 - One condition per assertion: `assert(a); assert(b);`, so a failure names its cause.
 - Assert relationships between constants where the language checks them before run time (Zig `comptime`, Rust `const _: () = assert!(...)`, a TypeScript type-level check).
 - Assertions stay on in production unless one is measured to cost too much.
-- Handle every error a call can return. Most catastrophic failures in distributed systems come from mishandled non-fatal errors (Yuan et al., OSDI 2014).
-
-**Left to the repo:** static allocation at startup and zero dependencies suit a database more than a CLI or a Worker. They apply only in a repo whose AGENTS.md adopts them, Zig repos included.
+- Handle every error a call can return.
 
 **The tests:**
 - "What stops this from running forever, or growing forever?" If nothing, add the limit.

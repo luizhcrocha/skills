@@ -5,9 +5,9 @@ description: "Engineering principles. Use when a design, refactor, debugging, te
 
 # Principles
 
-One line per principle: when it applies, then its file. Read the file in full before you apply a principle, and name the principles that shaped a decision in your reply. Cite only principles whose file you read this session.
+One line per principle: when it applies, then its file. Read the file in full before you apply a principle, and name the principles that shaped a decision in your reply.
 
-Adapted from poteto's pstack, MIT (synced through `upstreams.toml`; local edits merge on each sync). Bound and Assert and Own the Nondeterminism adapt TigerBeetle's TigerStyle, Apache-2.0 ([references/TIGER_STYLE.md](references/TIGER_STYLE.md), synced the same way).
+Adapted from poteto's pstack, MIT. Bound and Assert and Own the Nondeterminism adapt TigerBeetle's TigerStyle, Apache-2.0 ([references/TIGER_STYLE.md](references/TIGER_STYLE.md)).
 
 ## Core
 
@@ -25,8 +25,8 @@ Adapted from poteto's pstack, MIT (synced through `upstreams.toml`; local edits 
 ## Architecture
 
 - **Model the Domain** ([model-the-domain.md](model-the-domain.md)). Stateful logic, heavy branching, a shape assumption repeated across files: encode it in a structure.
-- **Boundary Discipline** ([boundary-discipline.md](boundary-discipline.md)). Validation, error handling, framework adapters: guards at the boundary, pure logic inside.
-- **Type System Discipline** ([type-system-discipline.md](type-system-discipline.md)). Designing types or a signature: illegal states unrepresentable, parse at the boundary.
+- **Boundary Discipline** ([boundary-discipline.md](boundary-discipline.md)). Validation, error handling, framework adapters: guards at the boundary, pure logic inside. An assertion of the code's own belief is not re-validation (Bound and Assert).
+- **Type System Discipline** ([type-system-discipline.md](type-system-discipline.md)). Designing types or a signature: illegal states unrepresentable, parse at the boundary, no bare bool or optional flag in a signature: an enum or two functions.
 - **Bound and Assert** ([bound-and-assert.md](bound-and-assert.md)). Writing or reviewing a function, loop, queue, retry or state transition: a limit on everything, assertions on what the code believes, crash on a broken belief (TigerStyle).
 - **Own the Nondeterminism** ([own-the-nondeterminism.md](own-the-nondeterminism.md)). Code that reads the clock, draws randomness, does I/O or reacts to outside events: each through a port, so one seed replays any run.
 - **Make Operations Idempotent** ([make-operations-idempotent.md](make-operations-idempotent.md)). Commands, lifecycle steps or loops that crash and retry: converge to the same end state.
