@@ -5,9 +5,9 @@ description: "Turn a repeated lesson into a native lint rule, proven on its inci
 
 # Lint evolve
 
-A lesson that repeats becomes a rule in the language's own linter, vendored into each repo so its checks and CI enforce it (docs/tstack-plan.md, D12; `tstack:principles`, Encode Lessons in Structure). The packs, the registry and the vendoring are laid out in the tstack checkout's [lint/README.md](../../../lint/README.md); `lint-registry` and `lint-vendor` are on the Bash PATH through the plugin's `bin/` (else `scripts/` in the checkout).
+A lesson that repeats becomes a rule in the language's own linter, vendored into each repo so its checks and CI enforce it (docs/tstack-plan.md, D12; `tstack:principles`, Encode Lessons in Structure). The packs, the registry and the vendoring are laid out in the tstack checkout's [lint/README.md](../../lint/README.md); `lint-registry` and `lint-vendor` are on the Bash PATH through the plugin's `bin/` (else `scripts/` in the checkout).
 
-Roles ([models.md](../../../docs/models.md)): evidence legwork and trials go to `general-purpose` Researchers; an Implementer writes the rule (you, or one `general-purpose` agent in that role when this session does not run the Implementer's model).
+Roles ([models.md](../../docs/models.md)): evidence legwork and trials go to `general-purpose` Researchers; an Implementer writes the rule (you, or one `general-purpose` agent in that role when this session does not run the Implementer's model).
 
 Open a todo list with the six steps.
 
@@ -59,6 +59,6 @@ Each false positive is a `valid` case in the suite (or a narrower config) and th
 
 ## 6. Propose
 
-A rule with clean trials moves to warn: `lint-registry set-status <id> warn --note "trial clean: <repos>, <hits> hits"`. Vendoring picks up warn and error rules (`lint-vendor wiring` prints them). Run `just test-changed` (the full gate runs once, in the session that lands), then describe the change in the repo's style (`jj log`): the lesson, the evidence refs, the mechanism and why it beats the others, and the trial table (repo | hits | false positives). `jj new`. No push, no bookmark move: landing the change is Luiz's yes. Promotion to error is `tstack:lint-audit`'s, with his explicit answer.
+A rule with clean trials moves to warn: `lint-registry set-status <id> warn --note "trial clean: <repos>, <hits> hits"`. Vendoring picks up warn and error rules (`lint-vendor wiring` prints them). Run `just test-changed` (the full gate runs once, in the session that lands), then describe the change in the repo's style (`jj log`): the lesson, the evidence refs, the mechanism and why it beats the others, and the trial table (repo | hits | false positives). `jj new`. No push, no bookmark move: landing the change is Luiz's yes. Promotion to error is [lint-audit.md](lint-audit.md)'s, with his explicit answer.
 
 **Reply:** the change id and workspace, the rule and its status, the trial table, reworks or the reason it was dropped, and the repos that will get it at the next `lint-vendor update`.

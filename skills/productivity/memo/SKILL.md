@@ -22,7 +22,7 @@ Write it the moment it is learned, as one self-contained sentence of at most 280
 | `PreCompact wording still untested, waiting on a real compaction` | A work item, to its owner (below) |
 | `Never push without a landing turn` (a standing rule) | AGENTS.md or CLAUDE.md, which every session reads |
 
-A gotcha a linter could catch is also a `tstack:lint-evolve` candidate, with the note's id as its evidence.
+A gotcha a linter could catch is also a `tstack:correct` candidate, with the note's id as its evidence.
 
 ## Work goes to its owner
 

@@ -1,0 +1,1 @@
+- Its lint step follows [correct/lint-evolve.md](correct/lint-evolve.md); auditing the rules already in the packs follows [correct/lint-audit.md](correct/lint-audit.md). Neither is a skill of its own (Luiz, 2026-11-20).

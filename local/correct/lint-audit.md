@@ -5,9 +5,9 @@ description: "Audit tstack's lint rules against registry and trials, propose pro
 
 # Lint audit
 
-The other half of the loop `tstack:lint-evolve` starts (docs/tstack-plan.md, D12): rules earn `error` by firing without false positives, rules that never fire leave, and a rule that keeps firing points at a skill that should teach better. The registry is `lint/registry.toml` in the tstack checkout; [lint/README.md](../../../lint/README.md) lays out the packs. `lint-registry` and `lint-vendor` are on the Bash PATH through the plugin's `bin/`.
+The other half of the loop [lint-evolve.md](lint-evolve.md) starts (docs/tstack-plan.md, D12): rules earn `error` by firing without false positives, rules that never fire leave, and a rule that keeps firing points at a skill that should teach better. The registry is `lint/registry.toml` in the tstack checkout; [lint/README.md](../../lint/README.md) lays out the packs. `lint-registry` and `lint-vendor` are on the Bash PATH through the plugin's `bin/`.
 
-Roles ([models.md](../../../docs/models.md)): trials and repo legwork go to `general-purpose` Researchers; the judgement calls in step 3 are yours.
+Roles ([models.md](../../docs/models.md)): trials and repo legwork go to `general-purpose` Researchers; the judgement calls in step 3 are yours.
 
 Open a todo list with the six steps.
 
@@ -17,7 +17,7 @@ Work in a tstack workspace of its own: `cd ~/repos/luizhcrocha/skills; ws-add li
 
 ## 2. Measure
 
-Trial every unmeasured rule in trial, warn or error, and every rule whose last run is older than 30 days, per [../lint-evolve/references/trials.md](../lint-evolve/references/trials.md): one Reader per language, read-only in Luiz's repos, each hit judged true or false positive. Record each run with `lint-registry record`. Done when every active rule has a run inside the last 30 days in each repo that uses its language, or a recorded reason it could not run.
+Trial every unmeasured rule in trial, warn or error, and every rule whose last run is older than 30 days, per [references/trials.md](references/trials.md): one Reader per language, read-only in Luiz's repos, each hit judged true or false positive. Record each run with `lint-registry record`. Done when every active rule has a run inside the last 30 days in each repo that uses its language, or a recorded reason it could not run.
 
 ## 3. Decide
 
@@ -25,7 +25,7 @@ Sort every active rule into one bucket:
 
 - **Promote** trial → warn, or warn → error: runs in two or more repos, no false positive in the last 90 days. A rule with no true hit anywhere is not promoted; it goes to retire.
 - **Retire**: silent for 90 days (`lint-registry stale` lists it) while its language's repos were measured. Native lints seeded from a gate stay unless Luiz says otherwise: the gate prescribes them.
-- **Rework**: a false positive in the last runs. Hand it to `tstack:lint-evolve` step 5 as its own run.
+- **Rework**: a false positive in the last runs. Hand it to [lint-evolve.md](lint-evolve.md) step 5 as its own run.
 - **Keeps firing**: true hits in two or more repos in the last 90 days, or more hits than the run before. The lint catches it, but the lesson is not landing where code gets written: name the skill that should teach it (the `lang-*` skill, or `tdd`...), the section, and the one-line rule it lacks, as a proposal for that skill.
 - **Holds**: the rest.
 
