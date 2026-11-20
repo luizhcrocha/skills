@@ -8,7 +8,7 @@ import unittest
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
-SCRIPT = ROOT / "skills/productivity/automate-me/scripts/human-turns"
+SCRIPT = ROOT / "scripts/human-turns"
 _loader = importlib.machinery.SourceFileLoader("human_turns", str(SCRIPT))
 _spec = importlib.util.spec_from_loader("human_turns", _loader)
 ht = importlib.util.module_from_spec(_spec)

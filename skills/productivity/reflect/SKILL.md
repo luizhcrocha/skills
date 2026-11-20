@@ -17,7 +17,7 @@ Only when Luiz says "reflect" or runs `/tstack:reflect`. Skip when the conversat
 Find this session's own transcript before fanning out:
 
 ```
-python3 ${CLAUDE_PLUGIN_ROOT}/skills/productivity/recall/scripts/sessions.py path ${CLAUDE_SESSION_ID}
+python3 ${CLAUDE_PLUGIN_ROOT}/scripts/sessions.py path ${CLAUDE_SESSION_ID}
 ```
 
 Claude Code keeps a session at `~/.claude/projects/<slug>/<session-id>.jsonl` (`$CLAUDE_CONFIG_DIR` in place of `~/.claude` when set; the slug is the launch directory with every character other than a letter or digit turned into `-`), and its subagents' transcripts at `<slug>/<session-id>/subagents/agent-<id>.jsonl`, each with a `.meta.json` naming the agent type, description and model. The script looks the id up in this project's folders and opens no other session's file. Never glob or read across `~/.claude/projects/*/`: that reads private work from unrelated projects.

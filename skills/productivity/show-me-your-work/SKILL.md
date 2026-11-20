@@ -62,7 +62,7 @@ Commit it only when the stakes need the trail to be auditable later (a big port 
 At the end of the run, before handing back, check the log told the truth. This run's transcript is:
 
 ```
-python3 ${CLAUDE_PLUGIN_ROOT}/skills/productivity/recall/scripts/sessions.py path ${CLAUDE_SESSION_ID}
+python3 ${CLAUDE_PLUGIN_ROOT}/scripts/sessions.py path ${CLAUDE_SESSION_ID}
 ```
 
 It looks for this session's id in this project's transcript folders (`~/.claude/projects/<slug>/<session-id>.jsonl`) and opens no other session's file. Never glob or read across `~/.claude/projects/*/`: other projects' transcripts are unrelated private work. `sessions.py digest <path>` gives the timeline; grep the raw JSONL for a row's evidence.

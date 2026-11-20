@@ -13,7 +13,7 @@ Design: docs/design/tape.md. One file, standard library only (Python >= 3.11).
 
 A turn runs from a typed prompt to the next one. It is finished, and ingested, when a later prompt
 arrives in its transcript or 24 h have passed since its last record (a resumed session appends to
-the same file). Each finished turn keeps its digest (recall's `sessions.py digest`, clipped to
+the same file). Each finished turn keeps its digest (`scripts/sessions.py digest`, clipped to
 32 KB) and a leaf of at most 512 bytes built from it: session, date, the prompt's head, files
 edited, errors, the final reply's head.
 
@@ -99,7 +99,7 @@ def _load(name, path):
 
 
 memo = _load("tape_memo", HERE / "memo")
-sessions = _load("tape_sessions", HERE.parent / "skills" / "productivity" / "recall" / "scripts" / "sessions.py")
+sessions = _load("tape_sessions", HERE / "sessions.py")
 
 
 class TapeError(Exception):

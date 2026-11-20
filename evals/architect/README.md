@@ -5,7 +5,7 @@ Measures a change to the design skills (`architect`, `codebase-design`, `princip
 ## A round
 
 1. Change the skills in your checkout (the cand arm), or in a copy.
-2. `skills/engineering/architect/scripts/eval-round stage <round-dir> [--cand DIR] [--task NAME]... [--constraint N]`. The round directory goes in the scratchpad. It prints one sketch brief per arm and task.
+2. `evals/architect/eval-round stage <round-dir> [--cand DIR] [--task NAME]... [--constraint N]`. The round directory goes in the scratchpad. It prints one sketch brief per arm and task.
 3. One Opus agent per sketch brief, the brief as its whole prompt, all in one message.
 4. `eval-round pair <round-dir>` once every sketch is written. It copies each task's two sketches onto random sides, then swapped, and prints one judge brief per task and order.
 5. One Fable agent per judge brief, the brief as its whole prompt.

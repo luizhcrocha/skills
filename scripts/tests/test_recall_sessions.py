@@ -15,7 +15,7 @@ from importlib.util import module_from_spec, spec_from_loader
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent.parent
-SCRIPT = ROOT / "skills" / "productivity" / "recall" / "scripts" / "sessions.py"
+SCRIPT = ROOT / "scripts" / "sessions.py"
 
 sys.dont_write_bytecode = True
 _loader = SourceFileLoader("recall_sessions", str(SCRIPT))

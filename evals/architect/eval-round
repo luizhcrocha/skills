@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-"""Stage, blind and score one A/B round of architect's design eval (evals/README.md).
+"""Stage, blind and score one A/B round of architect's design eval (evals/architect/README.md).
 
   eval-round stage ROUND [--base REV] [--cand DIR] [--task NAME]... [--constraint N]
       Snapshot the design skills twice into ROUND/arms/: base from jj revision REV of this repo
       (default master), cand from DIR, a folder holding architect/, codebase-design/ and
       principles/ (default this checkout's skills/engineering). Write one sketch brief per arm and
-      task to ROUND/briefs/sketch-<arm>-<task>.md. Tasks default to every file in evals/tasks/.
+      task to ROUND/briefs/sketch-<arm>-<task>.md. Tasks default to every file in evals/architect/tasks/.
   eval-round pair ROUND
       Once every sketch is in ROUND/sketches/<arm>-<task>/: per task, copy the two sketches into
       ROUND/judge/<task>/order-1/{A,B} on random sides and order-2/ swapped, record the sides in
@@ -26,10 +26,10 @@ import subprocess
 import sys
 from pathlib import Path
 
-HERE = Path(__file__).resolve().parent.parent  # skills/engineering/architect
-EVALS = HERE / "evals"
+EVALS = Path(__file__).resolve().parent  # evals/architect
+ROOT = EVALS.parents[1]
 SKILLS = ("architect", "codebase-design", "principles")
-HIDDEN = ("architect/evals", "architect/scripts")  # the eval itself: a runner that read the rubric would game it
+HIDDEN = ("architect/evals", "architect/scripts")  # where revisions before 2026-11-20 kept the eval: a runner that read the rubric would game it
 ARMS = ("base", "cand")
 ORDERS = ("order-1", "order-2")
 VERDICT = re.compile(r"OVERALL A=(\d+(?:\.\d+)?) B=(\d+(?:\.\d+)?) PICK=([AB])")
@@ -154,7 +154,7 @@ def main(argv: list[str]) -> int:
     s = sub.add_parser("stage")
     s.add_argument("round", type=Path)
     s.add_argument("--base", default="master")
-    s.add_argument("--cand", type=Path, default=HERE.parent)
+    s.add_argument("--cand", type=Path, default=ROOT / "skills" / "engineering")
     s.add_argument("--task", action="append", default=[])
     s.add_argument("--constraint", type=int)
     for name in ("pair", "score"):
@@ -162,7 +162,7 @@ def main(argv: list[str]) -> int:
     a = p.parse_args(argv)
     round_dir = a.round.resolve()
     if a.cmd == "stage":
-        repo = HERE.parents[2]
+        repo = ROOT
         for b in stage(round_dir, a.base, a.cand.resolve(), a.task, a.constraint, repo):
             print(b)
         return 0

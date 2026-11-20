@@ -9,7 +9,7 @@ import unittest
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
-SCRIPT = ROOT / "skills/engineering/architect/scripts/eval-round"
+SCRIPT = ROOT / "evals/architect/eval-round"
 _loader = importlib.machinery.SourceFileLoader("eval_round", str(SCRIPT))
 _spec = importlib.util.spec_from_loader("eval_round", _loader)
 er = importlib.util.module_from_spec(_spec)
