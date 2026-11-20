@@ -39,3 +39,7 @@ The upstream sync (`scripts/sync_upstream.py`, overlay mode) adds to a synced sk
 
 | Upstream | Ours |
 |---|---|
+| emil-design-eng | tstack:design-engineering |
+| animation-vocabulary | tstack:animate (its naming mode) |
+| write-swift | tstack:lang-swift |
+| animate-expo | none: React Native is outside tstack |
