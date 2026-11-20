@@ -7,3 +7,4 @@ description: "Build a throwaway prototype to answer a design question. Use to sa
 - The variant picker is emil's, built verbatim: [PICKER.md](../upstream/emilkowalski/skills/prototype/PICKER.md).
 - Before handing over, screenshot every variant headless with [round-check.mjs](scripts/round-check.mjs) (`node <path> --out <dir> --page <url>`, one `--page` per variant; it writes `summary.txt`); never write a screenshot script of your own.
 - Hand over a table (variant, axis, when it is right, its cost) and let the user pick.
+- A prototype a reviewer marks live over several rounds (picasso marks on a preview tab) follows [ROUNDS.md](prototype/ROUNDS.md).
