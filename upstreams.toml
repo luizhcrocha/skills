@@ -182,6 +182,28 @@ map = [
   { from = "skills/poteto-mode", to = "upstream/pstack/skills/poteto-mode", mode = "mirror" },
 ]
 
+# Cursor's cursor-team-kit (MIT), same repo as pstack. Only deslop is taken
+# (Luiz, 2026-11-20), verbatim with its frontmatter. Everything else is
+# decided, not copied: plugin plumbing, the agents and rules, and the other
+# skills, which are Cursor- or GitHub-PR-workflow tools tstack covers its own way.
+[upstream.cursor-team-kit]
+url = "https://github.com/cursor/plugins.git"
+subdir = "cursor-team-kit"
+base = "aaeb0ea3a0584995aa8f55ce44c6c5259414b896"
+units = ["skills/*", "agents/*", "rules/*"]
+ignore = [
+  ".*", "LICENSE", "README.md", "assets", "agents", "rules",
+  "skills/check-compiler-errors", "skills/control-cli", "skills/control-ui",
+  "skills/fix-ci", "skills/fix-merge-conflicts", "skills/get-pr-comments",
+  "skills/loop-on-ci", "skills/make-pr-easy-to-review", "skills/new-branch-and-pr",
+  "skills/pr-review-canvas", "skills/review-and-ship", "skills/run-smoke-tests",
+  "skills/thermo-nuclear-code-quality-review", "skills/verify-this",
+  "skills/weekly-review", "skills/what-did-i-get-done", "skills/workflow-from-chats",
+]
+map = [
+  { from = "skills/deslop", to = "skills/engineering/deslop", mode = "overlay" },
+]
+
 # OptMem and its per-project fork: the ideas behind memo (docs/design/memo.md).
 # Neither has a license, so they are watch-only: `just sync-upstream` lists what
 # changed since `base` (`--diff` shows it) and never copies a file; anything
