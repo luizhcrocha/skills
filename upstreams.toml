@@ -207,7 +207,7 @@ watch = true
 url = "https://github.com/dmmulroy/anti-slop.git"
 base = "63dbb09f73438e550a6991dc6d778f979ffbf183"
 # Decided, not copied: repo plumbing, and the install-anti-slop skill, whose
-# job (copy, configure, 3-way update) lint-vendor and lint-audit do; its
+# job (copy, configure, 3-way update) lint-vendor does; its
 # assets/ are src/ minus the tests.
 ignore = [
   ".*", "AGENTS.md", "README.md", "package.json", "pnpm-lock.yaml",

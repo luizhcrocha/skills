@@ -1,1 +1,4 @@
-- Its lint step follows [correct/lint-evolve.md](correct/lint-evolve.md); auditing the rules already in the packs follows [correct/lint-audit.md](correct/lint-audit.md). Neither is a skill of its own (Luiz, 2026-11-20).
+- A rule for several repos goes in tstack's lint packs ([lint/README.md](../lint/README.md)), vendored into each repo by `lint-vendor`: a native lint is a line in `lint/<lang>/`; a custom one is an Oxlint JS rule in `lint/ts/tstack/rules/` whose RuleTester suite takes the past mistake verbatim as its invalid cases. Python, Go, C/C++ and Nix take config only: a lesson their linter can't express goes to the lang-* skill as a sharper rule.
+- Check the existing packs (anti-slop, landmines, tstack) and `lint-registry list` first: an existing rule that missed means the repo doesn't run it (`lint-vendor status --repo <repo>`).
+- A new rule starts at trial (`lint-registry add ... --evidence <ref>`) and gets a trial, alone over Luiz's repos in its language ([correct/references/trials.md](correct/references/trials.md)), before warn; a false positive becomes a valid case or drops the rule.
+- Promotion to error, and retirement, are Luiz's call.

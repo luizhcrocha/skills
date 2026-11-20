@@ -1,6 +1,6 @@
 # Trials
 
-A trial runs one rule, alone, over every repo of Luiz's that uses its language, and writes nothing in those repos: no fix, no cache, no build output inside them, no commit. Shared by `lint-evolve` (a new rule) and `lint-audit` (measuring rules already in the packs).
+A trial runs one rule, alone, over every repo of Luiz's that uses its language, and writes nothing in those repos: no fix, no cache, no build output inside them, no commit.
 
 ## The repos
 
