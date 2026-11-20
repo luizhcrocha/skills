@@ -1,0 +1,18 @@
+{
+  "name": "prompt-jump",
+  "displayName": "Prompt Jump",
+  "version": "0.1.0",
+  "description": "Jump back to any prompt you typed in a Claude Code session with /jump: newest first, search by words or number, works after --resume.",
+  "author": {
+    "name": "nickhealthy",
+    "url": "https://github.com/nickhealthy"
+  },
+  "homepage": "https://github.com/nickhealthy/claude-code-prompt-jump",
+  "repository": "https://github.com/nickhealthy/claude-code-prompt-jump",
+  "documentationUrl": "https://github.com/nickhealthy/claude-code-prompt-jump#readme",
+  "supportUrl": "https://github.com/nickhealthy/claude-code-prompt-jump/issues",
+  "privacyPolicyUrl": "https://github.com/nickhealthy/claude-code-prompt-jump#privacy-and-security",
+  "license": "MIT",
+  "keywords": ["claude-code", "mod", "navigation", "prompt", "history", "transcript"],
+  "types": "./types/index.d.ts"
+}
