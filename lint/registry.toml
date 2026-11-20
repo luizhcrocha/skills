@@ -1015,7 +1015,7 @@ status = "trial"
 summary = "retried tests and raised test timeouts, which hide a flake instead of fixing it"
 where = "lint/ts/landmines/rules/no-flake-masking.ts"
 created = "2026-11-17"
-last_hit = "2026-11-17"
+last_hit = "2026-11-20"
 evidence = [
   "upstream:landmines@92084b1 packages/landmines/src/rules/no-flake-masking.ts",
   "skill:tdd SKILL.md section 6 (a flaky test is fixed or removed, never retried or given a raised timeout)",
@@ -1025,20 +1025,20 @@ history = [
   { date = "2026-11-17", status = "trial", note = "trial across Luiz's TypeScript repos" },
 ]
 runs = [
-  { repo = "~/repos/coelhorocha/cancel-maintenance", date = "2026-11-17", hits = 1, false_positives = 0, note = "raised per-test or per-suite timeouts" },
-  { repo = "~/repos/coelhorocha/chimr", date = "2026-11-17", hits = 0, false_positives = 0, note = "no hits" },
-  { repo = "~/repos/coelhorocha/custom-mcp-servers", date = "2026-11-17", hits = 163, false_positives = 3, note = "raised per-test or per-suite timeouts; false positives: 3 calls on a variable named suite (bench/suites/retrieval/suite.test.ts:312,319,329), read as vitest's suite()" },
-  { repo = "~/repos/coelhorocha/durable-automations", date = "2026-11-17", hits = 8, false_positives = 0, note = "raised per-test or per-suite timeouts" },
-  { repo = "~/repos/coelhorocha/email-automations", date = "2026-11-17", hits = 4, false_positives = 0, note = "raised per-test or per-suite timeouts" },
-  { repo = "~/repos/coelhorocha/infra-monorepo", date = "2026-11-17", hits = 0, false_positives = 0, note = "no hits" },
-  { repo = "~/repos/coelhorocha/princexml-templates-documentos-rj", date = "2026-11-17", hits = 0, false_positives = 0, note = "no hits" },
-  { repo = "~/repos/coelhorocha/process-contract", date = "2026-11-17", hits = 0, false_positives = 0, note = "no hits" },
-  { repo = "~/repos/coelhorocha/public-site", date = "2026-11-17", hits = 0, false_positives = 0, note = "no hits" },
-  { repo = "~/repos/coelhorocha/slack-bot", date = "2026-11-17", hits = 0, false_positives = 0, note = "no hits" },
-  { repo = "~/repos/coelhorocha/slopjus", date = "2026-11-17", hits = 0, false_positives = 0, note = "no hits" },
-  { repo = "~/repos/luizhcrocha/fleet", date = "2026-11-17", hits = 180, false_positives = 0, note = "raised per-test or per-suite timeouts" },
-  { repo = "~/repos/luizhcrocha/investimentos", date = "2026-11-17", hits = 10, false_positives = 0, note = "raised per-test or per-suite timeouts" },
-  { repo = "~/repos/luizhcrocha/picasso", date = "2026-11-17", hits = 22, false_positives = 0, note = "raised per-test or per-suite timeouts" },
+  { repo = "~/repos/coelhorocha/cancel-maintenance", date = "2026-11-20", hits = 1, false_positives = 0, note = "raised per-test or per-suite timeout; widening to config timeouts adds none" },
+  { repo = "~/repos/coelhorocha/chimr", date = "2026-11-20", hits = 0, false_positives = 0, note = "no hits (2 oxlint parse errors in concatenated worker/src/client/*.js fragments, not hits)" },
+  { repo = "~/repos/coelhorocha/custom-mcp-servers", date = "2026-11-20", hits = 169, false_positives = 6, note = "163 per-test timeouts (true) + 6 config timeouts: PGlite boot testTimeout/hookTimeout (casos, casos-contracts, case-analysis), Typst engine 60_000 (render, petition-render), browser preview 300_000 (petition-render): false positives, slow by nature; the widening is noisy and no valid case or config narrowing separates them from a true bump, so the rule stays at trial pending Luiz's call on a comment exemption or per-repo allowlists" },
+  { repo = "~/repos/coelhorocha/durable-automations", date = "2026-11-20", hits = 9, false_positives = 1, note = "8 per-test timeouts (true) + e2e config testTimeout 60_000 for real AWS/Vertex calls (vitest.e2e.config.ts:11): false positive" },
+  { repo = "~/repos/coelhorocha/email-automations", date = "2026-11-20", hits = 4, false_positives = 0, note = "raised per-test or per-suite timeouts; widening to config timeouts adds none" },
+  { repo = "~/repos/coelhorocha/infra-monorepo", date = "2026-11-20", hits = 0, false_positives = 0, note = "no hits" },
+  { repo = "~/repos/coelhorocha/princexml-templates-documentos-rj", date = "2026-11-20", hits = 0, false_positives = 0, note = "no hits" },
+  { repo = "~/repos/coelhorocha/process-contract", date = "2026-11-20", hits = 0, false_positives = 0, note = "no hits" },
+  { repo = "~/repos/coelhorocha/public-site", date = "2026-11-20", hits = 0, false_positives = 0, note = "no hits" },
+  { repo = "~/repos/coelhorocha/slack-bot", date = "2026-11-20", hits = 0, false_positives = 0, note = "no hits" },
+  { repo = "~/repos/coelhorocha/slopjus", date = "2026-11-20", hits = 0, false_positives = 0, note = "no hits" },
+  { repo = "~/repos/luizhcrocha/fleet", date = "2026-11-20", hits = 135, false_positives = 0, note = "per-test or per-suite timeouts; widening to config timeouts adds none" },
+  { repo = "~/repos/luizhcrocha/investimentos", date = "2026-11-20", hits = 12, false_positives = 2, note = "10 per-test timeouts (true) + 2 config testTimeout 30_000 (apps/web, packages/ops vite.config.ts) commented as CPU-bound scenario evaluation: false positives" },
+  { repo = "~/repos/luizhcrocha/picasso", date = "2026-11-20", hits = 22, false_positives = 0, note = "per-test or per-suite timeouts; widening to config timeouts adds none" },
 ]
 
 [[rule]]
