@@ -24,7 +24,7 @@ An editor or diff tool hangs an agent. Pass `-m` to `describe`, `commit` and `sp
 ## Push
 
 - Push and move bookmarks when asked; in a fleet they belong to the landing turn.
-- Publishing is `jj bookmark set <bookmark> -r @-`, then `jj git push --bookmark <bookmark>`, one bookmark by name. The repo's docs name its bookmark: most repos `master`, dotfiles `nix` (its `master` is a frozen archive).
+- Publishing is `jj bookmark set <bookmark> -r @-`, then `jj git push --bookmark <bookmark>`, one bookmark by name. The repo's docs name its bookmark: most repos `master` (dotfiles too; its frozen Arch-era archive is `arch`).
 - Every commit in `jj log -r '<bookmark>@origin..@'` ships: split unrelated work by domain with `jj split` first, and `jj new` after a push so `@` is never a pushed commit.
 - Bookmarks move forward only, so `--allow-backwards` and `--all` wait for Luiz.
 - A conflicted bookmark (`name??`): the landing-turn holder rebases the unpublished side onto `<bookmark>@origin`, then sets the bookmark.

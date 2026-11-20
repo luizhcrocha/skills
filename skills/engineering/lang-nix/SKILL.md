@@ -16,7 +16,7 @@ A project's pinned inputs win. Read `flake.nix` and `flake.lock` (or `devenv.yam
 
 - **Latest release, not stale stable** (Luiz's rule). A CLI added or touched in a flake, a NixOS module or a devenv is the upstream latest release. Check the registry (GitHub releases, PyPI, npm); if the pinned nixpkgs carries an older one, take it from an unstable input or from the upstream release binary, say which version went in and that it is the latest. Never hand over the older one with a note on upgrading.
 - **Every unstable or upstream pick carries its reason** in a comment beside it, ending with when it can go ("drop once 26.05 catches up").
-- **Nothing is applied to a real machine by an agent.** No `nixos-rebuild switch`, `entropic-switch` without `--dry-run`/`--build-only`, `clan machines update`, `darwin-rebuild switch`. Moving the dotfiles `nix` bookmark is a fleet deploy (every machine pulls `nix@origin`) and happens only when Luiz asks for it. Verify with the gates below and hand Luiz the switch command.
+- **Nothing is applied to a real machine by an agent.** No `nixos-rebuild switch`, `entropic-switch` without `--dry-run`/`--build-only`, `clan machines update`, `darwin-rebuild switch`. Moving the dotfiles `master` bookmark is a fleet deploy (every machine pulls `master@origin`) and happens only when Luiz asks for it. Verify with the gates below and hand Luiz the switch command.
 - `nix fmt` is clean and `nix flake check --no-build` evaluates before a change is done (dotfiles: `just check` runs both).
 - `flake.lock` changes only through `nix flake update <input>` (or `devenv update`), in its own change or stated in the description; never edited by hand, never bumped wholesale as a side effect.
 - Secrets never enter the store or a `.nix` file: clan vars in the dotfiles, `secretspec` with 1Password in devenv projects.
@@ -62,7 +62,7 @@ For the dotfiles' desktop, use the `nixvm` skill (`~/repos/luizhcrocha/dotfiles/
 
 ## Gotchas
 
-- Moving the dotfiles `nix` bookmark ships every commit under it to the fleet; `master` there is the frozen Arch-era archive and is never set or pushed.
+- Moving the dotfiles `master` bookmark ships every commit under it to the fleet; `arch` there is the frozen Arch-era archive and is never set or pushed.
 - clan's 26.05 pins nixpkgs, and with it 1Password and nushell (nushell 0.112 lacks `str lowercase`); a lock update alone cannot move them. Newer versions come through the unstable overlay.
 - `atuin` is pinned to a tag and follows nixpkgs-unstable; `--flake-update` does not move it. A tool that 26.05 ships older than the one that wrote its state (atuin's DB) may refuse that state; check data compatibility before a downgrade.
 - The devenv input deliberately has no nixpkgs follows, so it comes from the devenv cachix cache instead of building.

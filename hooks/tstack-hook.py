@@ -341,7 +341,7 @@ JJ_HINTS = """\
 # jj
 This repo is jj, colocated with git; a detached git HEAD is normal here, leave it as it is.
 - History goes through jj: `jj status/log/diff/describe/new/split/squash/rebase/abandon`. git checkout, stash, commit and reset stay unused: they fight jj's working copy.
-- Publish to this repo's landing bookmark (its docs name it: master in most repos, `nix` in dotfiles): `jj git fetch`, `jj rebase -b @ -d <b>@origin`, then `land-check -b <b>` says whether the push may go (one that deploys waits for a yes); then `jj bookmark set <b> -r <head>` and `jj git push --bookmark <b>`.
+- Publish to this repo's landing bookmark (its docs name it: master): `jj git fetch`, `jj rebase -b @ -d <b>@origin`, then `land-check -b <b>` says whether the push may go (one that deploys waits for a yes); then `jj bookmark set <b> -r <head>` and `jj git push --bookmark <b>`.
 - After a push, @ sits on a fresh empty commit. jj makes one itself when the push turns @ immutable (trunk); for any other bookmark, `jj log -r @` and `jj new` if @ is the pushed commit.
 - One jj workspace per agent (`ws-add <lane> -r <base>`: <repos>/.ws/<repo>/<lane>); rebases, bookmark moves and pushes belong to whoever holds the landing turn.
 - `gh` runs from the main workspace: a secondary workspace has no .git.{where}

@@ -14,7 +14,7 @@ Each axis runs in its own **parallel sub-agent**, started with a fresh context w
 
 ### 1. Pin the fixed point
 
-The fixed point is whatever the user named (a bookmark, `master@origin`, a change id, a commit, a tag). Unnamed, it is the landing bookmark's remote, `<bookmark>@origin`, with the bookmark the repo's docs name (`CLAUDE.md`, `AGENTS.md`, `README.md`, the justfile): `master` in most repos, `nix` in dotfiles. When the docs are silent, it is `trunk()`.
+The fixed point is whatever the user named (a bookmark, `master@origin`, a change id, a commit, a tag). Unnamed, it is the landing bookmark's remote, `<bookmark>@origin`, with the bookmark the repo's docs name (`CLAUDE.md`, `AGENTS.md`, `README.md`, the justfile): `master` in most repos. When the docs are silent, it is `trunk()`.
 
 Capture the diff command once:
 
