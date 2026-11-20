@@ -20,7 +20,7 @@ In jj a conflict is recorded in the commit. A rebase always finishes; the confli
 
 4. **Run the repo's checks** on the resolved stack, as the repo names them (the justfile, package scripts, the CI config): typecheck, then tests, then format. A failure the resolution caused is fixed in the conflicted change (`jj squash --into <rev>` or `jj absorb`), then the checks run again. Done when they pass, or a failure is shown to predate the conflict.
 
-5. **Report** each file: the two intents, what you kept, the trade-off when one side lost, the sources you read, and the check results. `jj op restore <op before step 3>` undoes the resolution.
+5. **Report** each file: the two intents, what you kept, the trade-off when one side lost, the sources you read, and the check results. `jj op revert <the squash operation>` undoes the resolution and nothing another workspace did since (`jj op restore` would roll theirs back too).
 
 ## Git fallback
 
