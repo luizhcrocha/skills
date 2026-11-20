@@ -35,6 +35,30 @@ The upstream sync (`scripts/sync_upstream.py`, overlay mode) adds to a synced sk
 | separate-before-serializing-shared-state | tstack:principles |
 | sequence-verifiable-units | tstack:principles |
 | .cursor/skills | .claude/skills |
+| poteto-agent | tstack:tuca-agent |
+| Task tool | the Agent tool |
+| Task subagent | an Agent subagent |
+| Task spawn | an Agent spawn |
+| todolist tool | TodoWrite or TaskCreate (ToolSearch loads them) |
+| setup-pstack | none: models come from docs/models.md |
+| Opening a PR | tuca-mode's Land (local/tuca-mode/land.md); a PR only when Luiz asks, then this playbook |
+| opening-a-pr.md | local/tuca-mode/land.md, unless Luiz asked for a PR |
+| worktree-cleanup | local/tuca-mode/workspace-prune.md (jj workspaces) |
+| Worktree cleanup | local/tuca-mode/workspace-prune.md (jj workspaces) |
+| worktree-audit.sh | none: jj workspaces, see local/tuca-mode/workspace-prune.md |
+| /deslop | tstack:deslop |
+| cursor-team-kit | none: tstack takes only deslop from it |
+| control-ui | the repo's verify-<app> skill (tstack:create-verification-skill), else picasso or claude-in-chrome |
+| control-cli | a Rex tab (`fleet tab run`) or a background Bash call |
+| Cursor cloud agent | a background Agent in its own jj workspace |
+| operator | Luiz |
+| claude-opus-5-5-xhigh-fast | the role's model and effort in docs/models.md |
+| claude-opus-5-5-high-fast | the role's model and effort in docs/models.md |
+| gemini-4-neon-xhigh | none: a panel seat on another vendor is skipped |
+| principle-build-the-lever | tstack:principles |
+| principle-encode-lessons-in-structure | tstack:principles |
+| principle-guard-the-context-window | tstack:principles |
+| principle-prove-it-works | tstack:principles |
 
 ## emilkowalski
 

@@ -1,11 +1,10 @@
-# Pause safely
+### Pause safely
 
-**You own a clean stop. Leave a checkpoint a cold start can resume from.** Explicit only: on "keep going", "going to bed, keep going" or "don't stop", there is no pause.
+**You own a clean stop. Leave a checkpoint a cold-start agent can resume from.** This is explicit only. On "keep going", "going to bed, keep going", or "don't stop", do not pause.
 
-1. Stop at a safe boundary: finish the current atomic step or back out of it. Start nothing new. Stop background subagents, or record which are still running and where they write.
-2. Take no irreversible action to pause: no push, no bookmark move, no PR.
-3. Make the work durable. jj already snapshots the working copy; describe it so it reads as unfinished: `jj describe -m "wip: <what>"` on `@` (split unrelated edits apart first). A broken tree says so in one line of the description.
-4. Record what a session a month from now would pay to rediscover as memo notes (`tstack:memo`): the decisions and their why, the gotchas. The resume point is work, not knowledge: it goes in the handoff of step 5. A run keeping a decision trail logs the pause as its last row, result `open`, and runs the trail's audit against the transcript (`tstack:show-me-your-work`); the fresh review waits for the run's real end.
-5. Write the handoff with `tstack:handoff`: the resume point, intent, what you were doing, progress and what is verified, current state, next steps, key files, gotchas. It points at the change ids, the memo notes and any decision trail instead of repeating them.
+1. Stop at a safe boundary. Finish the current atomic step or back out of it. Start nothing new, and cancel any nested subagents.
+2. Take no irreversible action to pause. No PR and no push unless you already had one out.
+3. Make the work durable. Commit uncommitted edits as one clear `wip:` commit on the current branch so nothing is lost. If the tree is broken, say so in the commit body in one line.
+4. Write the resume note off-context. Capture intent, what you were doing, progress and what's verified, current state, next steps, key files, and gotchas. For the compaction trigger write it to a file like `/tmp/<slug>-resume.md`. If a show-me-your-work trail exists, point at it instead of duplicating it.
 
-**Reply:** where you are in the loop, what is on disk and what was only in your head (paths and change ids, no diff dumps), the wip change and whether its tree is sound, the handoff path, and the first action on resume. This is a pause, not a final report.
+**Reply:** where you are in the loop, what's on disk versus still in your head (paths, no diff dumps), the commits you made and whether the tree is clean, and the first action on resume. This is a pause, not a final report.

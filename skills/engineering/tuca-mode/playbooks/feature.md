@@ -1,20 +1,21 @@
-# Feature
+### Feature
 
-**You own the design. Plan, review, verify.** Delegate the implementation; stay in the lead.
+**You own the design. Plan, review, verify.** Delegate implementation. Stay in the lead.
 
-1. Map the affected subsystem: `CONTEXT.md`, memo (`memo recall`), the modules and seams the feature touches. `tstack:how` does the reading when it spans more than a few files.
-2. Design the shape: name the data shape and its organizing structure (Model the Domain), the module and its interface, the seam it sits behind, with the call site written first. A non-trivial or contested shape → `tstack:architect` sketches it: grounded with how, competing candidates through `tstack:arena` (each runner in its own jj workspace), one synthesized sketch that step 4 implements against.
-3. Write the throughput checkpoint as four todo items. A dimension that does not apply keeps its item with `n/a: <reason>`:
-   - **Blocking first steps.** Gates that run before any fan-out (shared types, schemas, config).
-   - **Independent workstreams.** Disjoint files, services or layers parallelize. Shared writes serialize.
-   - **Shared mutable state.** Split the target first (Separate Before Serializing Shared State); serialize only for a real invariant.
-   - **Smallest safe decomposition.** If one worker is best, say why.
-4. Delegate the code to an Implementer subagent ([models.md](../../../../docs/models.md)) in its own jj workspace with a specific scope: file paths, the named data shape and its structure (a state machine over scattered booleans, a table over branching, a typed model over repeated shape assumptions), the seam, and a checkable done criterion. Test-first at the agreed seams with `tstack:tdd`. Surgical edits; comments per [Comments](../SKILL.md#comments); a shared-primitive change reaches every consumer, each verified.
-5. Verify on the matching surface: run it, drive it (claude-in-chrome for a UI), read the real output. The project's `verify-<app>` skill is the recipe when it exists: drive every entry point its feature map lists for what changed, and fix the map through `tstack:maintain-verification-skill` when it drifted. None, and the surface will be driven again → `tstack:create-verification-skill` first. "Inconclusive" or the wrong surface is not a pass; flag it.
-6. Review: `/simplify` (Claude Code built-in) over the diff, and read it yourself against the spec.
-7. Shape the history into small ordered changes, each landable and verified before the next (Sequence Work into Verifiable Units).
-8. Run the Land playbook.
+1. Trace the affected subsystem.
+2. `architect` for the shape.
+3. Write the throughput checkpoint as four todo items. A dimension that genuinely does not apply (single file, no fan-out) keeps its item with `n/a: <reason>` rather than being dropped:
+   - **Blocking first steps.** Gates run before fan-out.
+   - **Independent workstreams.** Disjoint files, services, or layers parallelize. Shared writes serialize.
+   - **Shared mutable state.** Default to splitting the target (the **separate-before-serializing-shared-state** principle skill). Serialize only for real invariants.
+   - **Smallest safe decomposition.** If one worker is best, name why.
+4. Delegate code-writing to a subagent using your configured feature model (default `claude-opus-5-5-xhigh-fast`) with a specific scope (file paths, named data shape and its organizing structure per **principle-model-the-domain**, a state machine over scattered booleans, a table/registry over branching, a typed model over repeated shape assumptions, chosen before the delegate writes logic, and success criteria). Pick each subagent's reasoning level for the job, per the Subagents section. When the implementation admits multiple valid shapes (error handling, abstraction layer, test structure), delegate via the **arena** skill instead so the runners surface the alternatives and the cross-judge guards the pick. Mandatory: no skip-with-reason escape, and Laziness Protocol does not override it (the gain is review separation, not lines saved). A subagent forbidden to spawn satisfies this by owning the diff directly with the same review separation. No "standing by" reply that waits on a nested agent. Surgical edits, re-ground against the source for upstream-derived files. Port shared-primitive improvements to all consumers and verify each. Commit liberally.
+5. Verify on the matching surface. "Inconclusive" or wrong-surface is not a pass. Flag it.
+6. Rebase into small, ordered commits. Stack follow-ups.
+   Use the **sequence-verifiable-units** principle skill, building, verifying, and committing each small unit before the next.
+7. If the design is contested, `interrogate` before shipping.
+8. Run **Opening a PR**.
 
-Code-coupled work (one feature) goes to a single owner with the checkpoint inline; that owner fans out after the blocking phase. Parent-level fan-out is for slices that produce independent artifacts. Rewrite the checkpoint at phase boundaries, and spawn a fresh owner rather than chaining interrupts.
+Code-coupled work (one feature, one migration) goes to a single owner with the checkpoint inline. That owner fans out internally after the blocking phase. Parent-level fan-out is for slices that produce independent artifacts (audits, cross-subsystem investigations, competing experiments). Rewrite the checkpoint at phase boundaries. Spawn a fresh owner rather than chaining interrupts.
 
-**Reply:** what you built, what you chose and why, the throughput checkpoint, open decisions. A table for design alternatives.
+**Reply:** what you built, what you chose and why, the throughput checkpoint, open decisions. Tables for design alternatives.

@@ -66,13 +66,13 @@ out to small handlers and must stay under ~100 ms. Handlers: memo wake
 (SessionStart), jj hints (SessionStart, when `.jj` exists), fleet heartbeat
 (PostToolUse, when `agent_id` is present and a ledger exists), memo nudge (Stop).
 
-**`/tuca-mode`.** pstack's poteto-mode, adapted: non-negotiables, the autonomy
-rules, the principle index, and a playbook router; the matched playbook's steps
-are copied into the todo list verbatim, skipped steps stay with a reason.
+**`/tuca-mode`.** pstack's poteto-mode, overlaid verbatim (2026-11-20):
+non-negotiables, the principle index, autonomy, subagents and a playbook router.
+Luiz's changes are `local/tuca-mode.md` and its Land, Hotfix and Workspace prune
+playbooks in `local/tuca-mode/`; Cursor's terms map through `local/NAMES.md`.
 Claude Code re-attaches an invoked skill after a compaction, so the mode keeps
 no flag and no hook re-injects it (the `bin/tuca-mode` flag and its SessionStart
-handler were dropped, 2026-11-20). The coordinator behaviour (D2) lives in the mode: it starts
-the ledger lazily, through the coordinator skill and the `fleet` CLI.
+handler were dropped, 2026-11-20).
 
 **principles.** One skill, an index plus one file per principle (23 from
 pstack, synced through `upstreams.toml`, adapted in place); model-invocable, so
@@ -169,14 +169,13 @@ merging the skill replaces the marker with a pointer.
 |---|---|---|
 | swarm | parallel fan-out | the `orchestrate` skill |
 
-Replaced rather than pending: poteto-agent (subagents take `model` per role),
-`/deslop` (Claude Code's `/simplify`), control-ui and control-cli
+Replaced rather than pending: control-ui and control-cli
 (claude-in-chrome, or running the CLI), create-skill (`writing-for-agents`),
 Bugbot triage (every review comment triaged on its merits), Cursor cloud agents
-(background Agent calls in jj workspaces). Not in the router, moving into the
-fleet (step 6): the orchestrate, autopilot-full, autopilot-stack and
-multi-phase-plan playbooks; until then "run this whole project" goes to the
-coordinator and orchestrate skills.
+(background Agent calls in jj workspaces). Since the overlay (2026-11-20),
+poteto-agent is `tstack:tuca-agent`, `/deslop` is `tstack:deslop` (from
+cursor-team-kit), and autopilot-full, autopilot-stack and multi-phase-plan ship
+with tuca-mode's playbooks.
 
 ## Testing ladder (draft)
 

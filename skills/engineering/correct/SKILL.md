@@ -31,4 +31,4 @@ Last, keep a table in the agent instruction file that pairs each rule with what 
 
 **Reply:** each class with its evidence, the level you picked, and why a higher level didn't work.
 
-Local changes (tstack): [local/correct.md](../../../local/correct.md)
+Local changes (tstack): [local/correct.md](../../../local/correct.md) · Names here: operator → Luiz

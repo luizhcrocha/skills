@@ -20,4 +20,4 @@ Spawn one Task subagent with `subagent_type: generalPurpose` and `readonly: true
 
 Present the subagent's output. Light edits for clarity or context from the conversation are fine. Do not substantially rewrite it.
 
-Local changes (tstack): [local/how.md](../../../local/how.md) · Names here: generalPurpose → general-purpose
+Local changes (tstack): [local/how.md](../../../local/how.md) · Names here: generalPurpose → general-purpose, Task subagent → an Agent subagent

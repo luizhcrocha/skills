@@ -1,22 +1,25 @@
-# Perf issue
+### Perf issue
 
-**You own the measurement story. Plan, review, verify the numbers.** Every fix ties to a measurement; reading source is not measuring. `tstack:diagnosing-bugs` has the perf branch of the loop (baseline first, then bisect).
+**You own the measurement story. Plan, review, verify the numbers.** Tie every fix to a measurement, don't read source instead of measuring.
 
-1. Capture a baseline on the matching surface: a timing harness, a profile, a query plan, a trace. Median of several runs, with the command that produced it.
-2. Map the hot path to ground hypotheses (`tstack:how`). Claim no ceiling without running it. Most fixes come from eight strategy families; use them as hypothesis generators, and a family earns an attempt only when the trace shows its signal:
-   - **Elimination.** Does the hot path need to exist at all: a computation nobody consumes, a gate always off, a redundant sync, a legacy path kept just in case? The profiler shows what is slow, never that it is deletable, so this family needs the map.
-   - **Divide and conquer.** The cost scales with input size: split so each piece touches less, or run independent pieces in parallel.
-   - **Caching.** The same computation or fetch repeats on identical inputs. Name what invalidates it before claiming the win.
-   - **Indirection.** A cheaper intermediate could absorb the work: an index instead of a scan, a queue off the interactive path. Add the hop only when it removes more than it adds.
-   - **Batching.** Many small operations each pay a fixed overhead (RPC, query, syscall): coalesce them.
-   - **Redundancy.** The wait hangs on one slow instance: hedge or replicate, only when the trace shows the wait dominates and there is headroom.
-   - **Lazy evaluation.** Cost lands on results never used or not needed yet: defer to first use.
-   - **Scheduling.** The work must happen, but not while someone waits: move it to idle time, a warmup, a precompute. Measure the interactive path.
-3. Plan the fix from the trace. Crossing a function boundary → sketch it first with `tstack:architect`. Delegate the change to an Implementer subagent ([models.md](../../../../docs/models.md)) in its own jj workspace; review the diff; capture a post-fix measurement with the same harness. One attempt verified before the next (Sequence Work into Verifiable Units). A fix that does not move the measurement, or a round of hypotheses all falsified, escalates once under `tstack:diagnosing-bugs`' gate (Phase 3, "Escalate once").
-4. Compare the artifacts, not impressions: parse both (JSON to sqlite, a diff) and state the delta. "Inconclusive" or the wrong surface is not a pass; flag it.
-5. Put the measurement (before → after, with its unit and command) in the change description.
-6. Run the Land playbook.
+1. Capture a baseline trace via the matching control skill. Vet the baseline, and each later number, with the **benchmark-checklist** skill.
+2. Trace the code to ground hypotheses. Don't claim a perf ceiling without running it first.
+   Try the performance mantras in order, cheapest first:
+   1. Don't do it. Stop work whose result nothing uses rather than cheapening it.
+   2. Do it, but don't do it again.
+   3. Do it less.
+   4. Do it later.
+   5. Do it when they're not looking.
+   6. Do it concurrently.
+   7. Do it cheaper.
 
-For sustained improvement against a metric rather than a one-off fix, use Hillclimb.
+   When an earlier mantra meets the target, stop.
+3. Plan the fix from the trace. If it crosses a function boundary, `architect` first. Delegate implementation to a subagent using your configured perf-issue model (default `claude-opus-5-5-xhigh-fast`). Pick each subagent's reasoning level for the job, per the Subagents section. Review the diff. Capture a post-fix trace.
+   Apply the **sequence-verifiable-units** principle skill, verifying each attempt before trying the next.
+4. Parse and compare the artifacts (JSON to sqlite, diff). "Inconclusive" or wrong-surface is not a pass. Flag it.
+5. Cite the measurement in the PR.
+6. Run **Opening a PR**.
 
-**Reply:** baseline, post-fix number, delta, the harness command and artifact paths.
+For sustained improvement against a metric rather than a one-off fix, use the Hillclimb playbook (`playbooks/hillclimb.md`).
+
+**Reply:** baseline number, post-fix number, delta, artifact path.

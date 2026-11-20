@@ -40,4 +40,4 @@ Read the terminal results. Drop a result that does not record the SHAs and metho
 
 Return one consolidated in-chat report with a result table, issue one-liners, gaps or dropouts, and the race rule when used.
 
-Local changes (tstack): [local/swarm.md](../../../local/swarm.md) · Names here: poteto-mode → tstack:tuca-mode, pstack-models.mdc → docs/models.md (roles), generalPurpose → general-purpose
+Local changes (tstack): [local/swarm.md](../../../local/swarm.md) · Names here: poteto-mode → tstack:tuca-mode, pstack-models.mdc → docs/models.md (roles), generalPurpose → general-purpose, Task tool → the Agent tool, claude-opus-5-5-high-fast → the role's model and effort in docs/models.md

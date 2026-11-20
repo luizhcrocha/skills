@@ -1,22 +1,25 @@
-# Eval
+### Eval
 
-**You own the experiment design. Plan, blind, run, synthesize.** The harness is `claude plugin eval` (read `claude plugin eval --help` for the current flags): cases under the plugin's `evals/`, each a `case.yaml` or `prompt.md` plus `graders/*.md`, run with and without the plugin (the ablation arm) and scored.
+**You own the experiment design. Plan, blind, run, synthesize.**
 
-**Blinding, held throughout:**
+**Non-negotiables for blinding:**
 
-- The candidate never sees `eval`, `test`, `judge`, `experiment`, `rubric`, `score`, `compare`, `benchmark` or `candidate` in a directory, file or prompt.
-- The prompt reads as an organic request from Luiz: the goal, not the meta. No cue asking the candidate to list the skills or principles it applied; grade chain-following from what it did.
-- Directory and slug names are project-shaped, what a person would pick.
-- Graders know they grade; they see outputs by label, never by variant.
-- Comparing two variants: one grader scores both on one scale in one pass.
+- No `eval`, `test`, `judge`, `experiment`, `rubric`, `score`, `compare`, `benchmark`, `candidate`, or `arena` in any directory, file, or prompt the candidate sees.
+- The candidate prompt looks like an organic user request. State the goal, not the meta.
+- No chain-eliciting cues. Don't ask the candidate to list which skills, principles, or files they applied. Ask for design notes generally and grade chain-following from code shape, not self-report.
+- Sanitize directory and slug names. Use project-shaped names a user might pick.
+- Don't tell the candidate other candidates exist.
+- The judge can know it's judging but sees outputs by sanitized label only, never by model name.
+- Comparing two variants: one judge scores both sets in a single pass on one scale, blind to which set each came from.
 
 **Steps:**
 
-1. **Frame.** Name the variant under test and the behaviour that counts as success. Write 3 to 6 concrete grader criteria, kept out of anything the candidate sees.
-2. **Set up the cases.** `claude plugin eval init --bare <name>` for a blank case, or `init` for the interview. Plant the context an organic task would have: a small project skeleton, the files a user would have.
-3. **Author one organic prompt** per case: what Luiz would type.
-4. **Run it.** `claude plugin eval <plugin path> --runs <n> --case <glob>`; `--model` is the model of the session the skill will run in (test runs take the target's pair, [models.md](../../../../docs/models.md)); the plugin eval has no effort flag, so the report names the effort the runs used. The default ablation gives the no-plugin baseline. Set `--max-cost-usd` for a large suite.
-5. **Verify the chain from transcripts, not self-report.** Read what each run actually opened and ran (the JSON result, `--json`, and the run transcripts); grade chain-following from the files read and the shape of the output.
-6. **Read every output yourself**, end to end, and compare with the graders' verdicts. Disagreement means a biased grader or an ambiguous criterion; fix it and rerun that case.
+1. **Frame.** State what variant is under test and what behavior counts as success. Write the rubric (3-6 concrete criteria) for the judge only. Hold it back from candidates.
+2. **Set up sanitized environments.** Per-candidate working dir with the variant in place. Plant any context an organic task would have: a project skeleton, the skills the candidate would naturally read.
+3. **Author one organic prompt.** What a user would type. No leakage of what's being measured.
+4. **Spawn N parallel candidates** on different models per the **arena** skill's Phase B. Each works in its own sanitized dir. Same prompt to each. Pick each subagent's reasoning level for the job, per the Subagents section. An agent that only dispatches, polls, or packs results runs on `claude-opus-5-5-medium-fast`.
+5. **Spawn one blinded judge** on a different model family per the **arena** skill's Phase C. Judge sees outputs by sanitized label and the rubric, never a model name.
+6. **Verify the chain from transcripts, not self-report.** Read each candidate's local transcript under the active workspace's `agent-transcripts/` directory (the system prompt names this path). Do not glob across `~/.cursor/projects/*/`. That crosses workspace boundaries and reads private chats from unrelated projects. Look at which files each candidate actually opened. Grade chain-following from the files it really read plus the shape of the code, never from the candidate's own claims.
+7. **Read every candidate output yourself** end to end. Compare to the judge's verdict. Disagreement means a model is biased or the rubric is ambiguous. Synthesize.
 
-**Reply:** the variant under test, the criteria, per-case notes, the scores with and without the plugin, your synthesis, and whether to promote the variant.
+**Reply:** variant under test, rubric, per-candidate notes, judge's verdict, your synthesis, and a recommendation for whether to promote the variant.

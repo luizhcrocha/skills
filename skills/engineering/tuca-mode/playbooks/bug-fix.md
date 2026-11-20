@@ -1,14 +1,15 @@
-# Bug fix
+### Bug fix
 
-**You own this task. Plan, review, verify.** Delegate the digging and the fix to subagents; stay in the lead. The defect already blocks other lanes or production → [Hotfix](hotfix.md) first, then back here for the root cause.
+**You own this task. Plan, review, verify.** Delegate investigation and the fix to subagents, stay in the lead. Pick each subagent's reasoning level for the job, per the Subagents section.
 
-Be scientific. Every line that lands traces to runtime evidence. A belt-and-suspenders change that "might help" is a hypothesis, not a fix, and it does not land. When evidence refutes a hypothesis, revert what it motivated. The smallest change the evidence justifies lands, nothing more. The loop is `tstack:diagnosing-bugs`; its phases are the spine of steps 1 to 5.
+Be scientific. Every shipped line traces to runtime evidence. Belt-and-suspenders that "might help" is a hypothesis, not a fix. It does not ship. When evidence refutes a hypothesis, revert what it motivated. The smallest change the evidence justifies ships, nothing more.
 
-1. Build the feedback loop and reproduce it yourself on the matching surface (diagnosing-bugs Phases 1 and 2): a failing test, a CLI run diffed against a snapshot, a curl, the browser through claude-in-chrome; the project's `verify-<app>` skill (`.claude/skills/verify-*`) is the launch and drive recipe when it exists (`tstack:create-verification-skill` makes one when the surface will be driven again). Ask Luiz only with a stated reason the surface cannot be reached, after driving it as far as it goes. Done when one command, already run, goes red on this exact symptom.
-2. Binary-search the cause (Phases 3 and 4). Seed 3 to 5 ranked, falsifiable hypotheses from a map of the affected subsystem and its history (`tstack:recall`, `jj log -- <path>`). Each pass, take the split that cuts the most remaining space, get runtime evidence, eliminate. Instrument with tagged logs when state is unclear; do not guess. A long or stubborn hunt runs under `/loop`. Done when one mechanism survives and runtime evidence confirms it.
-3. Plan the fix. Crossing a function boundary → sketch it first with `tstack:architect`; the sketch is the fix's contract. Delegate the implementation to an Implementer subagent ([models.md](../../../../docs/models.md)) in its own jj workspace, with the files, the mechanism and the red command in the brief.
-4. Verify on the same surface (Phase 5): the original repro now passes. "Inconclusive" or the wrong surface is not a pass; flag it. A unit test shows branch behaviour, not bug absence.
-5. Stage the changes so the failing test lands before the fix (`tstack:tdd` when the bug has a cheap local test path; skip it when the test would be expensive or unclear, and say so). This is Sequence Work into Verifiable Units. Clean up per Phase 6: tagged logs gone, the surviving hypothesis in the fix's description.
-6. Run the Land playbook.
+1. Reproduce it yourself on the matching surface via the control skill (Non-negotiables), even when a debug or instrumentation protocol says to ask the user to reproduce. Ask the user only with a stated, specific reason the control surface cannot reach the target, and only after driving it as far as it goes. If it won't reproduce directly, synthesize the trigger, tighten conditions, or instrument until it fires.
+2. Binary-search the cause. Form the candidate hypotheses, then rule them out until one survives. Seed them with a trace of the affected subsystem and the **why** skill for regression history. Each pass, take the split that cuts the most remaining problem space, get runtime evidence, eliminate. When program state is unclear, add instrumentation or logging and read it as the code runs. Don't guess. Drive a long or stubborn hunt with Cursor's `/loop` command. Confirm the surviving *mechanism* with runtime evidence before step 3's `architect` or an `interrogate` fan-out.
+3. Plan the fix. If it crosses a function boundary, `architect` first. Delegate implementation to a subagent using your configured bug-fix model (default `claude-opus-5-5-xhigh-fast`) with a specific scope.
+4. Verify on the same surface. The original repro now passes. "Inconclusive" or wrong-surface is not a pass. Flag it. Unit tests show branch behavior, not bug absence.
+5. Stage the commits so the failing repro lands before the fix in git history. See the **tdd** skill for the failing-test-first cadence when the bug has a cheap local test path. Skip it when the test would be expensive, integration-heavy, or unclear.
+   This is the canonical **sequence-verifiable-units** principle skill, the failing test first and the fix on top.
+6. Run **Opening a PR**.
 
-**Reply:** what was broken, the root cause, the fix, how you verified it. Paste the failing-then-passing repro output verbatim.
+**Reply:** what was broken, root cause, fix, how you verified. Paste failing-then-passing repro output verbatim.

@@ -1,12 +1,13 @@
-# Autonomous run
+### Autonomous run
 
 **You own the exit condition. Define done, then drive to it without stopping.**
 
-1. State the exit condition as a checkable predicate before the first iteration: tests green, the repro fixed, all N changes landed, pixel diff zero.
-2. Pick the wake mechanism. An event to watch (CI, a push, a file appearing, a process exiting) → a background Bash command that exits on the event (it re-invokes you), the Monitor tool for a condition in a log or a file (in a fleet it only watches: read-only commands, no `$` expansion), or a Watcher subagent ([models.md](../../../../docs/models.md)), with a long heartbeat under `/loop` as the fallback. No event → `/loop` at an interval sized to when the result is worth re-checking. Never a foreground `sleep` loop or `tail -f`: poll loops held 36% of fleet workers' Bash wait (2026-10-10).
-3. Each iteration makes the smallest change the evidence justifies, verifies it against the predicate, keeps it as a described jj change when it advanced, and abandons it (`jj abandon`, or `jj restore`) when it did not. A "might help" change is reverted, not left to ride. One unit verified before the next (Sequence Work into Verifiable Units).
-4. Mid-run discoveries are yours: a broken skill, a related bug, a flaky check, tooling failures, fixable drift. Each goes in its own jj change. Reversible work is never parked for Luiz and never asked about. Surface only the pause list in [Autonomy](../SKILL.md#autonomy), a product or preference call no experiment can settle, or a real dead end. Return to the predicate after each side fix.
-5. Keep the decision trail with `tstack:show-me-your-work`: one row per iteration (what changed, the predicate before and after, kept or abandoned), audited and reviewed before the reply.
-6. Stop when the predicate holds. A plateau is not a stop: pivot the approach to push past it. Surface a genuine dead end rather than spinning, and never relax the predicate to declare victory. Code that should land runs the Land playbook.
+1. State the exit condition as a checkable predicate before the first iteration (tests green, repro fixed, all N PRs merged, pixel-diff zero).
+2. Pick the wake mechanism using Cursor's `/loop` command (a built-in, not a pstack skill). An event to watch (CI, a merge, a ref advancing) gets a watcher subagent that wakes you on the event, with a long time-based heartbeat as fallback. No event gets a fixed-interval heartbeat sized to when the result is worth re-checking. Pick each subagent's reasoning level for the job, per the Subagents section.
+3. Each iteration makes the smallest change the evidence justifies, verifies it against the predicate, commits if it advanced, discards changes that didn't help. Belt-and-suspenders that "might help" gets reverted, not left to ride.
+   Sequence the work via the **sequence-verifiable-units** principle skill, verifying each unit before the next instead of batching checks at the end.
+4. Mid-run discoveries that support the goal are yours. Address broken skills, related bugs, flaky verifiers, review noise, tooling failures, orphaned follow-ups, and fixable drift yourself via poteto-mode. Put out-of-band fixes in their own PR. Do not park reversible work for the human or use `AskQuestion`. Surface only irreversible actions, genuine product or preference calls no experiment can settle, or a real dead end. Keep the predicate as the main drive, and return to it after each side fix.
+5. Checkpoint every iteration via the **show-me-your-work** skill, a row for what changed and whether the predicate moved.
+6. Stop when the predicate is met. A plateau is not a stop, so keep going and pivot your approach to push past it. Surface a genuine dead end rather than spinning, and never relax the predicate to declare victory.
 
-**Reply:** the exit condition, iterations run, what landed, what was discarded, the final predicate state, the decision-trail path.
+**Reply:** the exit condition, iterations run, what landed, what was discarded, final predicate state.

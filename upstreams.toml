@@ -118,7 +118,7 @@ ignore = [
 map = [
   # Overlay, leaf by leaf (Luiz, 2026-11-20): the 23 principle leaves are
   # upstream's verbatim. The folder's other files are ours: the index SKILL.md
-  # (pstack's index sits in poteto-mode, which we don't take), Bound and Assert,
+  # (pstack's index sits in poteto-mode, tuca-mode here), Bound and Assert,
   # Own the Nondeterminism, and references/ (TigerBeetle's, synced below).
   { from = "skills/principle-*/SKILL.md", to = "skills/engineering/principles/{1}.md", mode = "overlay" },
   # Overlay (Luiz, 2026-11-20): blast-radius and the two verification skills.
@@ -171,15 +171,12 @@ map = [
   # comment-sicko: upstream's text plus local/agents/comment-sicko.md (Sonnet,
   # jj diff scope, no history edits).
   { from = "agents/comment-sicko.md", to = "agents/comment-sicko.md", mode = "overlay" },
-  # Overlay, verbatim: tuca-mode's scripts from poteto-mode (watch-pr polls
-  # GitHub for the babysit and shipping playbooks, bun).
-  { from = "skills/poteto-mode/scripts/watch-pr", to = "skills/engineering/tuca-mode/scripts/watch-pr", mode = "overlay" },
-  { from = "skills/poteto-mode/scripts/bootstrap.ts", to = "skills/engineering/tuca-mode/scripts/bootstrap.ts", mode = "overlay" },
-  { from = "skills/poteto-mode/scripts/package.json", to = "skills/engineering/tuca-mode/scripts/package.json", mode = "overlay" },
-  { from = "skills/poteto-mode/scripts/bun.lock", to = "skills/engineering/tuca-mode/scripts/bun.lock", mode = "overlay" },
-  # The rest of poteto-mode, mirror only, to compare with tuca-mode, which is
-  # ours (Luiz reworks it later, 2026-11-20). After the scripts: first match wins.
-  { from = "skills/poteto-mode", to = "upstream/pstack/skills/poteto-mode", mode = "mirror" },
+  # tuca-mode is poteto-mode verbatim (Luiz, 2026-11-20): our changes are
+  # local/tuca-mode.md and its playbooks in local/tuca-mode/ (Land, Hotfix,
+  # Workspace prune); Cursor's terms map through local/NAMES.md.
+  { from = "skills/poteto-mode", to = "skills/engineering/tuca-mode", mode = "overlay" },
+  # tuca-agent: poteto-agent plus local/agents/tuca-agent.md (Opus high, our path).
+  { from = "agents/poteto-agent.md", to = "agents/tuca-agent.md", mode = "overlay" },
 ]
 
 # Cursor's cursor-team-kit (MIT), same repo as pstack. Only deslop is taken

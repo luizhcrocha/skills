@@ -9,7 +9,7 @@ Work found mid-session, outside your task and too big to fold into it, leaves to
 
 ## Steps
 
-1. **Propose.** Ask Luiz in the reply (tuca-mode's What needs Luiz): the work in one sentence, why it is outside your task, and the choice to spin it off or leave it. "Spin this off" from Luiz is the yes, so skip the question. A fleet worker or a subagent reports the proposal to its parent and stops here. Done when Luiz has answered; on a no, go back to your task.
+1. **Propose.** Ask Luiz in the reply, never a dialog (tuca-mode's local changes, line 5): the work in one sentence, why it is outside your task, and the choice to spin it off or leave it. "Spin this off" from Luiz is the yes, so skip the question. A fleet worker or a subagent reports the proposal to its parent and stops here. Done when Luiz has answered; on a no, go back to your task.
 2. **Write the spin-off file** at `$TMPDIR/spin-off-<slug>.md` (`/tmp` when `$TMPDIR` is unset), outside the repo, so it never lands in your open change. `<slug>` is lower-case letters, digits and `-`. One section each:
    - `goal`: one sentence, the outcome for whoever is affected, such as "lawyers never read stale case data without knowing it". Never a decision to make, such as "decide what replaces X".
    - `found-in`: this session's name, the repo's path, your jj change id.
