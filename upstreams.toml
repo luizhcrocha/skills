@@ -88,7 +88,8 @@ map = [
   { from = "skills/productivity/grill-me", to = "skills/productivity/grill-me", mode = "overlay" },
   { from = "skills/productivity/grilling", to = "skills/productivity/grilling", mode = "overlay" },
   { from = "skills/productivity/handoff", to = "skills/productivity/handoff", mode = "overlay" },
-  { from = "skills/productivity/teach", to = "skills/productivity/teach", mode = "overlay" },
+  # teach is pstack's (Luiz, 2026-11-20): mattpocock's is mirror only.
+  { from = "skills/productivity/teach", to = "upstream/mattpocock/skills/productivity/teach", mode = "mirror" },
   # wait-what is ours as bro (2026-09-30): pstack's bro merged into its text.
   { from = "skills/productivity/wait-what", to = "skills/productivity/bro", mode = "mirror" },
   # writing-for-agents: dropped (Luiz, 2026-11-20); our old copy sits in skills/deprecated/writing-for-agents.
@@ -132,7 +133,7 @@ map = [
   # Overlay, whole skill folders.
   { from = "skills/how", to = "skills/engineering/how", mode = "overlay" },
   { from = "skills/why", to = "skills/engineering/why", mode = "overlay" },
-  { from = "skills/teach", to = "skills/engineering/explain", mode = "overlay" },
+  { from = "skills/teach", to = "skills/engineering/teach", mode = "overlay" },
   { from = "skills/architect", to = "skills/engineering/architect", mode = "overlay" },
   { from = "skills/arena", to = "skills/engineering/arena", mode = "overlay" },
   { from = "skills/swarm", to = "skills/engineering/swarm", mode = "overlay" },

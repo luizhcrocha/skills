@@ -1,5 +1,5 @@
 ---
-name: explain
+name: teach
 description: "Explain a piece of work plainly (what, how, why) in one conversational account. Use for \"explain this change\", \"walk me through this PR\", or \"help me understand X\"."
 ---
 
@@ -19,4 +19,4 @@ Write every response through the **unslop** skill, in plain spoken English, the 
 
 **Reply:** the explanation itself, never a report about what you did or delivered. Lead with the main point, then the plain account of what it is, how it works, and why, and the threads worth chasing with `how` or `why`.
 
-Local changes (tstack): [local/explain.md](../../../local/explain.md)
+Local changes (tstack): [local/teach.md](../../../local/teach.md)
