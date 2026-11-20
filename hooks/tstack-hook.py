@@ -1107,6 +1107,53 @@ RM_PARALLEL_VALUED = frozenset(("-j", "--jobs", "-P", "-S", "--sshlogin", "-N", 
 RmPlace = namedtuple("RmPlace", "cwd blind moved")
 
 
+EFFORTS = ("low", "medium", "high", "xhigh", "max")
+
+
+def _role_pairs():
+    """`Role: Model effort` for each row of docs/models.md's role table."""
+    rows = []
+    try:
+        for line in (ROOT / "docs" / "models.md").read_text().splitlines():
+            cells = [c.strip() for c in line.strip().strip("|").split("|")]
+            if len(cells) >= 3 and line.startswith("| ") and cells[0] not in ("Role", ":--"):
+                rows.append(f"{cells[0]}: {cells[2]}")
+    except OSError:
+        pass
+    return "; ".join(rows)
+
+
+def _defined_pair(kind):
+    """True when a tstack agent definition's frontmatter carries both `model:` and `effort:`."""
+    try:
+        head = (ROOT / "agents" / f"{kind}.md").read_text().split("---")[1]
+    except (OSError, IndexError):
+        return False
+    return bool(re.search(r"^model:", head, re.M) and re.search(r"^effort:", head, re.M))
+
+
+def spawn_effort(hook):
+    """PreToolUse (Agent): a spawn passes its role's `model` and `effort` from docs/models.md, since the Agent tool sets
+    effort only when asked and a bare spawn inherits the session's. A fork inherits by design; a tstack definition
+    whose frontmatter carries the pair passes bare; another plugin's agent is that plugin's to check."""
+    args = hook.input.get("tool_input")
+    if hook.input.get("tool_name") != "Agent" or not isinstance(args, dict):
+        return None
+    kind = str(args.get("subagent_type") or "")
+    if kind == "fork" or (":" in kind and not kind.startswith("tstack:")):
+        return None
+    if kind.startswith("tstack:") and _defined_pair(kind.split(":", 1)[1]):
+        return None
+    effort = args.get("effort")
+    if effort and effort not in EFFORTS:
+        return Deny(f"tstack: effort `{effort}` is not one the Agent tool takes ({', '.join(EFFORTS)}).")
+    if args.get("model") and effort:
+        return None
+    return Deny("tstack: this spawn names no " + " and no ".join(k for k in ("model", "effort") if not args.get(k))
+                + ". Pick the agent's role in docs/models.md and pass both from its row, since a bare spawn runs at "
+                f"the session's effort. Roles: {_role_pairs()}.")
+
+
 def rm_guard(hook):
     """PreToolUse (Bash, Monitor): a recursive delete whose operand can expand to what nobody read, or names `/`, a
     folder above HOME, HOME, a dot-folder of it or a folder two deep in ~/.config, is denied (the comment above). Any
@@ -1606,10 +1653,10 @@ HANDLERS = {
     "SessionStart": [memo_start, jj_hints, tuca_mode, tape_build, side_panes_reset],
     "Stop": [ask_flag],
     "UserPromptSubmit": [ask_clear, suspend_hint, side_panes],
-    "PreToolUse": [push_attribution, rm_guard],
+    "PreToolUse": [push_attribution, rm_guard, spawn_effort],
 }
 
-GUARDS = frozenset({push_attribution, rm_guard})
+GUARDS = frozenset({push_attribution, rm_guard, spawn_effort})
 
 # Past the 30 s hooks.json gives a Bash PreToolUse hook, Claude Code discards its output and runs the call, so a deny
 # must be out before them. Each guard's calls have their own limits, which can add up to more (two pushes in a command).

@@ -1055,6 +1055,38 @@ class PreToolUseDecisionTest(unittest.TestCase):
                 self.assertTrue(all(r == "None" or r.startswith("Deny(") for r in returns), returns)
 
 
+class SpawnEffortTest(HookCase):
+    """spawn_effort (PreToolUse, Agent): a spawn passes its role's `model` and `effort` (docs/models.md), because the
+    Agent tool sets effort only when asked and a bare spawn inherits the session's. On 2026-11-20 two Implementers
+    went out with no effort from a session whose rules said Opus high."""
+
+    def decision(self, **tool_input):
+        payload = {**self.base("PreToolUse"), "tool_name": "Agent", "tool_input": tool_input}
+        r = self.hook("PreToolUse", payload)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        return json.loads(r.stdout).get("hookSpecificOutput", {}) if r.stdout.strip() else {}
+
+    def test_a_spawn_without_model_or_effort_is_denied_with_the_table(self):
+        for given in ({"model": "opus"}, {"effort": "high"}, {}):
+            with self.subTest(given):
+                d = self.decision(description="cut", prompt="p", subagent_type="general-purpose", **given)
+                self.assertEqual(d.get("permissionDecision"), "deny")
+                self.assertIn("docs/models.md", d["permissionDecisionReason"])
+                self.assertIn("Implementer", d["permissionDecisionReason"])
+
+    def test_an_effort_the_tool_does_not_take_is_denied(self):
+        d = self.decision(description="x", prompt="p", model="opus", effort="ultra")
+        self.assertEqual(d.get("permissionDecision"), "deny")
+        self.assertIn("`ultra`", d["permissionDecisionReason"])
+
+    def test_a_spawn_with_its_pair_a_fork_or_a_definition_that_carries_it_passes(self):
+        for given in ({"subagent_type": "general-purpose", "model": "opus", "effort": "high"},
+                      {"subagent_type": "fork"}, {"subagent_type": "tstack:reader"},
+                      {"subagent_type": "fleet:advisor"}):
+            with self.subTest(given):
+                self.assertEqual(self.decision(description="x", prompt="p", **given), {})
+
+
 class HooksJsonTest(unittest.TestCase):
     def test_every_registered_event_is_dispatched(self):
         config = json.loads(HOOKS_JSON.read_text())
@@ -1067,10 +1099,10 @@ class HooksJsonTest(unittest.TestCase):
                 for h in group["hooks"]:
                     self.assertEqual(h["type"], "command")
                     self.assertEqual(h["command"], f'"${{CLAUDE_PLUGIN_ROOT}}/hooks/tstack-hook" {event}')
-                    self.assertLessEqual(h.get("timeout", 60), 30 if group.get("matcher") == "Bash|Monitor" else 10)
+                    self.assertLessEqual(h.get("timeout", 60), 30 if group.get("matcher") == "Bash|Monitor|Agent" else 10)
                     self.assertFalse(h.get("async", False), event)
         self.assertEqual(config["hooks"]["SessionStart"][0]["matcher"], "startup|resume|clear|compact")
-        self.assertEqual([g["matcher"] for g in config["hooks"]["PreToolUse"]], ["Bash|Monitor"])
+        self.assertEqual([g["matcher"] for g in config["hooks"]["PreToolUse"]], ["Bash|Monitor|Agent"])
         self.assertEqual([h.get("onFailure") for g in config["hooks"]["PreToolUse"] for h in g["hooks"]], ["block"])
         self.assertTrue(os.access(HOOK, os.X_OK))
         self.assertTrue(os.access(MEMO, os.X_OK))
