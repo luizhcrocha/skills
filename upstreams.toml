@@ -90,8 +90,8 @@ map = [
   { from = "skills/productivity/handoff", to = "skills/productivity/handoff", mode = "overlay" },
   # teach is pstack's (Luiz, 2026-11-20): mattpocock's is mirror only.
   { from = "skills/productivity/teach", to = "upstream/mattpocock/skills/productivity/teach", mode = "mirror" },
-  # wait-what is ours as bro (2026-09-30): pstack's bro merged into its text.
-  { from = "skills/productivity/wait-what", to = "skills/productivity/bro", mode = "mirror" },
+  # bro is pstack's (Luiz, 2026-11-20): wait-what is mirror only.
+  { from = "skills/productivity/wait-what", to = "upstream/mattpocock/skills/productivity/wait-what", mode = "mirror" },
   # writing-for-agents: dropped (Luiz, 2026-11-20); our old copy sits in skills/deprecated/writing-for-agents.
   { from = "skills/productivity/writing-for-agents", to = "skills/deprecated/writing-for-agents", mode = "mirror" },
 ]
@@ -121,13 +121,12 @@ ignore = [
 # skill is ours as it stands (merged or reworked by hand, reworked again later);
 # upstream's copy is only mirrored to upstream/pstack/.
 map = [
-  # Mirror: principles, blast-radius, the two verification skills, tdd and bro.
+  # Mirror: principles, blast-radius, the two verification skills and tdd.
   { from = "skills/principle-*/SKILL.md", to = "skills/engineering/principles/{1}.md", mode = "mirror" },
   { from = "skills/blast-radius", to = "skills/engineering/blast-radius", mode = "mirror" },
   { from = "skills/create-verification-skill", to = "skills/engineering/create-verification-skill", mode = "mirror" },
   { from = "skills/maintain-verification-skill", to = "skills/engineering/maintain-verification-skill", mode = "mirror" },
   { from = "skills/tdd", to = "skills/engineering/tdd", mode = "mirror" },
-  { from = "skills/bro", to = "skills/productivity/bro", mode = "mirror" },
   # codebase-design/RED-FLAGS.md came from architect's references/design-red-flags.md,
   # gone upstream at aaeb0ea: ours, no mapping (deprecated with codebase-design, 2026-11-20).
   # Overlay, whole skill folders.
@@ -150,6 +149,7 @@ map = [
   { from = "skills/unslop", to = "skills/productivity/unslop", mode = "overlay" },
   { from = "skills/technical-writing", to = "skills/productivity/technical-writing", mode = "overlay" },
   { from = "skills/sharpen", to = "skills/productivity/sharpen", mode = "overlay" },
+  { from = "skills/bro", to = "skills/productivity/bro", mode = "overlay" },
   { from = "skills/ketchup", to = "skills/productivity/ketchup", mode = "overlay" },
   { from = "skills/ketchup-video", to = "skills/productivity/ketchup-video", mode = "overlay" },
   { from = "skills/in-your-own-words", to = "skills/productivity/in-your-own-words", mode = "overlay" },
