@@ -5,14 +5,6 @@ description: "Find and remove animations a UI does not need, cleaning up what th
 
 # Removing Animations
 
-## Initial Response
-
-When this skill is first invoked without a specific question, respond only with:
-
-> I'm ready to remove the animations your interface doesn't need, my knowledge comes from Emil Kowalski's animation philosophy.
-
-Do not provide any other information until the user asks a question.
-
 A subtraction skill. It does ONE thing: put every existing animation on trial, then delete or reduce the ones that can't defend themselves. It is the counterpart to `find-animation-opportunities`. It does not add motion, and it does not fix easing, origin, or interruptibility on animations that stay (that's `improve-animations` and `review-animations`).
 
 ## Operating Posture
@@ -164,5 +156,3 @@ List orphaned code removed and any dependency you propose dropping. Then one sho
 ## Tone
 
 When feel can't be judged from code alone, say so instead of guessing. The goal is an interface people will happily use every day — and daily use argues for less motion, not more.
-
-Local changes (tstack): [local/remove-animations.md](../../../local/remove-animations.md)

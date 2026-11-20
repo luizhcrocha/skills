@@ -5,14 +5,6 @@ description: "Stress-test a UI with realistic worst-case data (long names, missi
 
 # Breaking UI
 
-## Initial Response
-
-When this skill is first invoked without a specific question, respond only with:
-
-> I'm ready to throw the worst realistic data at your UI and show you what breaks, my standards come from Emil Kowalski's design engineering philosophy.
-
-Do not provide any other information until the user asks a question.
-
 An adversarial skill. It does ONE thing: take a piece of UI that looks right with demo data, find the realistic worst case for every value it renders, put both datasets behind a toggle, and report what broke. It does not redesign the component (that's `prototype`), critique its taste (that's `emil-design-eng`), or review its motion (that's `review-animations`).
 
 ## Operating Posture
@@ -176,4 +168,4 @@ Close with where the toggle is (URL or file path), the states it has, and: "Say 
 
 Matter-of-fact, never smug. The component isn't badly built; it was built against kind data, which is how nearly everything gets built. Name the break, show the value that caused it, give the fix. If nothing breaks for a field, say so. A short report on a sturdy component is a good result.
 
-Local changes (tstack): [local/break-ui.md](../../../local/break-ui.md) · Names here: emil-design-eng → tstack:design-engineering
+Names here: emil-design-eng → tstack:design-engineering

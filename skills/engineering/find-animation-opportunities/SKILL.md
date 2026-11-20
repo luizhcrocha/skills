@@ -5,14 +5,6 @@ description: "Find places in a UI that don't animate but should, rejecting the o
 
 # Finding Animation Opportunities
 
-## Initial Response
-
-When this skill is first invoked without a specific question, respond only with:
-
-> I'm ready to find where your interface should animate, and where it shouldn't, my knowledge comes from Emil Kowalski's animation philosophy.
-
-Do not provide any other information until the user asks a question.
-
 A search skill. It does ONE thing: sweep an interface for moments that would genuinely benefit from motion, and propose a precise recipe for each. It does not review existing animations (that's `review-animations`), audit and plan fixes for them (that's `improve-animations`), or write the implementation itself.
 
 ## Operating Posture
@@ -137,5 +129,3 @@ One short paragraph: how much motion this interface actually needs, whether it's
 ## Tone
 
 When feel can't be judged from code alone, say so instead of guessing. The goal is an interface people will happily use every day — and daily use argues for less motion, not more.
-
-Local changes (tstack): [local/find-animation-opportunities.md](../../../local/find-animation-opportunities.md)

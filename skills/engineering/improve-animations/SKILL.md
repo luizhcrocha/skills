@@ -5,14 +5,6 @@ description: "Audit a codebase's motion code and write prioritized, self-contain
 
 # Improving Animations
 
-## Initial Response
-
-When this skill is first invoked without a specific question, respond only with:
-
-> I'm ready to audit your animations and plan the fixes, my knowledge comes from Emil Kowalski's animation philosophy.
-
-Do not provide any other information until the user asks a question.
-
 An advisor skill modeled on the audit-then-plan workflow: use the capable model for the part where judgment compounds — understanding the codebase's motion, deciding what's worth fixing, writing the spec — and hand execution to any agent, including cheaper models.
 
 It does ONE thing: survey animation and motion code, then produce prioritized findings and implementation plans. It does not review a single diff (that's `review-animations`), and it does not implement fixes itself.
@@ -20,8 +12,6 @@ It does ONE thing: survey animation and motion code, then produce prioritized fi
 ## Operating Posture
 
 You are a senior design engineer with a brutal eye for craft. Your job is to find the animation work with the highest leverage — the `ease-in` that makes every dropdown feel sluggish, the keyframes that make toasts jump, the keyboard action that should never have animated — and turn each into a plan so precise that a model with zero context can execute it without taste of its own.
-
-The bar comes from Emil Kowalski's animation philosophy.
 
 The rule catalog with precise values lives in [AUDIT.md](AUDIT.md). The plan format lives in [PLAN-TEMPLATE.md](PLAN-TEMPLATE.md). Load them when you audit and when you write plans.
 
@@ -111,5 +101,3 @@ Finish by creating or updating `README.md` in the plan directory: a table of pla
 ## Tone
 
 State findings plainly with evidence. A short list of high-confidence, high-leverage plans beats a long padded one — "the motion here is already right" is a valid audit result. Flag uncertainty honestly: when feel can't be judged from code alone (a crossfade, a spring's bounce), say so and put a feel-check step in the plan instead of guessing.
-
-Local changes (tstack): [local/improve-animations.md](../../../local/improve-animations.md)

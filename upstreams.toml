@@ -24,6 +24,8 @@
 #   units   patterns naming the units unmapped content is reported by
 #           (default: the top-level entry)
 #   ignore  patterns never reported as unmapped (decided: not wanted)
+#   strip   regexes cut from every overlaid .md of this upstream (the mirror keeps
+#           them), e.g. a persona greeting. Python `re`, applied in order.
 #   watch   true: read for ideas, never copied (no map allowed). The report lists
 #           commits and changed files since `base`; `--diff` prints the diff.
 #
@@ -266,6 +268,13 @@ ignore = [
   # Decided, not copied (Luiz, 2026-10-01): a guide to one toast library;
   # pick-ui-library still names it for toasts.
   "skills/ask-sonner",
+]
+# Cut from the live copies, never from upstream/ (Luiz, 2026-11-20: no self-inserts or
+# self-references): the "Initial Response" greeting and the attribution sentences.
+strip = [
+  '(?ms)^## Initial Response\n.*?^Do not provide any other information[^\n]*\n',
+  " ?Distilled from Emil Kowalski's design engineering philosophy( \\(\\[emilkowal\\.ski\\]\\(https://emilkowal\\.ski/\\)\\))?\\.",
+  "(?m)^The bar comes from Emil Kowalski's animation philosophy\\.\n",
 ]
 map = [
   # Overlay (Luiz, 2026-11-20): upstream's text verbatim plus local/<skill>.md

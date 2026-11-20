@@ -3,4 +3,3 @@ description: "Review motion code (CSS transitions, keyframes, Motion, springs) a
 disable-model-invocation: ~
 ---
 
-Skip the Initial Response section: no greeting; go straight to the user's request.

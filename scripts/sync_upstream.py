@@ -26,6 +26,8 @@ For each upstream:
     the `local/NAMES.md` table (upstream name | our name) whose upstream name
     occurs as a whole word in a .md file of the folder. A rerun regenerates
     the same bytes.
+    An upstream's `strip` list of regexes is cut from every overlaid .md
+    before that (blank-line runs it leaves closed up); the mirror keeps them.
 - After a real (not --dry-run) run with no conflicts, `base` in the manifest
   moves to the upstream commit just synced. Mirror and overlay never conflict.
 
@@ -118,6 +120,7 @@ class Upstream:
     units: list[str] = field(default_factory=list)
     ignore: list[str] = field(default_factory=list)
     watch: bool = False
+    strip: list[str] = field(default_factory=list)
 
     def match(self, path: str) -> tuple[Mapping, str, str] | None:
         """(the first matching entry, the target, its mapped root)."""
@@ -153,6 +156,7 @@ def load_manifest(path: Path) -> list[Upstream]:
                 units=u.get("units", []),
                 ignore=u.get("ignore", []),
                 watch=u.get("watch", False),
+                strip=u.get("strip", []),
             )
         )
         if out[-1].watch and out[-1].maps:
@@ -317,6 +321,15 @@ def local_line(skill_md: str, skill: str, has_body: bool, names: list[tuple[str,
     return " · ".join(parts)
 
 
+def strip(data: bytes, patterns: list[str]) -> bytes:
+    """`data` with every match of the upstream's `strip` patterns cut, blank-line runs left behind closed up."""
+    text = data.decode()
+    out = text
+    for pattern in patterns:
+        out = re.sub(pattern, "", out)
+    return data if out == text else re.sub(r"\n{3,}", "\n\n", out).encode()
+
+
 def post_process(root: Path, folder: str, files: dict[str, tuple[bytes, bool]]) -> tuple[str, list[str]]:
     """The overlay folder's SKILL.md with local/<skill>.md applied, and what was applied."""
     skill_md, skill = f"{folder}/SKILL.md", posixpath.basename(folder)
@@ -410,6 +423,8 @@ def sync(u: Upstream, root: Path, tmp: Path, dry_run: bool, list_only: bool) -> 
 
     overlay = {dst: blobs[src] for dst, (src, m, _) in targets.items() if m.mode == "overlay"}
     folders = {mapped_root for _, m, mapped_root in targets.values() if m.mode == "overlay"}
+    if u.strip:
+        overlay = {dst: (strip(data, u.strip), x) if dst.endswith(".md") else (data, x) for dst, (data, x) in overlay.items()}
     for folder in sorted(folders):
         if f"{folder}/SKILL.md" in overlay:
             text, applied = post_process(root, folder, overlay)

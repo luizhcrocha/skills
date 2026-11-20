@@ -367,6 +367,23 @@ Use poteto-mode here, not grill-meister.
             "grill-meister.\n\nNames here: poteto-mode → tstack:tuca-mode\n"
         ))
 
+    def test_overlay_strip_cuts_matches_from_every_md_but_not_the_mirror(self):
+        self.set_mode("overlay")
+        self.manifest.write_text(self.manifest.read_text().replace(
+            'ignore = ["README.md"]',
+            'ignore = ["README.md"]\nstrip = [\'(?ms)^## Hello\\n.*?^Done\\.\\n\', \' Taught by Ann\\.\']'))
+        skill = "# T\n\n## Hello\n\n> I'm ready.\n\nDone.\n\nRule one. Taught by Ann.\n"
+        self.write_up("pkg/skills/tdd/SKILL.md", skill)
+        self.write_up("pkg/skills/tdd/notes.md", "Taught by Ann. Notes. Taught by Ann.\n")
+        self.commit_up("greeting")
+        self.run_sync()
+        self.assertEqual(self.read_local(self.SKILL_MD), "# T\n\nRule one.\n")
+        self.assertEqual(self.read_local("skills/eng/test-strategy/notes.md"), "Taught by Ann. Notes.\n")
+        self.assertEqual(self.read_local("upstream/demo/skills/tdd/SKILL.md"), skill)
+        before = self.tree()
+        self.run_sync()
+        self.assertEqual(self.tree(), before)
+
     def test_overlay_rerun_is_idempotent(self):
         self.overlay_with_frontmatter("---\nname: test-strategy\nx: ~\n---\nWe test first.\n", self.NAMES)
         self.run_sync()
