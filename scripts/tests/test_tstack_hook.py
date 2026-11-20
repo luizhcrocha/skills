@@ -1001,6 +1001,149 @@ class SpawnEffortTest(HookCase):
                 self.assertEqual(self.decision(description="x", prompt="p", **given), {})
 
 
+AGENT_CAP = ROOT / "bin" / "agent-cap"
+
+
+class AgentCapTest(HookCase):
+    """agent_cap (PreToolUse, Agent): a session runs at most 3 subagents at once; a spawn past that is denied until
+    Luiz lifts it with bin/agent-cap (Luiz, 2026-11-20, after a token drain). Running: a meta.json beside the session's
+    transcript (<session>/subagents/agent-<id>.meta.json) with none of finished, stoppedByUser or sweptByStop, not
+    stopped by a TaskStop, and written since the session's claude process started."""
+
+    def setUp(self):
+        super().setUp()
+        self.subagents = self.tmp / "transcript" / "subagents"
+        self.subagents.mkdir(parents=True)
+
+    def agent(self, agent_id, **meta):
+        (self.subagents / f"agent-{agent_id}.meta.json").write_text(json.dumps(
+            {"agentType": "general-purpose", "toolUseId": f"toolu_{agent_id}", "requestShape": "background", **meta}))
+        (self.subagents / f"agent-{agent_id}.jsonl").write_text("")
+
+    def call(self, tool_name, tool_input, tool_use_id="toolu_new", **extra):
+        payload = {**self.base("PreToolUse"), "tool_name": tool_name, "tool_input": tool_input,
+                   "tool_use_id": tool_use_id, **extra}
+        r = self.hook("PreToolUse", payload)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        return json.loads(r.stdout).get("hookSpecificOutput", {}) if r.stdout.strip() else {}
+
+    def spawn(self, tool_use_id="toolu_new", **extra):
+        return self.call("Agent", {"description": "x", "prompt": "p", "subagent_type": "general-purpose",
+                                   "model": "opus", "effort": "high"}, tool_use_id, **extra)
+
+    def lift(self, *args):
+        return subprocess.run([str(AGENT_CAP), *args], capture_output=True, text=True, env=self.env, timeout=30)
+
+    def test_under_the_cap_a_spawn_passes(self):
+        self.agent("a1")
+        self.agent("a2")
+        self.agent("done1", finished=True)
+        self.agent("done2", stoppedByUser=True)
+        self.agent("done3", sweptByStop=True)
+        self.assertEqual(self.spawn(), {})
+
+    def test_at_or_over_the_cap_a_spawn_is_denied_with_the_ask(self):
+        for n in (3, 5):
+            with self.subTest(running=n):
+                for i in range(n):
+                    self.agent(f"r{i}")
+                d = self.spawn()
+                self.assertEqual(d.get("permissionDecision"), "deny")
+                why = d["permissionDecisionReason"]
+                self.assertIn(f"{n} subagents running", why)
+                self.assertIn("```text fleet:ask", why)
+                self.assertIn("bin/agent-cap allow sess-1", why)
+                self.assertIn("only Luiz", why)
+
+    def test_a_spawn_from_a_subagent_counts_the_whole_session(self):
+        for i in range(3):
+            self.agent(f"r{i}")
+        self.assertEqual(self.spawn(agent_id="r0", agent_type="general-purpose").get("permissionDecision"), "deny")
+
+    def test_a_task_stopped_agent_does_not_count(self):
+        for i in range(3):
+            self.agent(f"r{i}")
+        self.transcribe({"type": "user", "message": {"role": "user", "content": [
+            {"tool_use_id": "toolu_x", "type": "tool_result",
+             "content": '{"message":"Successfully stopped task: r1 (cut)","task_id":"r1"}'}]}})
+        self.assertEqual(self.spawn(), {})
+
+    def test_a_nested_agent_stopped_by_its_parent_does_not_count(self):
+        self.agent("p1")
+        self.agent("r1", parentAgentId="p1")
+        self.agent("r2")
+        (self.subagents / "agent-p1.jsonl").write_text('{"content":"Successfully stopped task: r1 (x)"}\n')
+        self.assertEqual(self.spawn(), {})
+
+    def test_spawns_in_one_message_count_each_other_before_their_metas_exist(self):
+        self.agent("a1")
+        self.agent("a2")
+        self.assertEqual(self.spawn("toolu_p1"), {})
+        self.assertEqual(self.spawn("toolu_p2").get("permissionDecision"), "deny")
+        self.agent("p1", toolUseId="toolu_p1")  # the first spawn's meta lands: it counts once, not twice
+        self.assertIn("3 subagents running", self.spawn("toolu_p3")["permissionDecisionReason"])
+        (self.subagents / "agent-p1.meta.json").write_text(json.dumps({"toolUseId": "toolu_p1", "finished": True}))
+        self.assertEqual(self.spawn("toolu_p4"), {})
+
+    def test_agents_older_than_the_claude_process_do_not_count(self):
+        """A session resumed in a new process: the agents its old process left unfinished are dead."""
+        for i in range(3):
+            self.agent(f"r{i}")
+        old = time.time() - 3600
+        for i in range(2):
+            os.utime(self.subagents / f"agent-r{i}.meta.json", (old, old))
+        claude = self.tmp / "bin" / "claude"
+        claude.parent.mkdir()
+        claude.symlink_to(Path(shutil.which("bash", path=self.env["PATH"])).resolve())  # a binary: its comm is claude
+        payload = {**self.base("PreToolUse"), "tool_name": "Agent", "tool_use_id": "toolu_new", "tool_input": {
+            "description": "x", "prompt": "p", "subagent_type": "general-purpose", "model": "opus", "effort": "high"}}
+        r = subprocess.run([str(claude), "-c", f"'{HOOK}' PreToolUse; exit $?"], input=json.dumps(payload),
+                           capture_output=True, text=True, env=self.env, timeout=30)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(r.stdout, "")
+
+    def test_luiz_lifts_the_cap_for_one_session(self):
+        for i in range(3):
+            self.agent(f"r{i}")
+        r = self.lift("allow", "sess-1", "2")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("5", r.stdout)
+        self.assertEqual(self.spawn(), {})
+        self.agent("r3", toolUseId="toolu_new")
+        self.agent("r4")
+        self.assertIn("5 subagents running", self.spawn("toolu_more")["permissionDecisionReason"])
+        self.assertEqual(self.spawn("toolu_other", session_id="sess-2").get("permissionDecision"), "deny")
+        self.assertEqual(self.lift("allow", "sess-1", "1").returncode, 0)
+        self.assertEqual(self.spawn("toolu_new2"), {})
+
+    def test_the_lift_takes_a_session_and_a_positive_count(self):
+        for args in ((), ("allow",), ("allow", "sess-1"), ("allow", "sess-1", "0"), ("allow", "sess-1", "x"),
+                     ("allow", "../up", "1"), ("raise", "sess-1", "1")):
+            with self.subTest(args):
+                self.assertNotEqual(self.lift(*args).returncode, 0)
+
+    def test_an_agent_cannot_lift_its_own_cap(self):
+        for command in ("bin/agent-cap allow sess-1 5", "~/repos/tstack/scripts/agent-cap  allow sess-1 1",
+                        f"echo '{{\"limit\": 9}}' > {self.data}/sessions/sess-1/agent-cap.json"):
+            with self.subTest(command):
+                d = self.call("Bash", {"command": command})
+                self.assertEqual(d.get("permissionDecision"), "deny")
+                self.assertIn("only Luiz", d["permissionDecisionReason"])
+        d = self.call("Write", {"file_path": str(self.data / "sessions" / "sess-1" / "agent-cap.json"), "content": "{}"})
+        self.assertEqual(d.get("permissionDecision"), "deny")
+        self.assertEqual(self.call("Bash", {"command": "cat bin/agent-cap"}), {})
+
+    def test_a_count_it_cannot_read_lets_the_spawn_through_and_says_why(self):
+        for i in range(3):
+            self.agent(f"r{i}")
+        self.assertEqual(self.spawn(transcript_path=None), {})
+        self.assertIn("agent_cap", self.log())
+        shutil.rmtree(self.subagents)
+        self.subagents.write_text("not a folder")
+        self.assertEqual(self.spawn(), {})
+        self.assertIn("NotADirectoryError", self.log())
+
+
 class HooksJsonTest(unittest.TestCase):
     def test_every_registered_event_is_dispatched(self):
         config = json.loads(HOOKS_JSON.read_text())
@@ -1013,10 +1156,10 @@ class HooksJsonTest(unittest.TestCase):
                 for h in group["hooks"]:
                     self.assertEqual(h["type"], "command")
                     self.assertEqual(h["command"], f'"${{CLAUDE_PLUGIN_ROOT}}/hooks/tstack-hook" {event}')
-                    self.assertLessEqual(h.get("timeout", 60), 30 if group.get("matcher") == "Bash|Monitor|Agent" else 10)
+                    self.assertLessEqual(h.get("timeout", 60), 30 if group.get("matcher") == "Bash|Monitor|Agent|Write|Edit|NotebookEdit" else 10)
                     self.assertFalse(h.get("async", False), event)
         self.assertEqual(config["hooks"]["SessionStart"][0]["matcher"], "startup|resume|clear|compact")
-        self.assertEqual([g["matcher"] for g in config["hooks"]["PreToolUse"]], ["Bash|Monitor|Agent"])
+        self.assertEqual([g["matcher"] for g in config["hooks"]["PreToolUse"]], ["Bash|Monitor|Agent|Write|Edit|NotebookEdit"])
         self.assertEqual([h.get("onFailure") for g in config["hooks"]["PreToolUse"] for h in g["hooks"]], ["block"])
         self.assertTrue(os.access(HOOK, os.X_OK))
         self.assertTrue(os.access(MEMO, os.X_OK))

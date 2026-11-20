@@ -1130,6 +1130,173 @@ def spawn_effort(hook):
                 f"the session's effort. Roles: {_role_pairs()}.")
 
 
+# The subagent cap (Luiz, 2026-11-20, after a token drain): a session runs at most AGENT_CAP subagents at once, and only
+# Luiz raises that, with bin/agent-cap. Claude Code keeps a meta.json per subagent beside the session's transcript,
+# <session>/subagents/agent-<id>.meta.json, written at the spawn and again when its state changes: `finished` once it
+# completes, `stoppedByUser` or `sweptByStop` when it is stopped. Read 2026-11-20 on Claude Code 2.1.329: 2,912 of the
+# 2,925 metas of the four days before carried `finished`; of the 13 left, two were running, the rest an agent stopped by
+# a TaskStop, which marks no meta (its tool result says "Successfully stopped task: <id>" in the caller's transcript),
+# or one its session's claude process left when it exited. A SubagentStart/SubagentStop ledger would leak the same two.
+AGENT_CAP = 3
+CAP_FILE = "agent-cap.json"
+CAP_LOCK_S = 5
+CAP_PENDING_S = 30  # a spawn allowed whose meta has not landed yet: the spawns of one message pass the hook first
+CAP_STOPPED = b"Successfully stopped task: "
+CAP_SELF_LIFT = re.compile(r"agent-cap\S*\s+allow\b|agent-cap\.json")
+CAP_EDITS = ("Write", "Edit", "NotebookEdit")
+
+
+def _session_state(hook):
+    return hook.data_dir / "sessions" / (re.sub(r"[^A-Za-z0-9_.-]", "_", hook.session_id) or "unknown")
+
+
+def _cap_limit(hook):
+    path = _session_state(hook) / CAP_FILE
+    try:
+        limit = json.loads(path.read_text()).get("limit")
+    except FileNotFoundError:
+        return AGENT_CAP
+    except (OSError, ValueError, AttributeError) as e:
+        log(hook.data_dir, f"PreToolUse agent_cap read no limit from {path} ({e}), kept {AGENT_CAP}")
+        return AGENT_CAP
+    return limit if isinstance(limit, int) and limit >= AGENT_CAP else AGENT_CAP
+
+
+def agent_cap(hook):
+    """PreToolUse (Agent): a spawn that would make AGENT_CAP or more of the session's subagents run at once (the
+    comment above) is denied, with a fleet:ask for Luiz to lift it. An agent's own Bash call that lifts it, or its edit
+    of the file the lift writes, is denied. A count it cannot read lets the spawn through, logged: a hook bug never
+    blocks work (it is in GUARDS for the self-lift check, which fails closed)."""
+    name = hook.input.get("tool_name")
+    args = hook.input.get("tool_input") if isinstance(hook.input.get("tool_input"), dict) else {}
+    command = _shell_command(hook)
+    path = args.get("file_path") or args.get("notebook_path") if name in CAP_EDITS else None
+    if (command and CAP_SELF_LIFT.search(command)) or (isinstance(path, str) and os.path.basename(path) == CAP_FILE):
+        return Deny(f"tstack: an agent does not raise its own subagent cap; only Luiz does, running "
+                    f"`{ROOT / 'bin' / 'agent-cap'} allow {hook.session_id or '<session-id>'} <n>` himself. Ask him in "
+                    "a ```text fleet:ask fence.")
+    if name != "Agent" or isinstance(spawn_effort(hook), Deny):  # a spawn refused anyway holds no place
+        return None
+    try:
+        return _agent_cap(hook)
+    except Exception:  # noqa: BLE001 - fail open
+        log(hook.data_dir, f"PreToolUse agent_cap could not count the session's subagents; let the spawn through\n"
+                           f"{traceback.format_exc()}")
+        return None
+
+
+def _agent_cap(hook):
+    import fcntl
+    transcript = hook.input.get("transcript_path")
+    if not isinstance(transcript, str) or not transcript.endswith(".jsonl"):
+        raise ValueError(f"no session transcript_path to find the subagents by: {transcript!r}")
+    folder = Path(transcript[:-len(".jsonl")]) / "subagents"
+    limit = _cap_limit(hook)
+    state = _session_state(hook)
+    state.mkdir(parents=True, exist_ok=True)
+    with open(state / "agent-cap.lock", "a") as lock:
+        give_up = time.monotonic() + CAP_LOCK_S  # the spawns of one message run their hooks at once
+        while True:
+            try:
+                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except BlockingIOError:
+                if time.monotonic() > give_up:
+                    raise TimeoutError(f"{lock.name} held past {CAP_LOCK_S} s") from None
+                time.sleep(0.05)
+        running, spawned = _cap_running(hook, folder)
+        pending_path = state / "agent-cap-pending.json"
+        try:
+            pending = json.loads(pending_path.read_text())
+        except (OSError, ValueError):
+            pending = {}
+        now = time.time()
+        pending = {k: v for k, v in pending.items()
+                   if k not in spawned and isinstance(v, (int, float)) and now - v < CAP_PENDING_S}
+        if len(running) + len(pending) >= limit:
+            running = _cap_alive(hook, Path(transcript), folder, running)
+        count = len(running) + len(pending)
+        if count >= limit:
+            return Deny(_cap_ask(hook, count, limit))
+        use = hook.input.get("tool_use_id")
+        if use:  # its meta's toolUseId retires it
+            pending[str(use)] = now
+            tmp = pending_path.with_suffix(".tmp")
+            tmp.write_text(json.dumps(pending))
+            os.replace(tmp, pending_path)
+    return None
+
+
+def _cap_running(hook, folder):
+    """{agent id: (meta, mtime)} of the metas in `folder` with no end state, and every meta's toolUseId."""
+    running, spawned = {}, set()
+    try:
+        entries = list(os.scandir(folder))
+    except FileNotFoundError:
+        return running, spawned
+    for entry in entries:
+        if not (entry.name.startswith("agent-") and entry.name.endswith(".meta.json")):
+            continue
+        try:
+            meta = json.loads(Path(entry.path).read_text())
+            mtime = entry.stat().st_mtime
+        except (OSError, ValueError) as e:
+            log(hook.data_dir, f"PreToolUse agent_cap skipped {entry.path}: {e}")
+            continue
+        if not isinstance(meta, dict):
+            continue
+        spawned.add(str(meta.get("toolUseId")))
+        if not (meta.get("finished") or meta.get("stoppedByUser") or meta.get("sweptByStop")):
+            running[entry.name[len("agent-"):-len(".meta.json")]] = (meta, mtime)
+    return running, spawned
+
+
+def _cap_alive(hook, transcript, folder, running):
+    """`running` without the agents a TaskStop stopped (its result in the session's transcript, or in the transcript
+    of the agent that spawned it) and those whose meta is older than this session's claude process. Read only at the
+    cap: the session's transcript runs to tens of MB."""
+    callers = {transcript} | {folder / f"agent-{m.get('parentAgentId')}.jsonl"
+                              for m, _ in running.values() if m.get("parentAgentId")}
+    stopped = set()
+    for path in callers:
+        try:
+            text = path.read_bytes()
+        except OSError:
+            continue
+        stopped |= {a for a in running if CAP_STOPPED + a.encode() in text}
+    started = _claude_started(hook)
+    return {a: v for a, v in running.items() if a not in stopped and (started is None or v[1] >= started - 2)}
+
+
+def _claude_started(hook):
+    """When the claude process this hook runs under started (epoch seconds, to the second), or None when no ancestor
+    is claude. `ps`, which Linux and macOS share."""
+    import subprocess
+    pid = os.getppid()
+    for _ in range(8):
+        if pid <= 1:
+            return None
+        out = subprocess.run(["ps", "-o", "ppid=", "-o", "lstart=", "-o", "comm=", "-p", str(pid)], capture_output=True,
+                             text=True, env={**hook.env, "LC_ALL": "C"}, timeout=3).stdout.split()
+        if len(out) < 7:
+            return None
+        if os.path.basename(" ".join(out[6:])) == "claude":
+            return time.mktime(time.strptime(" ".join(out[1:6]), "%a %b %d %H:%M:%S %Y"))
+        pid = int(out[0])
+    return None
+
+
+def _cap_ask(hook, count, limit):
+    sid = hook.session_id or "<session-id>"
+    lift = f"{ROOT / 'bin' / 'agent-cap'} allow {sid}"
+    return (f"tstack: {count} subagents running in this session; its cap is {limit} (Luiz, 2026-11-20: at most "
+            f"{AGENT_CAP} at once). Wait for one to finish, or ask Luiz with this fence in your reply:\n\n"
+            f"```text fleet:ask header=Agents\nThis session runs {count} subagents, its cap is {limit}. "
+            f"Allow more?\n- Allow 2 more: you run `{lift} 2`\n- No: I wait for one to finish\n```\n\n"
+            f"Only Luiz lifts it, running `{lift} <n>` from his terminal or his inbox; only Luiz can: the hook "
+            "refuses that command from an agent.")
+
+
 def rm_guard(hook):
     """PreToolUse (Bash, Monitor): a recursive delete whose operand can expand to what nobody read, or names `/`, a
     folder above HOME, HOME, a dot-folder of it or a folder two deep in ~/.config, is denied (the comment above). Any
@@ -1629,10 +1796,10 @@ HANDLERS = {
     "SessionStart": [memo_start, jj_hints, tape_build, side_panes_reset],
     "Stop": [ask_flag],
     "UserPromptSubmit": [ask_clear, suspend_hint, side_panes],
-    "PreToolUse": [push_attribution, rm_guard, spawn_effort],
+    "PreToolUse": [push_attribution, rm_guard, spawn_effort, agent_cap],
 }
 
-GUARDS = frozenset({push_attribution, rm_guard, spawn_effort})
+GUARDS = frozenset({push_attribution, rm_guard, spawn_effort, agent_cap})
 
 # Past the 30 s hooks.json gives a Bash PreToolUse hook, Claude Code discards its output and runs the call, so a deny
 # must be out before them. Each guard's calls have their own limits, which can add up to more (two pushes in a command).

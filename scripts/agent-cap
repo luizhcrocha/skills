@@ -1,0 +1,62 @@
+#!/usr/bin/env python3
+"""agent-cap allow SESSION_ID N: let one Claude Code session run N more subagents at once.
+
+tstack's hook (agent_cap in hooks/tstack-hook.py) denies a spawn that would make 3 or more of a session's
+subagents run at once (Luiz, 2026-11-20). Luiz lifts it for one session with this command, from his terminal or his
+inbox; the hook refuses it from an agent's own Bash call. It raises the session's limit by N, in
+sessions/<SESSION_ID>/agent-cap.json under the hook's data dir: $CLAUDE_PLUGIN_DATA when set, else each tstack
+plugin's data dir under ~/.claude/plugins/data (or $CLAUDE_CONFIG_DIR/plugins/data), else $XDG_STATE_HOME/tstack.
+"""
+
+import json
+import os
+import re
+import sys
+from pathlib import Path
+
+DEFAULT = 3
+FILE = "agent-cap.json"
+
+
+def data_dirs(env):
+    if env.get("CLAUDE_PLUGIN_DATA"):
+        return [Path(env["CLAUDE_PLUGIN_DATA"])]
+    config = Path(env.get("CLAUDE_CONFIG_DIR") or Path(env.get("HOME", "~")).expanduser() / ".claude")
+    found = sorted(p for p in (config / "plugins" / "data").glob("tstack-*") if p.is_dir())
+    if found:
+        return found
+    state = Path(env.get("XDG_STATE_HOME") or Path(env.get("HOME", "~")).expanduser() / ".local" / "state") / "tstack"
+    return [state] if state.is_dir() else []
+
+
+def allow(session, n, env):
+    dirs = data_dirs(env)
+    if not dirs:
+        print("agent-cap: found no tstack hook data dir to write to", file=sys.stderr)
+        return 1
+    for d in dirs:
+        path = d / "sessions" / session / FILE
+        try:
+            limit = json.loads(path.read_text()).get("limit")
+        except (OSError, ValueError, AttributeError):
+            limit = None
+        limit = (limit if isinstance(limit, int) and limit >= DEFAULT else DEFAULT) + n
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_suffix(".tmp")
+        tmp.write_text(json.dumps({"limit": limit}) + "\n")
+        os.replace(tmp, path)
+        print(f"session {session} may run {limit} subagents at once ({path})")
+    return 0
+
+
+def main(argv, env):
+    usage = "usage: agent-cap allow SESSION_ID N   (N, a positive whole number: how many more subagents at once)"
+    if len(argv) != 3 or argv[0] != "allow" or not re.fullmatch(r"[A-Za-z0-9_-][A-Za-z0-9_.-]*", argv[1]) \
+            or not re.fullmatch(r"[1-9][0-9]*", argv[2]):
+        print(usage, file=sys.stderr)
+        return 2
+    return allow(argv[1], int(argv[2]), env)
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:], os.environ))
