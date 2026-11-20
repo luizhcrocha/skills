@@ -107,12 +107,6 @@ subdir = "pstack"
 base = "aaeb0ea3a0584995aa8f55ce44c6c5259414b896"
 units = ["skills/*", "agents/*", "automations/*"]
 ignore = [
-  # decided: folded into review's Deep review (Luiz, 2026-11-04), taking
-  # upstream's rule that a finding survives only when a run proves it (ab1f702).
-  # It ran in 1 of 2,607 transcripts here. The maintainability lens, merged from
-  # code-quality-review.md and cursor-team-kit's thermo-nuclear review, moved to
-  # review/references/maintainability.md. review itself was dropped (2026-11-20).
-  "skills/interrogate",
   # decided: merged into lang-ts by hand, 2026-09-30. No file kept verbatim;
   # what was taken and rejected is in skills/engineering/lang-ts/references/sources.md.
   "skills/typescript-best-practices",
@@ -144,6 +138,9 @@ map = [
   { from = "skills/swarm", to = "skills/engineering/swarm", mode = "overlay" },
   { from = "skills/figure-it-out", to = "skills/engineering/figure-it-out", mode = "overlay" },
   { from = "skills/no-comments", to = "skills/engineering/no-comments", mode = "overlay" },
+  # interrogate replaces our dropped review (Luiz, 2026-11-20): user-invoked,
+  # adversaries that must prove each finding with a run.
+  { from = "skills/interrogate", to = "skills/engineering/interrogate", mode = "overlay" },
   { from = "skills/correct", to = "skills/engineering/correct", mode = "overlay" },
   { from = "skills/benchmark-checklist", to = "skills/engineering/benchmark-checklist", mode = "overlay" },
   { from = "skills/create-formal-verification-skill", to = "skills/engineering/create-formal-verification-skill", mode = "overlay" },

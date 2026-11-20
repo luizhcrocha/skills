@@ -1,0 +1,4 @@
+- Adversaries are three Reviewer agents ([models.md](../docs/models.md)) on one model, each with an angle in place of a model family: security; concurrency and state; spec and tests. Each works in its own jj workspace at the stack's head (`ws-add interrogate-<n> -r @`), forgotten and removed after the report.
+- The scope by default is `<bookmark>@origin..@`, the repo's landing bookmark, read with `jj diff`.
+- A proof is a test or a command in the repo's own tools. No standalone attack or forging scripts: a safety classifier refused them (2026-10-16), and a refused act is never routed around.
+- Each verified finding names `Caught by:`, the cheapest check that would have caught it (type, lint, test, property, model, none). A lint or type one is a candidate for /correct.
