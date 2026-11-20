@@ -41,7 +41,7 @@ When local code breaks one of these, keep compatibility at the seam and improve 
 - **Parse at the boundary.** One schema owns validation and the type is derived from it (Effect Schema in new and Effect code; Zod 4 where a non-Effect package already uses it). Mutating commands reject unknown fields. `unknown` lives only at the I/O call; inner functions take parsed types. Parsers are `parseX`, smart constructors `makeX`, predicates `isX`.
 - **Errors are values.** `Schema` tagged errors in the Effect error channel for new code; `better-result`'s `Result` and `TaggedError` in existing non-Effect code; precise local unions at module interfaces, broad unions only near entrypoints. Throw only for defects and framework-required translation.
 - **Contracts.** `readonly` by default; `satisfies` over `as`; derived types (`z.infer`, `Pick`, `ReturnType`, `typeof table.$inferSelect`) over parallel interfaces; a named input object when arguments could be swapped; `??` for defaults; `import type`; JSDoc on every export; no barrels, `utils.ts` or `namespace`.
-- **Modules.** Deep modules at real seams; functional core, imperative shell; resources are created and closed in composition roots or managed layers, and no module does I/O at import time. `codebase-design` holds the vocabulary.
+- **Modules.** Deep modules at real seams; functional core, imperative shell; resources are created and closed in composition roots or managed layers, and no module does I/O at import time.
 - **Concurrency.** The caller's `AbortSignal` in a final options object; independent work started concurrently, unbounded collections with bounded concurrency; retried commands safe to repeat; no transaction held across a network call.
 
 ## Toolchain and gates

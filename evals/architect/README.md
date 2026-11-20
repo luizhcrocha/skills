@@ -1,11 +1,11 @@
 # Architect's design eval
 
-Measures a change to the design skills (`architect`, `codebase-design`, `principles`) before it lands: the same tasks are sketched with the skills as they are (base) and as changed (cand), and judges who don't know which is which pick the better design. Built and first run on 2026-11-18 (two runner-prompt rules kept, one dropped); the trail is in that session's scratchpad.
+Measures a change to the design skills (`architect`, `principles`) before it lands: the same tasks are sketched with the skills as they are (base) and as changed (cand), and judges who don't know which is which pick the better design. Built and first run on 2026-11-18 (two runner-prompt rules kept, one dropped); the trail is in that session's scratchpad.
 
 ## A round
 
 1. Change the skills in your checkout (the cand arm), or in a copy.
-2. `evals/architect/eval-round stage <round-dir> [--cand DIR] [--task NAME]... [--constraint N]`. The round directory goes in the scratchpad. It prints one sketch brief per arm and task.
+2. `evals/architect/eval-round stage <round-dir> [--cand DIR] [--task NAME]...`. The round directory goes in the scratchpad. It prints one sketch brief per arm and task.
 3. One Opus agent per sketch brief, the brief as its whole prompt, all in one message.
 4. `eval-round pair <round-dir>` once every sketch is written. It copies each task's two sketches onto random sides, then swapped, and prints one judge brief per task and order.
 5. One Fable agent per judge brief, the brief as its whole prompt.

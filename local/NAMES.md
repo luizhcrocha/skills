@@ -7,6 +7,7 @@ The upstream sync (`scripts/sync_upstream.py`, overlay mode) adds to a synced sk
 | Upstream | Ours |
 |---|---|
 | code-review | none: tstack dropped its review skill (Luiz, 2026-11-20) |
+| codebase-design | none: tstack dropped it (Luiz, 2026-11-20); the terms the text lists are enough |
 | GLOSSARY.md | CONTEXT.md |
 | GLOSSARY-MAP.md | CONTEXT-MAP.md |
 | setup-matt-pocock-skills | tstack:setup-luizrocha-skills |

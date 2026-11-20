@@ -26,7 +26,7 @@ Sort every active rule into one bucket:
 - **Promote** trial → warn, or warn → error: runs in two or more repos, no false positive in the last 90 days. A rule with no true hit anywhere is not promoted; it goes to retire.
 - **Retire**: silent for 90 days (`lint-registry stale` lists it) while its language's repos were measured. Native lints seeded from a gate stay unless Luiz says otherwise: the gate prescribes them.
 - **Rework**: a false positive in the last runs. Hand it to `tstack:lint-evolve` step 5 as its own run.
-- **Keeps firing**: true hits in two or more repos in the last 90 days, or more hits than the run before. The lint catches it, but the lesson is not landing where code gets written: name the skill that should teach it (the `lang-*` skill, or `tdd`, `codebase-design`...), the section, and the one-line rule it lacks, as a proposal for that skill.
+- **Keeps firing**: true hits in two or more repos in the last 90 days, or more hits than the run before. The lint catches it, but the lesson is not landing where code gets written: name the skill that should teach it (the `lang-*` skill, or `tdd`...), the section, and the one-line rule it lacks, as a proposal for that skill.
 - **Holds**: the rest.
 
 Then one round with Luiz, in the reply (tuca-mode's What needs Luiz): promotions and retirements as a numbered list, each naming the rule, its runs and hits, for him to answer by number. Nothing moves without his yes. Done when every active rule has a bucket and every promotion or retirement has his answer.

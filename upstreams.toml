@@ -65,7 +65,8 @@ map = [
   # upstream text sits in upstream/mattpocock/ for reference.
   # code-review: dropped (Luiz, 2026-11-20); our old review sits in skills/deprecated/review.
   { from = "skills/engineering/code-review", to = "skills/deprecated/review", mode = "mirror" },
-  { from = "skills/engineering/codebase-design", to = "skills/engineering/codebase-design", mode = "mirror" },
+  # codebase-design: dropped (Luiz, 2026-11-20); our old copy sits in skills/deprecated/codebase-design.
+  { from = "skills/engineering/codebase-design", to = "skills/deprecated/codebase-design", mode = "mirror" },
   { from = "skills/engineering/diagnosing-bugs", to = "skills/engineering/diagnosing-bugs", mode = "mirror" },
   # We keep CONTEXT.md / CONTEXT-MAP.md (decided, 2026-09-30): the GLOSSARY.md
   # and GLOSSARY-MAP.md rows of local/NAMES.md carry it; GLOSSARY-FORMAT.md
@@ -123,7 +124,7 @@ map = [
   { from = "skills/tdd", to = "skills/engineering/tdd", mode = "mirror" },
   { from = "skills/bro", to = "skills/productivity/bro", mode = "mirror" },
   # codebase-design/RED-FLAGS.md came from architect's references/design-red-flags.md,
-  # gone upstream at aaeb0ea: ours now, no mapping.
+  # gone upstream at aaeb0ea: ours, no mapping (deprecated with codebase-design, 2026-11-20).
   # Overlay, whole skill folders.
   { from = "skills/how", to = "skills/engineering/how", mode = "overlay" },
   { from = "skills/why", to = "skills/engineering/why", mode = "overlay" },
@@ -159,8 +160,7 @@ map = [
   { from = "skills/statechart/scripts/backends", to = "skills/engineering/statechart/scripts/backends", mode = "overlay" },
   { from = "skills/statechart/scripts/frontends", to = "skills/engineering/statechart/scripts/frontends", mode = "overlay" },
   { from = "skills/statechart/scripts/passes", to = "skills/engineering/statechart/scripts/passes", mode = "overlay" },
-  # Merge: comment-sicko (kebab-case name, Sonnet, jj diff scope, codebase-design
-  # for architect) and tuca-mode's scripts from poteto-mode (watch-pr polls
+  # Merge: comment-sicko (kebab-case name, Sonnet, jj diff scope) and tuca-mode's scripts from poteto-mode (watch-pr polls
   # GitHub for the babysit and shipping playbooks, bun).
   { from = "agents/comment-sicko.md", to = "agents/comment-sicko.md" },
   { from = "skills/poteto-mode/scripts/watch-pr", to = "skills/engineering/tuca-mode/scripts/watch-pr" },

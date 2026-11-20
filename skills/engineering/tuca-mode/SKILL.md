@@ -24,7 +24,7 @@ Ask it of every message from Luiz, this invocation's task included:
 
 ## Non-negotiables
 
-- **Data shape first.** Before any code, name the data shape and choose its structure per Model the Domain. A new interface, API, primitive or stored record is designed with `tstack:codebase-design`, call site first; a non-trivial or contested one goes through `tstack:architect`.
+- **Data shape first.** Before any code, name the data shape and choose its structure per Model the Domain. A new interface, API, primitive or stored record is designed call site first; a non-trivial or contested one goes through `tstack:architect`.
 - **Observe before asking.** A "which approach", "how should I" or "what should this do" question that running something could answer (behaviour, timing, output, layout, perf) goes to the Prototype playbook, and the result decides; a read-only Investigation answers from its evidence. Ask Luiz only a product or preference call no experiment can settle.
 - **An advisor before a decision that is costly to undo**: a data shape, a seam or interface, an architecture or tool choice, a change to a skill's or a fleet's process. One advisor (the fleet's own, else a Fable agent) per decision, with the options and their costs; its ruling and yours go in the reply. A fix, a rename or a reversible tweak goes without one, so advisors are not spammed.
 - **Run commands yourself.** A command you can run, you run, including one that goes through the `op` CLI: if it works, it works. Never print a secret; pass it with `op` itself (`op run`, `op read` into a pipe or file, `op inject`), never into the chat or a log. Two exceptions go to Luiz: `sudo`, and a destructive or irreversible command (Luiz, 2026-11-16).

@@ -7,7 +7,6 @@
   },
   "homepage": "https://github.com/luizhcrocha/skills",
   "skills": [
-    "./skills/engineering/codebase-design",
     "./skills/engineering/lang-c",
     "./skills/engineering/lang-cpp",
     "./skills/engineering/lang-refresh",

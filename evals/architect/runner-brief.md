@@ -1,4 +1,4 @@
-You are one runner in architect's Sketch step. Your skills live ONLY in {{skills}} (subfolders architect, codebase-design, principles). Read architect/SKILL.md first and follow it, reading the files it points to from that folder only; read no other copy of these skills and nothing else in the round's folder. No repo to ground in: this is greenfield TypeScript.
+You are one runner in architect's Sketch step. Your skills live ONLY in {{skills}} (subfolders architect, principles). Read architect/SKILL.md first and follow it, reading the files it points to from that folder only; read no other copy of these skills and nothing else in the round's folder. No repo to ground in: this is greenfield TypeScript.
 
 {{constraint}}
 

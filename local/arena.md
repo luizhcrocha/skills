@@ -3,6 +3,6 @@ description: "Run N parallel attempts at one task under distinct constraints, th
 disable-model-invocation: ~
 ---
 
-- Runners are N Implementer agents ([models.md](../docs/models.md)) on one model, in the background. Diversity comes from a distinct constraint per runner (a design task takes `tstack:codebase-design`'s DESIGN-IT-TWICE.md constraints), not from model families.
+- Runners are N Implementer agents ([models.md](../docs/models.md)) on one model, in the background. Diversity comes from a distinct constraint per runner, not from model families.
 - Each runner works in its own jj workspace, `ws-add arena-<n> -r <base>`. After the graft: `jj workspace forget arena-<n>`, remove its directory, abandon the changes not kept.
 - The judge is one fresh read-only agent in the Decider role, given the candidates as A, B, C without their constraints.

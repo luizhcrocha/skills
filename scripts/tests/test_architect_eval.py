@@ -21,7 +21,7 @@ class EvalRound(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.round = Path(self.tmp.name) / "round"
         self.round.mkdir()
-        (self.round / "round.json").write_text(json.dumps({"tasks": ["a", "b", "c"], "constraint": None}))
+        (self.round / "round.json").write_text(json.dumps({"tasks": ["a", "b", "c"]}))
         (self.round / "tasks").mkdir()
         for t in ("a", "b", "c"):
             (self.round / "tasks" / f"{t}.md").write_text("Design it.\n")
@@ -73,12 +73,13 @@ class EvalRound(unittest.TestCase):
     def test_stage_snapshots_both_arms_and_fills_every_brief(self):
         staged = Path(self.tmp.name) / "staged"
         cand = ROOT / "skills" / "engineering"
-        briefs = er.stage(staged, "@", cand, ["config"], 2, ROOT)
+        briefs = er.stage(staged, "@", cand, ["config"], ROOT)
         self.assertEqual(len(briefs), 2)
         for arm in er.ARMS:
             self.assertTrue((staged / "arms" / arm / "architect" / "SKILL.md").is_file())
             self.assertFalse((staged / "arms" / arm / "architect" / "evals").exists())
-        self.assertIn("runner 2", briefs[0].read_text())
+            self.assertFalse((staged / "arms" / arm / "codebase-design").exists())
+        self.assertIn("no runner constraint", briefs[0].read_text())
         self.assertIn(str(staged / "tasks" / "config.md"), briefs[0].read_text())
 
 
