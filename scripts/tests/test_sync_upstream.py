@@ -455,6 +455,30 @@ Use poteto-mode here, not grill-meister.
         ))
         self.assertIn("    agents/critic.md (frontmatter, local line)", out)
 
+    PRINCIPLES_MAP = '{ from = "skills/principle-*/SKILL.md", to = "skills/eng/principles/{1}.md" }'
+
+    def test_file_glob_overlay_keeps_the_folder_s_other_files(self):
+        self.manifest.write_text(self.manifest.read_text().replace(
+            self.PRINCIPLES_MAP, self.PRINCIPLES_MAP[:-2] + ', mode = "overlay" }'))
+        self.write_local("local/NAMES.md", self.NAMES)
+        self.write_local("skills/eng/principles/SKILL.md", "our index, names poteto-mode\n")
+        self.write_local("skills/eng/principles/ours.md", "our principle\n")
+        self.write_local("skills/eng/principles/references/STYLE.md", "reference\n")
+        self.write_local("skills/eng/principles/a.md", "principle a, edited here\n")
+        self.write_up("pkg/skills/principle-a/SKILL.md", "principle a, shorter, poteto-mode\n")
+        self.write_up("pkg/skills/principle-c/SKILL.md", "principle c\n")
+        (self.up / "pkg/skills/principle-b/SKILL.md").unlink()
+        self.commit_up("principles")
+        out = self.run_sync()
+        self.assertEqual(self.read_local("skills/eng/principles/a.md"), "principle a, shorter, poteto-mode\n")
+        self.assertEqual(self.read_local("skills/eng/principles/c.md"), "principle c\n")
+        self.assertFalse((self.local / "skills/eng/principles/b.md").exists())  # gone upstream: it was upstream's
+        self.assertEqual(self.read_local("skills/eng/principles/SKILL.md"), "our index, names poteto-mode\n")
+        self.assertEqual(self.read_local("skills/eng/principles/ours.md"), "our principle\n")
+        self.assertEqual(self.read_local("skills/eng/principles/references/STYLE.md"), "reference\n")
+        self.assertIn("removed skills/eng/principles/b.md", out)
+        self.assertNotIn("Post-processed", out)
+
     def test_unknown_mode_is_refused(self):
         self.set_mode("bogus")
         p = subprocess.run(

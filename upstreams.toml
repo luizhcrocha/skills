@@ -19,7 +19,10 @@
 #             "merge"    (default) 3-way merge upstream changes into our copy
 #             "mirror"   never write `to`: it is ours (a merged or reworked skill)
 #             "overlay"  `to` becomes exactly upstream's (files not upstream
-#                        deleted), then its SKILL.md is post-processed (below)
+#                        deleted), then its SKILL.md is post-processed (below).
+#                        A file-to-file entry (a glob onto `{1}.md`) touches only
+#                        its own files: the folder's other files stay ours, and
+#                        a file gone upstream since `base` is deleted.
 #             { from = "skills/teach", to = "skills/engineering/explain", mode = "overlay" }
 #   units   patterns naming the units unmapped content is reported by
 #           (default: the top-level entry)

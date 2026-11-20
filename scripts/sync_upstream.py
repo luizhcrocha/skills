@@ -16,7 +16,8 @@ For each upstream:
   - "mirror": the mirror only; `to` is ours and never written.
   - "overlay": `to` becomes exactly upstream's (files gone upstream, or never
     there, are deleted under the mapped folder; files other entries map are
-    kept), then its SKILL.md is post-processed from `local/<skill>.md`, where
+    kept; a file-to-file entry, such as a `*` glob onto `{1}.md`, touches only
+    its own files, and deletes one when its upstream file is gone since `base`), then its SKILL.md is post-processed from `local/<skill>.md`, where
     <skill> is the folder's basename. That file's frontmatter keys replace
     SKILL.md's same keys (added if missing; `key: ~` removes it); its body is
     our changes, for the agent to read, never copied. One line is appended to
@@ -449,7 +450,13 @@ def sync(u: Upstream, root: Path, tmp: Path, dry_run: bool, list_only: bool) -> 
             if applied:
                 overlay[target] = (text.encode(), overlay[target][1])
                 r.postprocessed.append(f"{target} ({', '.join(applied)})")
-    r.overlaid = place(root, overlay, folders, set(targets), dry_run)
+    # A file-to-file overlay gone upstream since base was upstream's: delete it too.
+    gone = set()
+    for f in base_files - set(head_files):
+        hit = u.match(f)
+        if hit is not None and hit[0].mode == "overlay" and hit[1] == hit[2]:
+            gone.add(hit[1])
+    r.overlaid = place(root, overlay, folders | gone, set(targets), dry_run)
     changed = {c.split(" ", 1)[1] for c in r.overlaid}
     r.postprocessed = [p for p in r.postprocessed if p.split(" ", 1)[0] in changed]
 
