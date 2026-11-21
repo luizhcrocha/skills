@@ -15,7 +15,7 @@ The session and its tab get the same short name. Then Luiz can find the work in 
 
 ## 2. Check that you are in Rex
 
-`REX_SESSION` and `REX_BLOCK` must be set. If they are not, skip steps 3 and 4. Tell Luiz the name and ask him to type `/rename <name>` himself.
+`REX_SESSION` and `REX_BLOCK` must be set. If they are not, skip step 3, and in step 4 ask Luiz to type `/rename <name>` himself instead of sending it.
 
 Find your window from your own block, not from the focused one. Luiz may be looking at another tab:
 
@@ -31,6 +31,14 @@ rex window rename -s "$REX_SESSION" "$win" "<name>"
 
 ## 4. Send /rename to your own pane
 
+Skip this step when Claude Code already holds the name. A `/rename`, and fleet's `--name` at launch, write a `custom-title` line to the session's transcript; the last one is the current name:
+
+```bash
+jq -r 'select(.type == "custom-title") | .customTitle' ~/.claude/projects/*/"$CLAUDE_CODE_SESSION_ID".jsonl 2>/dev/null | tail -n 1
+```
+
+If it prints `<name>`, go to step 5. The status-line title Claude Code makes up on its own is not a name, and this check ignores it.
+
 Claude Code reads `/rename` only from its input box, so type it there through rex:
 
 ```bash
@@ -44,4 +52,6 @@ Text that Luiz has typed but not sent is in the same input box, and `rex send` a
 
 ## 5. Report
 
-In one line, give the name and say that the tab is renamed and `/rename` is queued for the end of the turn.
+Luiz reads your reply after the turn ends, when a queued `/rename` has already run. So report the rename as done, in one line: "Named this session `<name>` (Rex tab and Claude Code)." Leave out the queue, the input box and the end of the turn, and say nothing of a step you skipped because it was already done: Luiz reads those as work still pending.
+
+The one case with something for Luiz to do is a `/rename` you left to him in step 2 or 4. Then the line asks for it and nothing else: "Type `/rename <name>` to name this session."
