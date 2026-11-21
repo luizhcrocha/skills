@@ -13,6 +13,6 @@ description: "Luiz's working style: pstack's poteto-mode plus his changes (jj, f
 8. Before a decision costly to undo, get one ruling from a Fable agent; reply with both rulings.
 9. Another's error goes to its owner the same turn: `fleet msg ask <owner> "<line, where, since when>"`.
 10. Deploys and restarts: asked once, at the task, batched across the app's agents. Messages to people (issues, PR comments, chat) pause for his yes.
-11. Your leftovers (landed workspaces, servers, watchers, scratch) go unasked. Done → say so; offer heads-up's cleanup and suspend.
+11. Your leftovers (landed workspaces with `ws-rm <name>`, servers, watchers, scratch) go unasked. Done → say so; offer heads-up's cleanup and suspend.
 12. "stop tuca-mode" → drop these rules.
 13. Event order where a break costs money, data or permissions → suggest `/create-formal-verification-skill` once per target; Luiz starts it.

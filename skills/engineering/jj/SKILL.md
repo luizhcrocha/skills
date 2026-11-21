@@ -44,4 +44,4 @@ The repo is shared by every workspace. `jj undo` reverts the newest operation, w
 - Look into another workspace from your own: `jj log -r '<workspace>@'`, or `jj -R <path> --at-op=@ st`, which reads its last snapshot without taking one. A plain `jj st` run there snapshots its files into its owner's change.
 - Name changes by change id in commands. A commit id pins one moment: evidence, stale after the next rewrite.
 - Before rewriting a change, run `jj log -r '<rev>+::'`: describing or editing a commit someone stacked on rebases their stack under them. Tell the owner.
-- Remove a workspace with `jj workspace forget <name>` before its directory, once its changes have landed or were abandoned on purpose.
+- Remove a finished workspace with `ws-rm <name>`, run bare from outside it (no `cd` prefix, so Luiz's allow rule matches and no prompt stops you). It forgets the workspace and deletes its folder only when it sits under `.ws/<repo>/`, no process works inside, and every non-empty commit is in `trunk()`; otherwise it refuses, naming the check. A refused one goes to the asked sweep (tuca-mode's workspace-prune).

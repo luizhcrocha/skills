@@ -1,0 +1,116 @@
+#!/usr/bin/env python3
+"""Remove a finished jj workspace that ws-add made: forget it, then delete its folder under <repos>/.ws/<repo>/.
+
+  ws-rm NAME [-R DIR]   DIR is any workspace of the repo (default: the current directory)
+
+It refuses, exit 1 naming the check, a workspace that is not a direct child of <repos>/.ws/<repo>/, is `default`, a
+landing workspace (`*-land`, `deploy`), has a process working inside it, or holds a non-empty commit trunk() lacks.
+It snapshots the workspace before judging it. There is no override: Luiz's settings allow `ws-rm *` without a prompt
+(2026-11-21: agents stalled on the prompt for `rm -rf <repos>/.ws/...`), so whatever it refuses goes to the asked sweep
+in tuca-mode's workspace-prune. A rerun after the forget deletes the orphan folder. Stdlib only.
+"""
+import argparse
+import importlib.machinery
+import importlib.util
+import os
+import shutil
+import subprocess
+import sys
+from pathlib import Path
+
+_loader = importlib.machinery.SourceFileLoader("ws_add", str(Path(__file__).resolve().with_name("ws-add")))
+ws_add = importlib.util.module_from_spec(importlib.util.spec_from_loader("ws_add", _loader))
+_loader.exec_module(ws_add)
+
+PROTECTED = ("default", "deploy")
+
+
+class Refused(Exception):
+    pass
+
+
+def jj(*args, cwd):
+    r = subprocess.run(["jj", *args], cwd=cwd, capture_output=True, text=True)
+    if r.returncode != 0:
+        raise Refused(f"`jj {' '.join(args)}` failed: {r.stderr.strip()}")
+    return r.stdout
+
+
+def tracked_root(main: Path, name: str) -> Path | None:
+    r = subprocess.run(["jj", "workspace", "root", "--name", name], cwd=main, capture_output=True, text=True)
+    return Path(r.stdout.strip()) if r.returncode == 0 else None
+
+
+def belongs_to(path: Path, main: Path) -> bool:
+    """A forgotten workspace's folder still names its repo in .jj/repo."""
+    repo = path / ".jj" / "repo"
+    return repo.is_file() and (repo.parent / repo.read_text().strip()).resolve() == (main / ".jj" / "repo").resolve()
+
+
+def check_place(path: Path, home: Path):
+    if path.is_symlink() or path.resolve().parent != home.resolve():
+        raise Refused(f"{path} is not a folder directly under {home}")
+
+
+def check_no_process_inside(path: Path):
+    inside = []
+    for cwd in Path("/proc").glob("[0-9]*/cwd"):
+        try:
+            target = Path(os.readlink(cwd))
+        except OSError:
+            continue
+        if target == path or path in target.parents:
+            inside.append(cwd.parent.name)
+    if inside:
+        raise Refused(f"processes work inside {path}: pid {', '.join(sorted(inside, key=int))}")
+
+
+def check_landed(path: Path, name: str):
+    jj("workspace", "update-stale", cwd=path)
+    jj("status", cwd=path)
+    left = jj("log", "--no-graph", "-r", f"(::{name}@ ~ ::trunk()) ~ empty()",
+              "-T", 'change_id.short() ++ " " ++ description.first_line() ++ "\n"', cwd=path)
+    if left.strip():
+        raise Refused(f"{name} holds work trunk() lacks:\n{left.rstrip()}")
+
+
+def remove(name: str, start: Path) -> str:
+    if name in PROTECTED or name.endswith("-land"):
+        raise Refused(f"{name} is a protected workspace")
+    main = ws_add.main_root(ws_add.workspace_root(start))
+    home = ws_add.path_for(start, name).parent
+    root = tracked_root(main, name)
+    if root is None:
+        orphan = home / name
+        if not orphan.exists():
+            return f"{name}: no such workspace, nothing to remove"
+        check_place(orphan, home)
+        if not belongs_to(orphan, main):
+            raise Refused(f"{orphan} is not a workspace of {main}")
+        check_no_process_inside(orphan.resolve())
+        shutil.rmtree(orphan)
+        return f"{name}: already forgotten, removed {orphan}"
+    check_place(root, home)
+    path = root.resolve()
+    check_no_process_inside(path)
+    check_landed(path, name)
+    jj("workspace", "forget", name, cwd=main)
+    shutil.rmtree(path)
+    return f"{name}: forgotten, removed {path}"
+
+
+def main(argv: list[str]) -> int:
+    p = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
+    p.add_argument("name")
+    p.add_argument("-R", "--repository", type=Path, default=Path.cwd())
+    a = p.parse_args(argv)
+    try:
+        print(remove(a.name, a.repository))
+    except Refused as e:
+        print(f"ws-rm: refused: {e}", file=sys.stderr)
+        return 1
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))
