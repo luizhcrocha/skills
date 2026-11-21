@@ -15,7 +15,7 @@ For each, note its owner, the action that clears it, and since when it waits. Ch
 - Pieces its handoff waits on (the other piece its `next` line names) that have not landed.
 - Its open asks: `fleet msg ls --from <me>`, and each ask to its own subagents without an answer.
 - Its steps stalled outside it: a gate another run holds, a refused push, a pending approval, a deploy someone else runs.
-- Luiz: its fleet's rows in `fleet waiting`. A row marked ANSWERED has his answer: act on it.
+- Luiz: its questions to him, `fleet msg ls --from <me> --kind decision`. His answer arrives in `fleet msg mailbox` as a choice: act on it.
 
 **Waits on this session:**
 - `fleet msg mailbox`: the asks it still owes.
