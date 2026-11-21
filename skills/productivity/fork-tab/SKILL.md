@@ -45,14 +45,15 @@ Done when `jj diff --summary` in `@` shows only A's files and `jj diff --summary
 Write `$TMPDIR/fork-tab-<slug>.md` (`/tmp` when `$TMPDIR` is unset). Keep it outside the repo so it never lands in a change. Use one section for each of these:
 
 - `goal`: B in one sentence, and the next step.
-- `where`: the workspace path, its change id, and the repo's landing bookmark.
+- `where`: the workspace path, its full change id (`jj log -r <slug>@ -T change_id`), and the repo's landing bookmark. Other pieces wait on that change, so B's work lands in it: squash into it, never abandon or re-create it, or a wait on it gets no answer.
 - `so-far`: decisions made with Luiz and why, what was tried, and what failed.
 - `evidence`: `file:line` pointers, commands and their output, URLs.
 - `mixed`: files left in A's change that B also needs, or `none`.
 - `not-yours`: A, in one sentence, so the new agent leaves it alone.
 - `skills`: the skills the new agent should load, such as `tstack:tdd` or `tstack:lang-ts`.
 - `end`: when B is done (landed, or answered): tell the session that forked you, `fleet msg note <this session's name> "<slug>: done, <one line>"`; forget your workspace and remove its folder; then `fleet suspend me --why "<slug> done"`. Luiz starting the fork is his yes to all three, so do them unasked.
-- `next`, optional, when B is one piece of several: "after you land, open the next piece with fork-tab from <its handoff file>". A piece that waits on two is named in both their handoffs with "only once <the other> has landed", so the second to land opens it.
+- `waits`, optional, when B starts only after other pieces land: one `fleet msg wait landed <full change id>` per piece, B's first step, the id copied from that piece's `where`. It returns at once for a change already landed. A short id stops resolving once the change is hidden, so write the full 32 letters, and open B only once each piece it waits on has been opened and has its id.
+- `next`, optional, when B is one piece of several: "after you land, open the next piece with fork-tab from <its handoff file>". A piece that waits on two is named in one of their `next` lines, and its `waits` holds it until the other lands.
 
 Point at files. Do not paste anything a path can carry. Remove secrets.
 
