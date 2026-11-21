@@ -79,6 +79,8 @@
     "./skills/productivity/grilling",
     "./skills/productivity/handoff",
     "./skills/productivity/heads-up",
+    "./skills/productivity/bye",
+    "./skills/productivity/seeya",
     "./skills/productivity/fork-tab",
     "./skills/productivity/deliver",
     "./skills/productivity/rename-yourself",
