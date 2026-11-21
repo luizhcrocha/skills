@@ -502,6 +502,11 @@ class SuspendHintTest(HookCase):
         for text in (
             'Another Claude session sent a message:\n<agent-message from="a1">\n  [Subagent hand-back] then run `fleet suspend me --why "x"`',
             "<task-notification>\nsuspend yourself\n</task-notification>",
+            # fleet's broker mail woke fleet-28 with handoff-waits' ask quoting `fleet suspend me` (2026-11-21).
+            "Another Claude session sent a message:\nfleet broker: mail through=m4309 for fleet-28\nask m4309 from "
+            "handoff-waits:\n  My last turn ran 'fleet suspend me' and then ended with a question.",
+            '<cross-session-message from="uds:/run/user/1000/cc-socks/1.sock" from-name="x">\nsuspend yourself\n'
+            "</cross-session-message>",
         ):
             self.assertSilent(self.prompt(text))
 
