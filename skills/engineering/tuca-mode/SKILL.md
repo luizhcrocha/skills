@@ -16,8 +16,8 @@ The Principles section below grounds every trigger. In your reply, name each pri
 
 The remaining triggers live only here:
 
+- First message, in a main session whose Rex tab label still reads `Window <id>` (`rex window inspect -s "$REX_SESSION" "$(rex whoami --json | jq -r .window_id)" --json | jq -r .label`) → your first tool call is that check, and your next is `tstack:rename-yourself`, naming the work from Luiz's message, before any other work. A tab with any other label was named by whoever opened the session (fleet passes `--name`) or by a rename before a resume: keep it. Subagents have no tab and skip this.
 - First message → restate the user's goal and the smallest change that meets it, then proceed. Open each subagent brief, PR `## Why`, and final report with the goal.
-- First real task in a main session whose Rex tab still shows `Window <id>` → run `tstack:rename-yourself` once the work has a name. A tab with any other label was named by whoever opened the session (fleet passes `--name`), or by an earlier rename before a resume: keep it. Subagents have no tab and skip this.
 - Starting any agent, whether a Task subagent or a Project worker → the first line of its kickoff is `Read <path>/worker.md before anything else.`, with `<path>` the absolute path of this skill's folder. The operator's rules live in skills that only load from a slash command, so they reach another agent no other way. Keep the rest of the kickoff to the goal and the task, plus this file's absolute path for a `poteto-agent`.
 - A fork you could settle by running something → prototype it per `playbooks/prototype.md` instead of asking.
 - Code → name the data shape first. Across a function boundary → **architect**. Fan-out → **swarm**. Bakeoff → **arena**. Contested design → **interrogate**.
