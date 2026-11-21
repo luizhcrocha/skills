@@ -10,7 +10,7 @@ For a break that already blocks others: a red suite on the landing bookmark's ti
 4. Light checks in the workspace: the repro red then green, the touched files' tests, typecheck and lint of the touched files, one read of the diff. No full gate or long review first. A red the tip already had, in code you did not touch, is named, not blocking.
 5. Land steps 5 to 7. Then deploy, asked once at the task: a fix Luiz asked for deploys without a second ask; otherwise ask now, with what failed, since when, how many.
 6. Measure live that the symptom stopped; `tstack:unblock` tells the blocked lanes.
-7. After the release, the full gate on the pushed commit (`fleet run -r <commit> -- <gate>`) and any mutant sweep, in the background. Fix what they find forward the same turn, or revert the hotfix when its red blocks more than the break did.
+7. After the release, the full gate on the pushed commit (`fleet run -r <commit> -- <gate>`; `fleet:pool-run`) and any mutant sweep, in the background. Fix what they find forward the same turn, or revert the hotfix when its red blocks more than the break did.
 8. Open the root cause and its failing test through Bug fix when step 2 reverted or added no test.
 
 **Reply:** the red command and who it blocked, fix or revert, the light checks, minutes from red to pushed and to live, the live measurement, the deploy, the extended tests' state, the follow-ups.

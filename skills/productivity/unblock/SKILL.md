@@ -14,7 +14,7 @@ For each, note its owner, the action that clears it, and since when it waits. Ch
 **This session waits on:**
 - Pieces its handoff waits on (the other piece its `next` line names) that have not landed.
 - Its open asks: `fleet msg ls --from <me>`, and each ask to its own subagents without an answer.
-- Its steps stalled outside it: a gate another run holds, a refused push, a pending approval, a deploy someone else runs.
+- Its steps stalled outside it: a gate another run holds, a refused push, a pending approval, a deploy someone else runs. A `fleet land` that was refused or will not finish → `fleet:pool-land`; a run that waits too long on the pool → `fleet:pool-diagnose`.
 - Luiz: its questions to him, `fleet msg ls --from <me> --kind decision`. His answer arrives in `fleet msg mailbox` as a choice: act on it.
 
 **Waits on this session:**
