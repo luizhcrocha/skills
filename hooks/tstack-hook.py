@@ -1877,14 +1877,98 @@ def _rm_shown(path, home):
     return "~" + path[len(home):] if home and (path == home or path.startswith(home + "/")) else path
 
 
+# The language gate (Luiz, 2026-11-22): of 589 fleet sessions that edited Go in the four days before, 33% had loaded
+# tstack:lang-go, and 29% of 532 subagents had (68% of 57 lane sessions); no brief named it. A subagent's context is
+# its own, so a skill its parent loaded never reaches it: the check reads the editing agent's own transcript.
+LANG_SKILLS = {
+    ".go": ("lang-go",), ".py": ("lang-py",), ".pyi": ("lang-py",), ".nix": ("lang-nix",), ".nu": ("lang-nu",),
+    ".nuon": ("lang-nu",), ".rs": ("lang-rust",), ".ts": ("lang-ts",), ".tsx": ("lang-ts",), ".mts": ("lang-ts",),
+    ".cts": ("lang-ts",), ".c": ("lang-c",), ".h": ("lang-c", "lang-cpp"), ".cc": ("lang-cpp",),
+    ".cpp": ("lang-cpp",), ".cxx": ("lang-cpp",), ".hpp": ("lang-cpp",), ".hh": ("lang-cpp",), ".hxx": ("lang-cpp",),
+    ".zig": ("lang-zig",), ".swift": ("lang-swift",), ".cs": ("lang-cs",),
+}
+LANG_EDITS = ("Edit", "Write", "MultiEdit")
+
+
+def _own_transcript(hook):
+    """The transcript of whoever makes this call: a subagent's own file, else the session's. Where the input's
+    transcript_path is already a subagents/ file, the agent's is beside it, as _wall_context reads it."""
+    transcript = hook.input.get("transcript_path")
+    if not isinstance(transcript, str) or not transcript.endswith(".jsonl"):
+        raise ValueError(f"no transcript_path: {transcript!r}")
+    agent = hook.input.get("agent_id")
+    if not isinstance(agent, str) or not agent:
+        return Path(transcript)
+    folder = Path(transcript).parent if Path(transcript).parent.name == "subagents" else Path(transcript[:-6]) / "subagents"
+    return folder / f"agent-{agent}.jsonl"
+
+
+def _lang_loaded(transcript, skills):
+    """True when the agent itself loaded one of the skills: its own Skill call, its Read or shell read of the skill's
+    SKILL.md, or the slash command Luiz typed. A path or name in text it was only shown (a brief, a tool result, the
+    system reminder's skill list) is no load, so the cheap pattern only picks the lines worth parsing."""
+    names = "|".join(re.escape(s) for s in skills)
+    cheap = re.compile(rb"(?:" + names.encode() + rb")")
+    skill_file = re.compile(r"skills/[^\s'\"]*(?:" + names + r")/SKILL\.md")
+    slash = re.compile(r"<command-name>/?(?:[\w.-]+:)?(?:" + names + r")</command-name>")
+    for line in transcript.read_bytes().splitlines():
+        if not cheap.search(line):
+            continue
+        try:
+            entry = json.loads(line)
+        except ValueError:
+            continue
+        content = (entry.get("message") or {}).get("content")
+        if entry.get("type") == "user":
+            typed = content if isinstance(content, str) else " ".join(
+                str(b.get("text")) for b in content or () if isinstance(b, dict) and b.get("type") == "text")
+            if slash.search(typed):
+                return True
+        if entry.get("type") != "assistant" or not isinstance(content, list):
+            continue
+        for block in content:
+            args = block.get("input") if isinstance(block, dict) and block.get("type") == "tool_use" else None
+            if not isinstance(args, dict):
+                continue
+            if block.get("name") == "Skill" and re.fullmatch(rf"(?:[\w.-]+:)?(?:{names})", str(args.get("skill"))):
+                return True
+            if block.get("name") in ("Read", "Bash") and skill_file.search(str(args.get("file_path") or args.get("command"))):
+                return True
+    return False
+
+
+def lang_skill(hook):
+    """PreToolUse (Edit, Write, MultiEdit): an edit of a file in a language that has a lang-* skill is refused until
+    this agent has loaded it. Fails open: a transcript it cannot read lets the edit through, logged. Reads the whole
+    transcript (5 ms CPU a MB measured: 0.25 s at 55 MB, p99 of main transcripts 100 MB), inside the guard deadline."""
+    args = hook.input.get("tool_input")
+    if hook.input.get("tool_name") not in LANG_EDITS or not isinstance(args, dict):
+        return None
+    path = args.get("file_path")
+    skills = LANG_SKILLS.get(os.path.splitext(path)[1].lower()) if isinstance(path, str) else None
+    if not skills:
+        return None
+    try:
+        if _lang_loaded(_own_transcript(hook), skills):
+            return None
+    except Exception:  # noqa: BLE001 - fail open
+        log(hook.data_dir, f"PreToolUse lang_skill read no transcript; let the edit through\n{traceback.format_exc()}")
+        return None
+    names = " or ".join(f"tstack:{s}" for s in skills)
+    files = " or ".join(str(ROOT / "skills" / "engineering" / s / "SKILL.md") for s in skills)
+    return Deny(f"tstack: {os.path.basename(path)} is {names} code, and this agent has not loaded it. Call the Skill "
+                f"tool with it (or Read {files} when you have no Skill tool), then retry the edit. A skill a parent "
+                "loaded is not yours: every agent loads its own.")
+
+
 HANDLERS = {
     "SessionStart": [memo_start, jj_hints, tape_build, side_panes_reset],
     "Stop": [ask_flag],
     "UserPromptSubmit": [ask_clear, suspend_hint, side_panes],
-    "PreToolUse": [context_wall, push_attribution, rm_guard, spawn_effort, agent_cap],
+    "PreToolUse": [context_wall, push_attribution, rm_guard, spawn_effort, agent_cap, lang_skill],
 }
 
-GUARDS = frozenset({context_wall, push_attribution, rm_guard, spawn_effort, agent_cap})
+GUARDS = frozenset({context_wall, push_attribution, rm_guard, spawn_effort, agent_cap, lang_skill})
 
 # Past the 30 s hooks.json gives a Bash PreToolUse hook, Claude Code discards its output and runs the call, so a deny
 # must be out before them. Each guard's calls have their own limits, which can add up to more (two pushes in a command).

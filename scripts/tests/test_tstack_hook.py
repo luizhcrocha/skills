@@ -1229,6 +1229,110 @@ class ContextWallTest(HookCase):
         self.assertEqual(self.call("Bash", {"command": "ls"}), {})
 
 
+class LangSkillTest(HookCase):
+    """lang_skill (PreToolUse, Edit/Write/MultiEdit): an edit of a file in a language with a lang-* skill is
+    denied until the agent making it has loaded the skill, in its own transcript: a parent's skill is not a
+    subagent's (Luiz, 2026-11-22: 29% of 532 subagents editing Go had loaded lang-go)."""
+
+    def setUp(self):
+        super().setUp()
+        self.subagents = self.tmp / "transcript" / "subagents"
+        self.subagents.mkdir(parents=True)
+
+    def edit(self, path, tool="Edit", agent=None):
+        payload = {**self.base("PreToolUse"), "tool_name": tool, "tool_input": {"file_path": path}}
+        if agent:
+            payload["agent_id"] = agent
+        return self.hook("PreToolUse", payload)
+
+    def denied(self, result):
+        self.assertEqual(result.returncode, 0, result.stderr)
+        out = json.loads(result.stdout)["hookSpecificOutput"]
+        self.assertEqual(out["permissionDecision"], "deny")
+        return out["permissionDecisionReason"]
+
+    def test_an_edit_before_the_skill_is_denied_naming_it(self):
+        self.assertIn("tstack:lang-go", self.denied(self.edit("/r/main.go")))
+
+    def test_each_language_names_its_own_skill(self):
+        for path, skill in (("a.py", "lang-py"), ("a.nix", "lang-nix"), ("a.nu", "lang-nu"), ("a.rs", "lang-rust"),
+                            ("a.tsx", "lang-ts"), ("a.c", "lang-c"), ("a.hpp", "lang-cpp"), ("a.zig", "lang-zig"),
+                            ("a.swift", "lang-swift"), ("a.cs", "lang-cs")):
+            with self.subTest(path=path):
+                self.assertIn(f"tstack:{skill}", self.denied(self.edit(f"/r/{path}")))
+
+    def test_a_header_takes_the_c_or_the_cpp_skill(self):
+        reason = self.denied(self.edit("/r/a.h"))
+        self.assertIn("tstack:lang-c or tstack:lang-cpp", reason)
+        self.transcribe(tool_use("Skill", skill="tstack:lang-cpp"))
+        self.assertSilent(self.edit("/r/a.h"))
+
+    def test_other_files_and_tools_pass(self):
+        for path in ("/r/README.md", "/r/a.json", "/r/Makefile", "/r/go"):
+            with self.subTest(path=path):
+                self.assertSilent(self.edit(path))
+        payload = {**self.base("PreToolUse"), "tool_name": "Read", "tool_input": {"file_path": "/r/main.go"}}
+        self.assertSilent(self.hook("PreToolUse", payload))
+
+    def test_text_that_only_names_the_skill_is_no_load(self):
+        skill = "/p/skills/engineering/lang-go/SKILL.md"
+        self.transcribe(tool_use("Agent", prompt=f"Go rules: {skill}"),
+                        {"type": "user", "message": {"role": "user", "content": [
+                            {"type": "tool_result", "tool_use_id": "t", "content": f"see {skill} and <command-name>/tstack:lang-go</command-name>"}]}},
+                        {"type": "user", "message": {"role": "user", "content": f"read {skill}"}})
+        self.denied(self.edit("/r/main.go"))
+
+    def test_a_shell_read_through_a_glob_counts(self):
+        self.transcribe(tool_use("Bash", command="cat /p/skills/*/lang-go/SKILL.md"))
+        self.assertSilent(self.edit("/r/main.go"))
+
+    def test_the_deny_names_the_skill_file_to_read(self):
+        self.assertIn("skills/engineering/lang-go/SKILL.md", self.denied(self.edit("/r/main.go")))
+
+    def test_every_edit_tool_is_covered(self):
+        for tool in ("Edit", "Write", "MultiEdit"):
+            with self.subTest(tool=tool):
+                self.denied(self.edit("/r/main.go", tool=tool))
+
+    def test_a_skill_call_lets_the_edit_through_with_or_without_the_plugin_prefix(self):
+        for name in ("tstack:lang-go", "lang-go"):
+            with self.subTest(name=name):
+                self.transcript.write_text("")
+                self.transcribe(tool_use("Skill", skill=name))
+                self.assertSilent(self.edit("/r/main.go"))
+
+    def test_reading_the_skill_file_or_typing_its_command_counts(self):
+        self.transcribe(tool_use("Read", file_path="/home/x/.claude/plugins/cache/tstack/skills/engineering/lang-go/SKILL.md"))
+        self.assertSilent(self.edit("/r/main.go"))
+        self.transcript.write_text("")
+        self.transcribe({"type": "user", "message": {"role": "user", "content":
+                         "<command-name>/tstack:lang-go</command-name>"}})
+        self.assertSilent(self.edit("/r/main.go"))
+
+    def test_another_language_s_skill_does_not_count(self):
+        self.transcribe(tool_use("Skill", skill="tstack:lang-py"))
+        self.denied(self.edit("/r/main.go"))
+        self.assertSilent(self.edit("/r/a.py"))
+
+    def test_the_skill_list_in_a_system_reminder_does_not_count(self):
+        self.transcribe({"type": "user", "message": {"role": "user", "content":
+                         "- tstack:lang-go: Go rules and taste. Use for any Go code. skills/engineering/lang-go"}})
+        self.denied(self.edit("/r/main.go"))
+
+    def test_a_subagent_reads_its_own_transcript_not_its_parent_s(self):
+        self.transcribe(tool_use("Skill", skill="tstack:lang-go"))
+        (self.subagents / "agent-a1.jsonl").write_text(json.dumps(said("go")) + "\n")
+        self.denied(self.edit("/r/main.go", agent="a1"))
+        (self.subagents / "agent-a1.jsonl").write_text(json.dumps(tool_use("Skill", skill="lang-go")) + "\n")
+        self.assertSilent(self.edit("/r/main.go", agent="a1"))
+
+    def test_a_transcript_it_cannot_read_lets_the_edit_through_and_is_logged(self):
+        self.assertSilent(self.edit("/r/main.go", agent="no-such-agent"))
+        self.assertIn("lang_skill", self.log())
+        payload = {"session_id": "s", "cwd": str(self.repo), "tool_name": "Edit", "tool_input": {"file_path": "/r/a.go"}}
+        self.assertSilent(self.hook("PreToolUse", payload))
+
+
 class HooksJsonTest(unittest.TestCase):
     def test_every_registered_event_is_dispatched(self):
         config = json.loads(HOOKS_JSON.read_text())
