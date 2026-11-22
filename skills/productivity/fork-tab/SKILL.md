@@ -42,7 +42,7 @@ Done when `jj diff --summary` in `@` shows only A's files and `jj diff --summary
 
 ## 3. Write the handoff
 
-Write `~/.local/state/tstack/work/<slug>/handoff.md` (`mkdir -p` the folder). It sits outside the repo, so it never lands in a change, and outside `/tmp` and the scratchpad, so a reboot or a suspension never loses it (Luiz, 2026-11-22). A handoff a designer already wrote for a piece or a coordinator is used where it is. Use one section for each of these:
+Write `~/.local/state/tstack/work/<slug>/handoff.md` (`mkdir -p` the folder). It sits outside the repo, so it never lands in a change, and outside `/tmp` and the scratchpad, so a reboot or a suspension never loses it (Luiz, 2026-11-22). A handoff a designer already wrote for a piece or a coordinator is used where it is. Link it where fleet reads a lane's handoff, so `fleet ls`, `fleet agent show <slug>` and B's `fleet me` show its goal: `mkdir -p ~/.local/state/fleet/handoffs && ln -sfn <handoff file> ~/.local/state/fleet/handoffs/<slug>.md`. Use one section for each of these:
 
 - `goal`: B in one sentence, and the next step.
 - `where`: the workspace path, its full change id (`jj log -r <slug>@ -T change_id`), and the repo's landing bookmark. Other pieces wait on that change, so B's work lands in it: squash into it, never abandon or re-create it, or a wait on it gets no answer.
@@ -51,32 +51,31 @@ Write `~/.local/state/tstack/work/<slug>/handoff.md` (`mkdir -p` the folder). It
 - `mixed`: files left in A's change that B also needs, or `none`.
 - `not-yours`: A, in one sentence, so the new agent leaves it alone.
 - `skills`: the skills the new agent should load, such as `tstack:tdd` or `tstack:lang-ts`.
-- `end`: when B is done (landed, or answered): tell the session that forked you, `fleet msg note <this session's name> "<slug>: done, <one line>" --wake` (a note without `--wake` sits unread until the forker happens to look); when your handoff is `work/<slug>/handoff.md`, remove that `work/<slug>/` folder (a design's folder is its coordinator's to remove); then `fleet suspend me --why "<slug> done"`. Leave your workspace: you run inside it, so `ws-rm` refuses it, and fleet removes it when it ends you (the prune sweep until then). Luiz starting the fork is his yes to both, so do them unasked. The broker refuses a note to a forker that is suspended or ended (exit 1, `refused: suspended` or `no-session`, nothing stored): then ask Luiz where the result goes (`fleet msg decide --question "<slug> is done (<one line>); <forker> is <its refusal>. Who gets the result?"`), send it there once he answers, and only then suspend; never suspend with that question open (Luiz, 2026-11-21: "notes refused. agents should check before sending, and ask where to send it instead").
-- `waits`, optional, when B starts only after other pieces land: one `fleet msg wait landed <full change id>` per piece, B's first step, the id copied from that piece's `where`. It returns at once for a change already landed. A short id stops resolving once the change is hidden, so write the full 32 letters, and open B only once each piece it waits on has been opened and has its id.
+- `end`: when B is done (landed, or answered): when your handoff is `work/<slug>/handoff.md`, remove that `work/<slug>/` folder and its link `~/.local/state/fleet/handoffs/<slug>.md` (a design's folder is its coordinator's to remove); then `fleet suspend me --why "<slug> done: <one line>"`. fleet wakes the session that started you with that line, so send no note of your own. Only when `fleet agent show <slug>` names no `from` (Luiz launched you by hand), first tell the forker: `fleet msg note <this session's name> "<slug>: done, <one line>" --wake`. Leave your workspace: you run inside it, so `ws-rm` refuses it, and fleet removes it when it ends you (the prune sweep until then). Luiz starting the fork is his yes to both, so do them unasked. The broker refuses that note to a forker that is suspended or ended (exit 1, `refused: suspended` or `no-session`, nothing stored): then ask Luiz where the result goes (`fleet msg decide --question "<slug> is done (<one line>); <forker> is <its refusal>. Who gets the result?"`), send it there once he answers, and only then suspend; never suspend with that question open (Luiz, 2026-11-21: "notes refused. agents should check before sending, and ask where to send it instead").
+- `waits`, optional, when B goes on only after other pieces land: one `fleet msg wait landed <full change id>` per piece, B's first step, the id copied from that piece's `where`. It follows the landing and B ends its turn; the landing wakes B, and one already landed prints at once. Step 4 passes the same ids as `--waits`. A short id stops resolving once the change is hidden, so write the full 32 letters, and open B only once each piece it waits on has been opened and has its id.
 - `next`, optional, when B is one piece of several: "after you land, open the next piece with fork-tab from <its handoff file>". A piece that waits on two is named in one of their `next` lines, and its `waits` holds it until the other lands.
 
 Point at files. Do not paste anything a path can carry. Remove secrets.
 
 Done when every section has content or says `none`.
 
-## 4. Open the tab beside this one
+## 4. Start B beside this one
 
-This step needs Rex (`REX_SESSION` and `REX_BLOCK` set). Open the tab in this Rex session without focusing it, then move it to the right of your own tab:
+Start B through fleet, from this session, so its tab opens in this Rex session right after yours and fleet books B as your lane (its `from`, waits and change):
 
 ```bash
-me=$(rex whoami --json | jq -r .window_id)
-new=$(rex window new -s "$REX_SESSION" <slug> -c "$ws" --focus=false --json \
-  -- claude --name <slug> --model opus --effort high \
-  "/tstack:tuca-mode Continue the work in <handoff file>. Run jj workspace update-stale first, then load the skills it lists." \
-  | jq -r .window_id)
-rex window move -s "$REX_SESSION" "$new" --after "$me"
+fleet agent start <slug> --dir "$ws" --model opus --effort high \
+  --opening "/tstack:tuca-mode Continue the work in <handoff file>. Run jj workspace update-stale first, then load the skills it lists." \
+  --waits <full change id>   # one per `waits` line; none when B waits on nothing
 ```
+
+fleet wakes you when every change B waits on has landed (B is Ready) and when B suspends done; no note from B is needed, and you never poll. `Started <slug>@<machine>` or `Already` is success. `Refused` (exit 1) prints why: a name in use takes `-2` on the slug, as in step 2.
 
 Opus high is the Implementer row of [models.md](../../../docs/models.md); a design takes the Designer row and opens with `/tstack:designer <handoff file>`, and a designer's coordinator takes the Coordinator row and opens with `/tstack:coordinator <handoff file>`. If Luiz names a model, use his.
 
-Outside Rex, give Luiz the launch in nushell instead: `cd <the path ws-add printed>; claude --name <slug> --model opus --effort high "/tstack:tuca-mode Continue the work in <handoff file>. Run jj workspace update-stale first, then load the skills it lists."`
+No fleet-host (exit 4), or no `fleet`: give Luiz the launch in nushell instead: `cd <the path ws-add printed>; claude --name <slug> --model opus --effort high "/tstack:tuca-mode Continue the work in <handoff file>. Run jj workspace update-stale first, then load the skills it lists."`
 
-Done when `rex window ls -s "$REX_SESSION"` lists `<slug>` right after your tab, or Luiz has the command.
+Done when `fleet agent show <slug>` prints B's card with you as `from`, its waits and its handoff, and `rex window ls -s "$REX_SESSION"` lists `<slug>` right after your tab; or Luiz has the command.
 
 ## 5. Go back to A
 
