@@ -46,7 +46,7 @@ Write `~/.local/state/tstack/work/<slug>/handoff.md` (`mkdir -p` the folder). It
 
 - `goal`: B in one sentence, and the next step.
 - `where`: the workspace path, its full change id (`jj log -r <slug>@ -T change_id`), and the repo's landing bookmark. Other pieces wait on that change, so B's work lands in it: squash into it, never abandon or re-create it, or a wait on it gets no answer.
-- `so-far`: decisions made with Luiz and why, what was tried, and what failed.
+- `so-far`: decisions made with Luiz and why, what was tried, and what failed. Run `fleet ls --live`; if a live lane's WORK is B's goal or part of it, name the lane and its WORK line here, and B's first step is `fleet msg note <lane> "<slug>: about to build <X>, is it yours?"`. B builds the rest meanwhile; a refused note is a no. The trigger is the same goal, never the same files. Keep `waits` for real dependencies, and `not-yours` for the forker's own work, never another group's lane.
 - `evidence`: `file:line` pointers, commands and their output, URLs.
 - `mixed`: files left in A's change that B also needs, or `none`.
 - `not-yours`: A, in one sentence, so the new agent leaves it alone.
