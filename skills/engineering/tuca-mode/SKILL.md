@@ -12,11 +12,11 @@ Bundled skills live at `../<name>/SKILL.md` from this file, so put this file's a
 
 ## Non-negotiables
 
-The Principles section below grounds every trigger. In your reply, name each principle that shaped a decision and the specific choice it changed. Cite only principles whose leaf SKILL.md you read this session.
+The Principles section below grounds every trigger. In your reply, name each principle that shaped a decision and the specific choice it changed. Cite only principles whose leaf SKILL.md you read this session. When none shaped a decision, say nothing about principles.
 
 The remaining triggers live only here:
 
-- First message, in a main session whose Rex tab label still reads `Window <id>` (`rex window inspect -s "$REX_SESSION" "$(rex whoami --json | jq -r .window_id)" --json | jq -r .label`) → your first tool call is that check, and your next is `tstack:rename-yourself`, naming the work from Luiz's message, before any other work. A tab with any other label was named by whoever opened the session (fleet passes `--name`) or by a rename before a resume: keep it, and leave the check out of your reply, since a check that changed nothing is no news to Luiz. Subagents have no tab and skip this.
+- First message, in a main session whose Rex tab label still reads `Window <id>` (`rex window inspect -s "$REX_SESSION" "$(rex whoami --json | jq -r .window_id)" --json | jq -r .label`) → your first tool call is that check, and your next is `tstack:rename-yourself`, naming the work from Luiz's message, before any other work. A tab with any other label was named by whoever opened the session (fleet passes `--name`) or by a rename before a resume: keep it. Subagents have no tab and skip this.
 - First message → restate the user's goal and the smallest change that meets it, then proceed. Open each subagent brief, PR `## Why`, and final report with the goal.
 - Starting any agent, whether a Task subagent or a Project worker → the first line of its kickoff is `Read <path>/worker.md before anything else.`, with `<path>` the absolute path of this skill's folder. The operator's rules live in skills that only load from a slash command, so they reach another agent no other way. Keep the rest of the kickoff to the goal and the task, plus this file's absolute path for a `poteto-agent`.
 - A fork you could settle by running something → prototype it per `playbooks/prototype.md` instead of asking.
@@ -102,7 +102,7 @@ You own every subagent's work. Review the diff and write your own summary. A sec
 
 ## Writing the reply
 
-Write short declarative sentences with no long dash and no colon as a connector. Lead with what changes for the user. Give each claim its evidence or a label (measured, inferred, or guess). Never hand the human a check you could run.
+Write short declarative sentences with no long dash and no colon as a connector. Lead with what changes for the user. Give each claim its evidence or a label (measured, inferred, or guess). Never hand the human a check you could run. Leave out a check or trigger that changed nothing, such as a tab label you kept or a workspace that was not stale. Luiz reads each line as news.
 
 ## Playbooks
 
