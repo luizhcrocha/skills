@@ -1,6 +1,6 @@
 ---
 name: designer
-description: "Argue one design with Luiz over many turns, from a fork-tab handoff: research, a proven model, options at each seam on a page, one approval, then one fork-tab per piece. Opened by fork-tab's Needs a design path as /tstack:designer <handoff file>."
+description: "Argue one design with Luiz over many turns, from a fork-tab handoff: research, a proven model, options at each seam on a page, one approval, then a coordinator forked to build it. Opened by fork-tab's Needs a design path as /tstack:designer <handoff file>."
 disable-model-invocation: true
 argument-hint: "<handoff file>"
 ---
@@ -19,4 +19,4 @@ You argue one design with Luiz over many turns, from the problem a fork-tab hand
 
 **Cross-check, then ask.** Before asking for approval, read `fleet msg ls --all --to on.design`. Each crossing with another design (a file, command or event both touch, a piece one needs from the other) gets `fleet msg ask <owner>`. A settled crossing becomes an order between pieces or a piece moved to its owner; an unsettled one is a question in the approval ask. Ask once: the page, the pieces (each with the files it owns, the run that proves it done, what it waits on), and `crosses: none` or the list.
 
-**Hand off, then end.** On his yes, write one fork-tab handoff per piece in `/tmp`, each with its `next` line, and start every piece that waits on nothing with fork-tab: tuca-mode builders on the Implementer row. Reply with the tabs and handoffs, and end. No plan file, no lanes, no approval record: the handoffs are the plan.
+**Hand off, then suspend.** On his yes, write one fork-tab handoff per piece in `/tmp`, with no `next` or `waits` line, since the coordinator opens each piece when its turn comes. Then write the coordinator's handoff: the design page, the landing bookmark, and each piece's handoff file with the pieces it waits on; its `end` tells Luiz, not you. Fork it with fork-tab: the coordinator (`tstack:coordinator`) builds the design while your context, spent on the design, goes away (Luiz, 2026-11-22: "better for context management"). Reply with the coordinator's tab and the handoffs, then `fleet suspend me --why "design <slug> handed"`; without `fleet`, stop. No plan file, no lanes, no approval record: the handoffs are the plan.

@@ -31,7 +31,7 @@ A line that fails question 1 is history or a work item. History is in tape and `
 | The work item | Its owner |
 | --- | --- |
 | A decision, input or permission that waits on Luiz or another agent | Its thread: a `fleet:ask` fence, or `fleet msg ask <party>` |
-| A piece of a design waiting to be built | Its fork-tab handoff, chained by the `next` lines |
+| A piece of a design waiting to be built | Its fork-tab handoff, listed in its coordinator's handoff |
 | Where a paused session resumes | The handoff document (`tstack:handoff`) |
 | Any other open thread | An issue in the repo's tracker (`tstack:to-issues`) |
 

@@ -72,7 +72,7 @@ new=$(rex window new -s "$REX_SESSION" <slug> -c "$ws" --focus=false --json \
 rex window move -s "$REX_SESSION" "$new" --after "$me"
 ```
 
-Opus high is the Implementer row of [models.md](../../../docs/models.md); a design takes the Designer row and opens with `/tstack:designer <handoff file>`. If Luiz names a model, use his.
+Opus high is the Implementer row of [models.md](../../../docs/models.md); a design takes the Designer row and opens with `/tstack:designer <handoff file>`, and a designer's coordinator takes the Coordinator row and opens with `/tstack:coordinator <handoff file>`. If Luiz names a model, use his.
 
 Outside Rex, give Luiz the launch in nushell instead: `cd <the path ws-add printed>; claude --name <slug> --model opus --effort high "/tstack:tuca-mode Continue the work in <handoff file>. Run jj workspace update-stale first, then load the skills it lists."`
 
