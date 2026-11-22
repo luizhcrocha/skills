@@ -5,6 +5,8 @@
 
 It refuses, exit 1 naming the check, a workspace that is not a direct child of <repos>/.ws/<repo>/, is `default`, a
 landing workspace (`*-land`, `deploy`), has a process working inside it, or holds a non-empty commit trunk() lacks.
+A commit whose patch trunk() holds under another id (`git cherry`: the landing train relands a stack as new commits)
+is a landed copy, not work: it is abandoned with the workspace.
 It snapshots the workspace before judging it. There is no override: Luiz's settings allow `ws-rm *` without a prompt
 (2026-11-21: agents stalled on the prompt for `rm -rf <repos>/.ws/...`), so whatever it refuses goes to the asked sweep
 in tuca-mode's workspace-prune. A rerun after the forget deletes the orphan folder. Stdlib only.
@@ -65,13 +67,27 @@ def check_no_process_inside(path: Path):
         raise Refused(f"processes work inside {path}: pid {', '.join(sorted(inside, key=int))}")
 
 
-def check_landed(path: Path, name: str):
+def patches_on_trunk(main: Path, name: str) -> set[str]:
+    """Commit ids under name@ whose patch trunk() already holds: copies the landing train relanded under new ids."""
+    store = main / ".jj" / "repo" / "store"
+    git_dir = (store / (store / "git_target").read_text().strip()).resolve()
+    trunk, head = (jj("log", "--no-graph", "-r", rev, "-T", "commit_id", cwd=main) for rev in ("trunk()", f"{name}@"))
+    r = subprocess.run(["git", "--git-dir", str(git_dir), "cherry", trunk, head], capture_output=True, text=True)
+    return {line[2:] for line in r.stdout.splitlines() if line.startswith("- ")}
+
+
+def check_landed(path: Path, name: str, main: Path) -> list[str]:
+    """The commit ids of name@'s landed copies, which go with the workspace; refused if any other work is off trunk()."""
     jj("workspace", "update-stale", cwd=path)
     jj("status", cwd=path)
-    left = jj("log", "--no-graph", "-r", f"(::{name}@ ~ ::trunk()) ~ empty()",
-              "-T", 'change_id.short() ++ " " ++ description.first_line() ++ "\n"', cwd=path)
-    if left.strip():
-        raise Refused(f"{name} holds work trunk() lacks:\n{left.rstrip()}")
+    rows = jj("log", "--no-graph", "-r", f"(::{name}@ ~ ::trunk()) ~ empty()",
+              "-T", 'commit_id ++ " " ++ change_id.short() ++ " " ++ description.first_line() ++ "\n"', cwd=path)
+    rows = [row.split(" ", 2) for row in rows.splitlines()]
+    copies = patches_on_trunk(main, name) if rows else set()
+    left = [f"{change} {subject}" for commit, change, subject in rows if commit not in copies]
+    if left:
+        raise Refused(f"{name} holds work trunk() lacks:\n" + "\n".join(left))
+    return [commit for commit, _, _ in rows]
 
 
 def remove(name: str, start: Path) -> str:
@@ -93,9 +109,12 @@ def remove(name: str, start: Path) -> str:
     check_place(root, home)
     path = root.resolve()
     check_no_process_inside(path)
-    check_landed(path, name)
+    copies = check_landed(path, name, main)
     jj("workspace", "forget", name, cwd=main)
     shutil.rmtree(path)
+    if copies:
+        jj("abandon", *copies, cwd=main)
+        return f"{name}: forgotten, removed {path}, abandoned {len(copies)} landed copies"
     return f"{name}: forgotten, removed {path}"
 
 

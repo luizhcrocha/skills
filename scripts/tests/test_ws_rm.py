@@ -53,6 +53,22 @@ class WsRm(unittest.TestCase):
         self.assertFalse(path.exists())
         self.assertNotIn("lane:", self.listed())
 
+    def test_a_copy_the_train_relanded_is_abandoned_with_its_workspace(self):
+        path = self.add("lane")
+        (path / "b").write_text("b\n")
+        self.jj("commit", "-m", "work", cwd=path)
+        original = self.jj("log", "--no-graph", "-r", "lane@-", "-T", "change_id", cwd=path)
+        (self.repo / "c").write_text("c\n")
+        self.jj("commit", "-m", "other")
+        self.jj("bookmark", "set", "master", "-r", "@-")
+        self.jj("duplicate", "lane@-", "-o", "master")
+        self.jj("bookmark", "set", "master", "-r", 'children(master) & description(substring:"work")')
+        r = self.rm("lane")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertFalse(path.exists())
+        self.assertNotIn(original, self.jj("log", "--no-graph", "-r", "all()", "-T", 'change_id ++ "\\n"'))
+        self.assertEqual(self.jj("log", "--no-graph", "-r", "heads(all()) ~ ::master ~ @", "-T", "change_id"), "")
+
     def test_unsnapshotted_edits_refuse(self):
         path = self.add("lane")
         (path / "b").write_text("unsaved\n")

@@ -12,7 +12,7 @@
    - `stop` with `freeze` → another landing holds the repo: wait the time named, then step 2 again (step 4 too if the rebase moved the stack). After your own `fleet land --gate` passed, pass `--push-token <token>`.
    - `stop` → several heads (ask which, or join them), not a fast-forward (a force-push pauses for Luiz), or an undescribed or conflicted revision (step 3).
 6. `fleet land` exited 0 → it already pushed the stack: never push it again by hand (`fleet:pool-land`). Otherwise `jj bookmark set <bookmark> -r <head>`, `jj git push --bookmark <bookmark>`. A push stalled on 1Password → ask Luiz to approve it, then push again. Free a `fleet land` token (`fleet gate free <token>`). Then `memo sync` (when on PATH) and `tstack:unblock` for the sessions waiting on this landing.
-7. Confirm `jj log -r '<bookmark>@origin'` is your head, and `@` is a fresh empty change (`jj new`). A workspace you made for this work and do not run inside: `ws-rm <name>`.
+7. Confirm `jj log -r '<bookmark>@origin'` is your head (after a pool land, the train's copy of it), and `@` is a fresh empty change (`jj new`). A workspace you made for this work and do not run inside: `ws-rm <name>`.
 8. The work came from a fork-tab handoff with a `next` line → follow it: open that piece with `tstack:fork-tab` from the handoff file it names; its `waits` line holds it until the other pieces it waits on land.
 
 **Reply:** the bookmark, the landed change ids with subjects, the checks and their result, the janitor's verdict, land-check's verdict and deploy finding, `[skip ci]` if added, the next piece opened if any, and anything left out.

@@ -26,6 +26,7 @@ An editor or diff tool hangs an agent. Pass `-m` to `describe`, `commit` and `sp
 - Push and move bookmarks when asked; in a fleet they belong to the landing turn.
 - Publishing is `jj bookmark set <bookmark> -r @-`, then `jj git push --bookmark <bookmark>`, one bookmark by name. The repo's docs name its bookmark: most repos `master` (dotfiles too; its frozen Arch-era archive is `arch`).
 - Every commit in `jj log -r '<bookmark>@origin..@'` ships: split unrelated work by domain with `jj split` first, and `jj new` after a push so `@` is never a pushed commit.
+- A pool's train lands your stack as new commits under new change ids, so after a `fleet land` your originals are copies: `ws-rm` abandons them with the workspace; in a workspace you keep, `jj abandon <root>::<tip>`.
 - Bookmarks move forward only, so `--allow-backwards` and `--all` wait for Luiz.
 - A conflicted bookmark (`name??`): the landing-turn holder rebases the unpublished side onto `<bookmark>@origin`, then sets the bookmark.
 
@@ -44,4 +45,4 @@ The repo is shared by every workspace. `jj undo` reverts the newest operation, w
 - Look into another workspace from your own: `jj log -r '<workspace>@'`, or `jj -R <path> --at-op=@ st`, which reads its last snapshot without taking one. A plain `jj st` run there snapshots its files into its owner's change.
 - Name changes by change id in commands. A commit id pins one moment: evidence, stale after the next rewrite.
 - Before rewriting a change, run `jj log -r '<rev>+::'`: describing or editing a commit someone stacked on rebases their stack under them. Tell the owner.
-- Remove a finished workspace with `ws-rm <name>`, run bare from outside it (no `cd` prefix, so Luiz's allow rule matches and no prompt stops you). It forgets the workspace and deletes its folder only when it sits under `.ws/<repo>/`, no process works inside, and every non-empty commit is in `trunk()`; otherwise it refuses, naming the check. A refused one goes to the asked sweep (tuca-mode's workspace-prune).
+- Remove a finished workspace with `ws-rm <name>`, run bare from outside it (no `cd` prefix, so Luiz's allow rule matches and no prompt stops you). It forgets the workspace and deletes its folder only when it sits under `.ws/<repo>/`, no process works inside, and every non-empty commit is in `trunk()` or is a landed copy (its patch on `trunk()`, which it abandons); otherwise it refuses, naming the check. A refused one goes to the asked sweep (tuca-mode's workspace-prune).
