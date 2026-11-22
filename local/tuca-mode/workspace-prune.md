@@ -18,4 +18,8 @@ After your work lands (Land step 7) or is abandoned on purpose (`jj abandon`), r
 4. Ask once with the exact set. A partial yes covers only what he named.
 5. Per confirmed workspace: `ws-rm <ws>`. One `ws-rm` refuses (archived, or outside `.ws/`): the archive bookmark if needed, `jj workspace forget <ws>`, remove the directory; his yes covers that prompt. Re-list and show the result.
 
+## Work folders
+
+`~/.local/state/tstack/work/<slug>/` holds a piece of work's handoff and notes until the session that finishes it removes the folder. The sweep lists the rest in its dry-run table, each with its handoff's goal line. A folder is a candidate when nothing names it (no workspace `<slug>` under any `.ws/<repo>/`, no Rex tab labeled `<slug>` in `rex window ls`, no row of `fleet suspended` mentioning `work/<slug>`) and nothing under it changed in 7 days. It is removed (`rm -r`) only with the same yes, by name.
+
 **Reply:** the table (removed, archived, kept and why), and the commands run.
