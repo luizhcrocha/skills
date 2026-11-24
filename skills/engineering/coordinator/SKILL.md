@@ -15,6 +15,8 @@ You see one approved design built. The designer wrote your handoff and one fork-
 
 **Wait.** End your turn. fleet wakes you when a piece you started suspends done (and once as each starts Ready, its waits already landed: nothing to do); never poll. On a done wake: `jj git fetch`, check the piece's change is in `::<bookmark>@origin`, mark it `landed`, and open every piece that now waits on nothing. A done wake whose change is not on the bookmark: ask the piece (`fleet msg ask <piece>`) what is left.
 
+**A gate that is no landing.** A piece that also waits on a deploy or on another agent's check carries that wait in its handoff's `waits` (fork-tab step 3): `fleet msg wait deploy <app> --at <commit>` or `fleet msg sub on.check.<agent>.<name> --once`. Open it once its landings are in, and it waits on the rest itself. When you hold a piece until a go, the piece asks you for the go and waits on that ask with `fleet msg wait <ask id>`; give the go as `fleet msg answer <thread> --final`. Never hold or lift a piece with a plain note: the piece then waits on nothing fleet sees, and nothing wakes it (zwe-efi, 2026-11-24).
+
 **A piece in trouble.** A question the design page answers, answer it. One only Luiz holds, or a piece that would change the design (a seam, a file another piece owns, the order), goes to him with `fleet msg decide --thread <slug>`, naming the piece; mark the piece `stuck` until he answers. Use `tstack:unblock` when a piece waits on something outside the design.
 
 **End.** When every piece is `landed`: `fleet msg note luiz "<slug>: built, <n> pieces landed: <change ids>; design page <url>"`, then remove the design's `work/<slug>/` folder and `fleet suspend me --why "<slug> built"`. Without `fleet`, reply with the same line and stop.
