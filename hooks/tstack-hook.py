@@ -201,10 +201,13 @@ def _ask_flag(hook):
     return ("--ask",) if shown and "--ask" in shown.stdout + shown.stderr else ()
 
 
+# A word match cannot tell Luiz asking from Luiz quoting or reporting a suspend ("asked the fleet to suspend this
+# session", 2026-11-24), so the hint says what suspending means and never says that he asked.
 SUSPEND = (
-    "Luiz asked you to suspend. Stop your background tasks (TaskStop), say in two lines where the work stands and "
-    "where its state is written, then run `fleet suspend me --why \"<what you were on, and where to pick up>\"`: it "
-    "frees this session's memory once the turn ends. Stopping the tasks alone is not suspending."
+    "If Luiz is asking this session to suspend: stop your background tasks (TaskStop), say in two lines where the "
+    "work stands and where its state is written, then run `fleet suspend me --why \"<what you were on, and where to "
+    "pick up>\"`: it frees this session's memory once the turn ends. Stopping the tasks alone is not suspending. If "
+    "he only mentions suspending, ignore this."
 )
 _SUSPEND = re.compile(r"\bsuspen\w*\s+(?:your\s*self|you|this\s+session)\b|\bfleet\s+suspend\s+me\b", re.I)
 
