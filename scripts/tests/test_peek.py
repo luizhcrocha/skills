@@ -4,6 +4,7 @@ import socket
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 import urllib.error
 import urllib.request
@@ -174,6 +175,74 @@ class PeekTest(unittest.TestCase):
                 self.assertIn(kind, r.headers["Content-Type"], name)
                 self.assertTrue(r.headers["Content-Disposition"].startswith("inline;"), name)
                 self.assertEqual(r.read(), b"PK\x03\x04 original bytes")
+
+    def state(self):
+        return Path(self.env["XDG_STATE_HOME"]) / "tstack/peek"
+
+    def server_pid(self):
+        return int((self.state() / "server.pid").read_text())
+
+    def start_old_build(self):
+        """A server from a release before this one: up on /_peek, old code everywhere else."""
+        old = Path(self.tmp.name) / "old-peek"
+        old.write_text(
+            "import http.server, os, sys\n"
+            "class H(http.server.BaseHTTPRequestHandler):\n"
+            "    def do_GET(self):\n"
+            "        body = b'peek' if self.path == '/_peek' else b'stale build'\n"
+            "        self.send_response(200); self.send_header('Content-Length', str(len(body)))\n"
+            "        self.end_headers(); self.wfile.write(body)\n"
+            "    def log_message(self, *a): pass\n"
+            "s = http.server.ThreadingHTTPServer(('127.0.0.1', int(sys.argv[1])), H)\n"
+            "os.makedirs(sys.argv[2], exist_ok=True)\n"
+            "open(os.path.join(sys.argv[2], 'server.pid'), 'w').write(str(os.getpid()))\n"
+            "s.serve_forever()\n")
+        proc = subprocess.Popen([sys.executable, str(old), self.env["TSTACK_PEEK_PORT"], str(self.state())])
+        self.addCleanup(proc.wait, 5)
+        self.addCleanup(proc.kill)
+        for _ in range(50):
+            if self.port_open():
+                return proc
+            time.sleep(0.1)
+        self.fail("the old build did not start")
+
+    def port_open(self):
+        with socket.socket() as s:
+            return s.connect_ex(("127.0.0.1", int(self.env["TSTACK_PEEK_PORT"]))) == 0
+
+    def test_a_server_from_an_older_release_is_replaced(self):
+        old = self.start_old_build()
+        [url] = self.peek(str(self.doc))
+        status, _, body = self.get(url)
+        self.assertEqual(status, 200)
+        self.assertIn(b"Title", body)
+        self.assertIsNotNone(old.poll(), "the old build still runs")
+        pid = self.server_pid()
+        self.peek(str(self.doc))
+        self.assertEqual(self.server_pid(), pid, "the same release restarted its own server")
+
+    def test_an_older_release_never_replaces_a_newer_server(self):
+        [url] = self.peek(str(self.doc))
+        pid = self.server_pid()
+        older = Path(self.tmp.name) / "peek"
+        older.write_text(PEEK.read_text() + "\n# an older release\n")
+        past = PEEK.stat().st_mtime_ns - 86400 * 10**9
+        os.utime(older, ns=(past, past))
+        run = subprocess.run([sys.executable, str(older), str(self.doc)], env=self.env,
+                             capture_output=True, text=True, timeout=30)
+        self.assertEqual(run.returncode, 0, run.stderr)
+        self.assertEqual(self.server_pid(), pid)
+        self.assertEqual(self.get(url)[0], 200)
+
+    def test_refresh_replaces_an_older_release_and_starts_none(self):
+        self.peek("refresh")
+        self.assertFalse(self.port_open())
+        [url] = self.peek(str(self.doc))
+        self.peek("stop")
+        old = self.start_old_build()
+        self.peek("refresh")
+        self.assertIsNotNone(old.poll(), "the old build still runs")
+        self.assertIn(b"Title", self.get(url)[2])
 
     def test_only_peeked_files_are_served(self):
         [url] = self.peek(str(self.doc))

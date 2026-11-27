@@ -159,6 +159,39 @@ class SessionStartTest(HookCase):
         self.assertSilent(self.hook("PreCompact", self.base("PreCompact", trigger="auto")))
 
 
+class PeekRefreshTest(HookCase):
+    """peek_refresh: SessionStart runs this release's `peek refresh`, detached, where peek has run. The plugin
+    root's scripts/peek is the seam: a fake one records its argv."""
+
+    def setUp(self):
+        super().setUp()
+        self.root = self.tmp / "plugin"
+        (self.root / "scripts").mkdir(parents=True)
+        (self.root / "scripts" / "memo").symlink_to(MEMO)
+        self.runs = self.tmp / "peek-runs"
+        (self.root / "scripts" / "peek").write_text(
+            f"import sys\nopen({str(self.runs)!r}, 'a').write(' '.join(sys.argv[1:]) + '\\n')\n")
+        self.env.update(CLAUDE_PLUGIN_ROOT=str(self.root))
+
+    def start(self, **env):
+        self.assertEqual(self.hook("SessionStart", self.base("SessionStart", source="startup"), env=env).returncode, 0)
+
+    def test_it_refreshes_only_where_peek_has_run_and_never_for_a_worker_or_a_headless_run(self):
+        self.start()
+        pid = self.tmp / "state" / "tstack" / "peek" / "server.pid"
+        pid.parent.mkdir(parents=True)
+        pid.write_text("1234")
+        self.start(TSTACK_ROLE="worker")
+        self.start(CLAUDE_CODE_ENTRYPOINT="sdk-cli")
+        self.start()
+        deadline = time.monotonic() + 20
+        while not self.runs.exists() and time.monotonic() < deadline:
+            time.sleep(0.05)
+        time.sleep(0.3)
+        self.assertEqual(self.runs.read_text(), "refresh\n")
+        self.assertNotIn("peek_refresh failed", self.log())
+
+
 FAKE_TAPE = """import json, os, sys, time
 time.sleep(float(os.environ.get("FAKE_TAPE_SLEEP", "0")))
 with open(os.environ["FAKE_TAPE_LOG"], "a") as f:

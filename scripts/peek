@@ -5,6 +5,15 @@
   peek ls          the linked files and their URLs
   peek stop        stop the server and remove its tailnet route
   peek serve       run the server in the foreground (peek starts it on demand)
+  peek refresh     replace a running server an older release left; start none
+
+A release's peek replaces a server an older release started, on its first
+`peek <file>` and at each session start (tstack's hook runs `peek refresh`), so
+the server runs the newest installed code. Older means an older script mtime,
+which is its install time; a server whose script has the same bytes, or a newer
+mtime, stays. A dev copy run from a workspace has a fresh mtime and would keep
+its server over the next release: run it with its own TSTACK_PEEK_PORT and
+XDG_STATE_HOME.
 
 Each file gets <state>/files/<id>/<name>, a symlink to its absolute path, where
 <id> is a hash of that path: the same file keeps the same URL, and the link
@@ -25,6 +34,7 @@ Content-Type, so a converted file's URL ends in .html (report.docx.html). A
 conversion is cached until the file changes.
 """
 
+import fcntl
 import hashlib
 import html
 import http.server
@@ -34,6 +44,7 @@ import os
 import re
 import shutil
 import signal
+import socket
 import tempfile
 import threading
 import subprocess
@@ -46,6 +57,9 @@ from pathlib import Path
 
 PORT = int(os.environ.get("TSTACK_PEEK_PORT", "8517"))
 HEALTH = "/_peek"
+VERSION = "/_peek/version"
+SELF = Path(__file__).resolve()
+BUILD = {"sha": hashlib.sha256(SELF.read_bytes()).hexdigest(), "mtime_ns": SELF.stat().st_mtime_ns}
 
 
 def state_dir():
@@ -259,6 +273,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
     def do_GET(self):
         if self.path == HEALTH:
             return self.reply(200, b"peek", "text/plain")
+        if self.path == VERSION:
+            return self.reply(200, json.dumps({**BUILD, "pid": os.getpid()}).encode(), "application/json")
         found = resolve(self.path)
         if found is None:
             return self.reply(404, b"not peeked", "text/plain")
@@ -299,17 +315,99 @@ def server_up():
         return False
 
 
-def ensure_server():
-    if server_up():
-        return
-    state_dir().mkdir(parents=True, exist_ok=True)
-    with open(state_dir() / "server.log", "ab") as log:
-        subprocess.Popen([sys.executable, os.path.abspath(__file__), "serve"],
-                         stdout=log, stderr=log, stdin=subprocess.DEVNULL, start_new_session=True)
-    for _ in range(50):
-        if server_up():
-            return
+DOWN, SILENT = "down", "silent"
+
+
+def running_build():
+    """What holds PORT: DOWN, SILENT (it did not answer in time), or the build it reports, {} for a server from
+    before builds were reported."""
+    try:
+        with urllib.request.urlopen(f"http://127.0.0.1:{PORT}{VERSION}", timeout=1) as r:
+            body = r.read()
+    except urllib.error.HTTPError:
+        return {}
+    except (urllib.error.URLError, OSError) as err:
+        return DOWN if isinstance(getattr(err, "reason", err), ConnectionRefusedError) else SILENT
+    try:
+        build = json.loads(body)
+    except ValueError:
+        return {}
+    if isinstance(build, dict) and isinstance(build.get("sha"), str) and isinstance(build.get("mtime_ns"), int):
+        return build
+    return {}
+
+
+def current(running):
+    """A server is current when it runs these bytes or a newer install: an older session never downgrades it."""
+    return (isinstance(running, dict) and bool(running)
+            and (running["sha"] == BUILD["sha"] or running["mtime_ns"] >= BUILD["mtime_ns"]))
+
+
+def port_open():
+    with socket.socket() as s:
+        return s.connect_ex(("127.0.0.1", PORT)) == 0
+
+
+def until(done, seconds):
+    deadline = time.monotonic() + seconds
+    while time.monotonic() < deadline:
+        if done():
+            return True
         time.sleep(0.1)
+    return done()
+
+
+def server_pid(build):
+    pid = build.get("pid")
+    if not isinstance(pid, int):
+        try:
+            pid = int((state_dir() / "server.pid").read_text())
+        except (OSError, ValueError):
+            return None
+    return pid if pid > 1 else None  # 0 and -1 would signal a whole process group or every process of the user
+
+
+def replace(build):
+    pid = server_pid(build)
+    if pid is None:
+        raise SystemExit(f"peek: an older server holds port {PORT} and gives no pid; stop it, then run peek again")
+    with open(state_dir() / "server.log", "a") as log:
+        print(f"{time.strftime('%Y-%m-%dT%H:%M:%S')} {SELF} replaces pid {pid} "
+              f"({build.get('sha', 'a build from before versions')[:12]})", file=log)
+    try:
+        os.kill(pid, signal.SIGTERM)
+        if not until(lambda: not port_open(), 3):
+            os.kill(pid, signal.SIGKILL)
+            until(lambda: not port_open(), 2)
+    except ProcessLookupError:
+        pass
+    except PermissionError as err:
+        raise SystemExit(f"peek: cannot stop the older server on port {PORT} (pid {pid}): {err}") from err
+
+
+def launch():
+    with open(state_dir() / "server.log", "ab") as log:
+        subprocess.Popen([sys.executable, str(SELF), "serve"],
+                         stdout=log, stderr=log, stdin=subprocess.DEVNULL, start_new_session=True)
+
+
+def ensure_server(start=True):
+    """Leave a current server on PORT: replace an older release's, and start one when none runs (unless start is
+    False, for refresh). A server that answers too slowly is kept, never killed."""
+    state_dir().mkdir(parents=True, exist_ok=True)
+    with open(state_dir() / "server.lock", "a") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        running = running_build()
+        if running == SILENT or (running == DOWN and not start):
+            return
+        for _ in range(3):
+            if current(running):
+                return
+            if isinstance(running, dict):
+                replace(running)
+            launch()
+            until(lambda: current(running_build()), 5)
+            running = running_build()
     raise SystemExit(f"peek: the server did not start; see {state_dir() / 'server.log'}")
 
 
@@ -372,6 +470,8 @@ def main(argv):
         serve()
     elif command == "stop":
         stop()
+    elif command == "refresh":
+        ensure_server(start=False)
     elif command == "ls":
         base = base_url() if server_up() else f"(stopped) http://127.0.0.1:{PORT}"
         for rel, source in listing():

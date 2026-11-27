@@ -121,6 +121,22 @@ def tape_build(hook):
     return None
 
 
+def peek_refresh(hook):
+    """SessionStart: this release's `peek refresh` replaces a peek server an older release left running, detached,
+    so the server never runs old code until a reboot. Only where peek has run (its server.pid), never for a worker
+    or a headless run."""
+    if hook.is_worker or hook.headless:
+        return None
+    state = hook.env.get("XDG_STATE_HOME") or os.path.join(hook.env.get("HOME", ""), ".local", "state")
+    if not (Path(state) / "tstack" / "peek" / "server.pid").exists():
+        return None
+    import subprocess
+    subprocess.Popen([sys.executable, str(ROOT / "scripts" / "peek"), "refresh"], env=dict(hook.env),
+                     stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                     start_new_session=True)
+    return None
+
+
 NOTIFY_S = 8  # under the 10 s hooks.json gives Stop and UserPromptSubmit
 
 
@@ -1978,7 +1994,7 @@ def lang_skill(hook):
 
 
 HANDLERS = {
-    "SessionStart": [memo_start, jj_hints, tape_build, side_panes_reset],
+    "SessionStart": [memo_start, jj_hints, tape_build, peek_refresh, side_panes_reset],
     "Stop": [ask_flag],
     "UserPromptSubmit": [ask_clear, suspend_hint, side_panes],
     "PreToolUse": [context_wall, push_attribution, rm_guard, spawn_effort, agent_cap, lang_skill],
