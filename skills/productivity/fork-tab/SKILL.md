@@ -70,14 +70,14 @@ Done when every section has content or says `none`.
 Start B through fleet, from this session, so its tab opens in this Rex session right after yours and fleet books B as your lane (its `from`, waits and change):
 
 ```bash
-fleet agent start <slug> --dir "$ws" --model <model> --effort <effort> \
+fleet agent start <slug> --dir "$ws" --model <model> --effort <effort> --class <class> \
   --opening "/tstack:tuca-mode Continue the work in <handoff file>. Run jj workspace update-stale first, then load the skills it lists." \
   --waits <full change id>   # one per `waits` line; none when B waits on nothing
 ```
 
 fleet wakes you when every change B waits on has landed (B is Ready) and when B suspends done; no note from B is needed, and you never poll. `Started <slug>@<machine>`, `Already` or `Queued <slug>@<machine>` is success. `Queued` means you already run 3 lanes: B starts when one of them ends or suspends, and fleet wakes you then as for any lane, so end your turn; `fleet agent cancel <slug>` takes it back. `Refused` (exit 1) prints why: a name in use takes `-2` on the slug, as in step 2.
 
-`<model>` and `<effort>` are the first pair of the handoff's `class` row in [models.md](../../../docs/models.md), the model in lower case (`Implementer: tested-fix` is `--model opus --effort medium`, `Implementer: mechanical` is `--model sonnet --effort medium`). A design opens with `/tstack:designer <handoff file>` and a designer's coordinator with `/tstack:coordinator <handoff file>`. If Luiz names a model, use his.
+`<model>` and `<effort>` are the first pair of the handoff's `class` row in [models.md](../../../docs/models.md), the model in lower case (`Implementer: tested-fix` is `--model opus --effort medium`, `Implementer: mechanical` is `--model sonnet --effort medium`). `<class>` is the row's task: `tested-fix`, `spec-to-code` or `mechanical` for those Implementer rows, `other` for plain `Implementer`; a `Designer` or `Coordinator` takes no `--class`. fleet books it on B, and `fleet report classes` splits spend by it, which is how the effort trial is judged. A design opens with `/tstack:designer <handoff file>` and a designer's coordinator with `/tstack:coordinator <handoff file>`. If Luiz names a model, use his.
 
 No fleet-host (exit 4), or no `fleet`: give Luiz the launch in nushell instead: `cd <the path ws-add printed>; claude --name <slug> --model <model> --effort <effort> "/tstack:tuca-mode Continue the work in <handoff file>. Run jj workspace update-stale first, then load the skills it lists."`
 
