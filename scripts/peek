@@ -373,7 +373,7 @@ def replace(build):
         raise SystemExit(f"peek: an older server holds port {PORT} and gives no pid; stop it, then run peek again")
     with open(state_dir() / "server.log", "a") as log:
         print(f"{time.strftime('%Y-%m-%dT%H:%M:%S')} {SELF} replaces pid {pid} "
-              f"({build.get('sha', 'a build from before versions')[:12]})", file=log)
+              f"({build['sha'][:12] if build else 'a build from before versions'})", file=log)
     try:
         os.kill(pid, signal.SIGTERM)
         if not until(lambda: not port_open(), 3):

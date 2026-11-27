@@ -217,6 +217,8 @@ class PeekTest(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertIn(b"Title", body)
         self.assertIsNotNone(old.poll(), "the old build still runs")
+        self.assertIn(f"replaces pid {old.pid} (a build from before versions)",
+                      (self.state() / "server.log").read_text())
         pid = self.server_pid()
         self.peek(str(self.doc))
         self.assertEqual(self.server_pid(), pid, "the same release restarted its own server")
