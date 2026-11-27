@@ -75,7 +75,7 @@ fleet agent start <slug> --dir "$ws" --model <model> --effort <effort> \
   --waits <full change id>   # one per `waits` line; none when B waits on nothing
 ```
 
-fleet wakes you when every change B waits on has landed (B is Ready) and when B suspends done; no note from B is needed, and you never poll. `Started <slug>@<machine>` or `Already` is success. `Refused` (exit 1) prints why: a name in use takes `-2` on the slug, as in step 2.
+fleet wakes you when every change B waits on has landed (B is Ready) and when B suspends done; no note from B is needed, and you never poll. `Started <slug>@<machine>`, `Already` or `Queued <slug>@<machine>` is success. `Queued` means you already run 3 lanes: B starts when one of them ends or suspends, and fleet wakes you then as for any lane, so end your turn; `fleet agent cancel <slug>` takes it back. `Refused` (exit 1) prints why: a name in use takes `-2` on the slug, as in step 2.
 
 `<model>` and `<effort>` are the first pair of the handoff's `class` row in [models.md](../../../docs/models.md), the model in lower case (`Implementer: tested-fix` is `--model opus --effort medium`, `Implementer: mechanical` is `--model sonnet --effort medium`). A design opens with `/tstack:designer <handoff file>` and a designer's coordinator with `/tstack:coordinator <handoff file>`. If Luiz names a model, use his.
 
