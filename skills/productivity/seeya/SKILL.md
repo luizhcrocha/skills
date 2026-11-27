@@ -1,7 +1,6 @@
 ---
 name: seeya
-description: "Suspend this session to come back to later: check for undone work, stop its processes and subagents, tell work-graph and the agents that depend on it, clean up, then fleet suspend me. Use for /seeya."
-disable-model-invocation: true
+description: "Suspend this session to come back to later: check for undone work, stop its processes and subagents, tell work-graph and the agents that depend on it, clean up, then fleet suspend me. Use for /seeya, or when Luiz or a handoff says to suspend once done."
 ---
 
 # See ya
