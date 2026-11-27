@@ -50,6 +50,7 @@ Write `~/.local/state/tstack/work/<slug>/handoff.md` (`mkdir -p` the folder). It
 - `evidence`: `file:line` pointers, commands and their output, URLs.
 - `mixed`: files left in A's change that B also needs, or `none`.
 - `not-yours`: A, in one sentence, so the new agent leaves it alone.
+- `class`: B's row in [models.md](../../../docs/models.md)'s role table, by its task: `Implementer: tested-fix` (a fix with its repro test), `Implementer: spec-to-code` (a design Luiz approved), `Implementer: mechanical` (a sweep, rename, codemod or config edit), `Implementer` (any other code), `Designer` or `Coordinator`. Unsure between two, take the one with the higher pair.
 - `skills`: the skills the new agent should load, such as `tstack:tdd` or `tstack:lang-ts`.
 - `end`: when B is done (landed, or answered): when your handoff is `work/<slug>/handoff.md`, remove that `work/<slug>/` folder and its link `~/.local/state/fleet/handoffs/<slug>.md` (a design's folder is its coordinator's to remove); then `fleet suspend me --why "<slug> done: <one line>"`. fleet wakes the session that started you with that line, so send no note of your own. Only when `fleet agent show <slug>` names no `from` (Luiz launched you by hand), first tell the forker: `fleet msg note <this session's name> "<slug>: done, <one line>" --wake`. Leave your workspace: you run inside it, so `ws-rm` refuses it, and fleet removes it when it ends you (the prune sweep until then). Luiz starting the fork is his yes to both, so do them unasked. The broker refuses that note to a forker that is suspended or ended (exit 1, `refused: suspended` or `no-session`, nothing stored): then ask Luiz where the result goes (`fleet msg decide --question "<slug> is done (<one line>); <forker> is <its refusal>. Who gets the result?"`), send it there once he answers, and only then suspend; never suspend with that question open (Luiz, 2026-11-21: "notes refused. agents should check before sending, and ask where to send it instead").
 - `waits`, optional, when B goes on only after something else happens: one command per line, each a wait fleet can see, never "held until X" in prose. B runs them as its first step and ends its turn; fleet wakes B when each one ends.
@@ -69,16 +70,16 @@ Done when every section has content or says `none`.
 Start B through fleet, from this session, so its tab opens in this Rex session right after yours and fleet books B as your lane (its `from`, waits and change):
 
 ```bash
-fleet agent start <slug> --dir "$ws" --model opus --effort high \
+fleet agent start <slug> --dir "$ws" --model <model> --effort <effort> \
   --opening "/tstack:tuca-mode Continue the work in <handoff file>. Run jj workspace update-stale first, then load the skills it lists." \
   --waits <full change id>   # one per `waits` line; none when B waits on nothing
 ```
 
 fleet wakes you when every change B waits on has landed (B is Ready) and when B suspends done; no note from B is needed, and you never poll. `Started <slug>@<machine>` or `Already` is success. `Refused` (exit 1) prints why: a name in use takes `-2` on the slug, as in step 2.
 
-Opus high is the Implementer row of [models.md](../../../docs/models.md); a design takes the Designer row and opens with `/tstack:designer <handoff file>`, and a designer's coordinator takes the Coordinator row and opens with `/tstack:coordinator <handoff file>`. If Luiz names a model, use his.
+`<model>` and `<effort>` are the first pair of the handoff's `class` row in [models.md](../../../docs/models.md), the model in lower case (`Implementer: tested-fix` is `--model opus --effort medium`, `Implementer: mechanical` is `--model sonnet --effort medium`). A design opens with `/tstack:designer <handoff file>` and a designer's coordinator with `/tstack:coordinator <handoff file>`. If Luiz names a model, use his.
 
-No fleet-host (exit 4), or no `fleet`: give Luiz the launch in nushell instead: `cd <the path ws-add printed>; claude --name <slug> --model opus --effort high "/tstack:tuca-mode Continue the work in <handoff file>. Run jj workspace update-stale first, then load the skills it lists."`
+No fleet-host (exit 4), or no `fleet`: give Luiz the launch in nushell instead: `cd <the path ws-add printed>; claude --name <slug> --model <model> --effort <effort> "/tstack:tuca-mode Continue the work in <handoff file>. Run jj workspace update-stale first, then load the skills it lists."`
 
 Done when `fleet agent show <slug>` prints B's card with you as `from`, its waits and its handoff, and `rex window ls -s "$REX_SESSION"` lists `<slug>` right after your tab; or Luiz has the command.
 

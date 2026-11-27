@@ -1092,17 +1092,26 @@ RmPlace = namedtuple("RmPlace", "cwd blind moved")
 EFFORTS = ("low", "medium", "high", "xhigh", "max")
 
 
-def _role_pairs():
-    """`Role: Model effort` for each row of docs/models.md's role table."""
+MODEL_PAIR = re.compile(r"\b(Fable|Opus|Sonnet|Haiku) (low|medium|high|xhigh|max)\b")
+
+
+def _role_table():
+    """(role, its pair as written, every (model, effort) its row names) for each row of docs/models.md's role table;
+    empty when the file cannot be read."""
     rows = []
     try:
         for line in (ROOT / "docs" / "models.md").read_text().splitlines():
             cells = [c.strip() for c in line.strip().strip("|").split("|")]
             if len(cells) >= 3 and line.startswith("| ") and cells[0] not in ("Role", ":--"):
-                rows.append(f"{cells[0]}: {cells[2]}")
+                pairs = {(m.lower(), e) for m, e in MODEL_PAIR.findall(" | ".join(cells[2:]))}
+                rows.append((cells[0], cells[2], pairs))
     except OSError:
         pass
-    return "; ".join(rows)
+    return rows
+
+
+def _role_pairs(rows):
+    return "; ".join(f"{role}: {pair}" for role, pair, _ in rows)
 
 
 def _defined_pair(kind):
@@ -1129,11 +1138,15 @@ def spawn_effort(hook):
     effort = args.get("effort")
     if effort and effort not in EFFORTS:
         return Deny(f"tstack: effort `{effort}` is not one the Agent tool takes ({', '.join(EFFORTS)}).")
-    if args.get("model") and effort:
-        return None
-    return Deny("tstack: this spawn names no " + " and no ".join(k for k in ("model", "effort") if not args.get(k))
-                + ". Pick the agent's role in docs/models.md and pass both from its row, since a bare spawn runs at "
-                f"the session's effort. Roles: {_role_pairs()}.")
+    rows, model = _role_table(), str(args.get("model") or "")
+    if not (model and effort):
+        return Deny("tstack: this spawn names no " + " and no ".join(k for k in ("model", "effort") if not args.get(k))
+                    + ". Pick the agent's role in docs/models.md and pass both from its row, since a bare spawn runs "
+                    f"at the session's effort. Roles: {_role_pairs(rows)}.")
+    if rows and (model, effort) not in {pair for _, _, pairs in rows for pair in pairs}:
+        return Deny(f"tstack: {model} {effort} is no row's pair in docs/models.md. Pick the agent's role and pass its "
+                    f"row's model and effort (its fallback or move-up when the row says so). Roles: {_role_pairs(rows)}.")
+    return None
 
 
 # The subagent cap (Luiz, 2026-11-20, after a token drain): a session runs at most AGENT_CAP subagents at once, and only

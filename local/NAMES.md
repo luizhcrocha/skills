@@ -54,6 +54,8 @@ The upstream sync (`scripts/sync_upstream.py`, overlay mode) adds to a synced sk
 | operator | Luiz |
 | claude-opus-5-5-xhigh-fast | the role's model and effort in docs/models.md |
 | claude-opus-5-5-high-fast | the role's model and effort in docs/models.md |
+| claude-opus-5-5-medium-fast | the role's model and effort in docs/models.md |
+| claude-fable-5-2-high | the Reviewer row in docs/models.md: never Fable for fan-out |
 | gemini-4-neon-xhigh | none: a panel seat on another vendor is skipped |
 | principle-build-the-lever | tstack:principles |
 | principle-encode-lessons-in-structure | tstack:principles |

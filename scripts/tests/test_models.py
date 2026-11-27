@@ -72,6 +72,30 @@ def rel(md: Path) -> str:
     return md.relative_to(ROOT).as_posix()
 
 
+NAMES = ROOT / "local" / "NAMES.md"
+SLUG = re.compile(r"(?<![\w-])(?:claude-(?:fable|opus|sonnet|haiku)|gemini)-\d[\w.-]*")
+
+
+class UpstreamSlugs(unittest.TestCase):
+    """A model slug in synced upstream text (claude-opus-5-5-xhigh-fast) contradicts models.md unless local/NAMES.md
+    maps it and its skill's `Names here` line says so; the slug itself stays, so the next sync merges cleanly."""
+
+    def test_every_slug_is_mapped_in_its_skills_names_line(self):
+        mapped = {line.split("|")[1].strip().strip("`") for line in NAMES.read_text().splitlines()
+                  if line.startswith("| ")}
+        bad = []
+        for md in markdown_files():
+            skill = next((d / "SKILL.md" for d in md.parents if (d / "SKILL.md").is_file()), md)
+            names_line = next((line for line in skill.read_text().splitlines() if "Names here:" in line), "")
+            for n, line in enumerate(md.read_text().splitlines(), start=1):
+                for slug in SLUG.findall(line):
+                    if slug not in mapped:
+                        bad.append(f"{rel(md)}:{n}: {slug} has no row in local/NAMES.md")
+                    elif f"{slug} →" not in names_line:
+                        bad.append(f"{rel(md)}:{n}: {slug} is missing from {rel(skill)}'s Names here line")
+        self.assertEqual(bad, [], "\n".join(bad))
+
+
 class ModelsTable(unittest.TestCase):
     def test_every_role_has_a_pair_and_a_fallback(self):
         rows = table_rows()

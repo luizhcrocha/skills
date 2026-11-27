@@ -998,6 +998,22 @@ class SpawnEffortTest(HookCase):
         self.assertEqual(d.get("permissionDecision"), "deny")
         self.assertIn("`ultra`", d["permissionDecisionReason"])
 
+    def test_a_pair_no_row_names_is_denied_with_the_table(self):
+        for model, effort in (("haiku", "medium"), ("fable", "low"), ("opus", "max")):
+            with self.subTest(model=model, effort=effort):
+                d = self.decision(description="x", prompt="p", subagent_type="general-purpose", model=model,
+                                  effort=effort)
+                self.assertEqual(d.get("permissionDecision"), "deny")
+                self.assertIn(f"{model} {effort}", d["permissionDecisionReason"])
+                self.assertIn("Implementer: tested-fix", d["permissionDecisionReason"])
+
+    def test_every_pair_a_row_names_passes(self):
+        for model, effort in (("opus", "medium"), ("sonnet", "medium"), ("haiku", "high"), ("fable", "high"),
+                              ("opus", "xhigh")):
+            with self.subTest(model=model, effort=effort):
+                self.assertEqual(self.decision(description="x", prompt="p", subagent_type="general-purpose",
+                                               model=model, effort=effort), {})
+
     def test_a_spawn_with_its_pair_a_fork_or_a_definition_that_carries_it_passes(self):
         for given in ({"subagent_type": "general-purpose", "model": "opus", "effort": "high"},
                       {"subagent_type": "fork"}, {"subagent_type": "tstack:reader"},
